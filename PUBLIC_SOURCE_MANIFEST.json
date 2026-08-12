@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T17:39:03.260Z",
+  "generatedAt": "2026-08-12T18:09:41.208Z",
   "fileCount": 656,
-  "snapshotSha256": "677abbb3ae334e8cf5014c7f019670b63e50b890e88e15a27720e2405aa667ec",
+  "snapshotSha256": "190d5790dfc402549a49cba5ba02f8be568daa9b564e54c3a930c076f827c2ae",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -23,18 +23,18 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "bytes": 1716,
-      "sha256": "c5488eb989b99a17adcd9ba556d19369dcc387e64ec2354a9222c10edbd5e5a4"
+      "bytes": 2126,
+      "sha256": "7195d9ecea9f8c178439fb369f856c552ee7674df95a4ca023229508f44199fc"
     },
     {
       "path": ".github/workflows/dependency-review.yml",
-      "bytes": 289,
-      "sha256": "de12d3649abc88c37fefd135b48b9479c85c12fb4336e342f1c36dad5b1b12d7"
+      "bytes": 381,
+      "sha256": "1cb002c8a7837e51e4ba58ecc03b0951cacbf2b5cc443a971bcc5b05267e6553"
     },
     {
       "path": ".github/workflows/package-macos-native.yml",
-      "bytes": 1705,
-      "sha256": "1e16f48320d67b67dd2ba071be547b3037a49b87f50c903038969640fa5d4bac"
+      "bytes": 1843,
+      "sha256": "e0f5dd00ff1566cd81c374f48a0b7b23f60c15153fae51f155e469116f6cb785"
     },
     {
       "path": ".gitignore",
@@ -1333,8 +1333,8 @@
     },
     {
       "path": "apps/windows/package.json",
-      "bytes": 1865,
-      "sha256": "080184837c596f9bcf7ae176b2212125514d9a0e95bb8d9fef950d8631feeaa9"
+      "bytes": 1868,
+      "sha256": "411138694b025bda3feeef9ea478580e8031490d2e5e419406660dc1dbbb590a"
     },
     {
       "path": "apps/windows/src/App.test.tsx",
@@ -2333,13 +2333,13 @@
     },
     {
       "path": "package-lock.json",
-      "bytes": 372777,
-      "sha256": "9e97267e8658d42797e2a53ac0be9de23b0cc1278dc50caabd7ecb7a36190cc7"
+      "bytes": 378116,
+      "sha256": "1a8a86cb1dcd4d336456a20e778be0c925451cf06410116f1c9debde1876b874"
     },
     {
       "path": "package.json",
-      "bytes": 7520,
-      "sha256": "506d4dff048b64620f198c72698c5c84a6b3f792eb622571a83b4d878e7d131b"
+      "bytes": 7653,
+      "sha256": "b685b2783ba26c67844d191a2e1cf83454bd16a24139cd76e03f96e66f3c1d77"
     },
     {
       "path": "packages/core-server/package.json",
@@ -2913,8 +2913,8 @@
     },
     {
       "path": "test_tool/check_ci_config.mjs",
-      "bytes": 5033,
-      "sha256": "f2b567e0e2bd18f36e4223018c630fca3ea66d9916c0595de07f416a1cfa5b55"
+      "bytes": 5961,
+      "sha256": "0ea84f35d14a54ba7dd14b8a6f7a09beacdbfc384c0f1f80db88a28766cf12e6"
     },
     {
       "path": "test_tool/check_core_boundaries.mjs",
