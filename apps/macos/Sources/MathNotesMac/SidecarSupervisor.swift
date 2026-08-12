@@ -359,16 +359,65 @@ final class SidecarSupervisor: ObservableObject {
     func appendMarkdown(
         _ session: SessionCatalogItem,
         markdown: String,
-        sourceName: String
+        sourceName: String,
+        insertAfterBlockId: String? = nil
     ) async throws -> ReadonlySessionBlock {
         let connection = try activeConnection()
         let block = try await client.appendMarkdown(
             ready: connection.ready, token: connection.token,
             notebookId: session.notebookId, sessionId: session.sessionId,
-            markdown: markdown, sourceName: sourceName
+            markdown: markdown, sourceName: sourceName, insertAfterBlockId: insertAfterBlockId
         )
         await loadCatalog(ready: connection.ready, token: connection.token)
         return block
+    }
+
+    func proposeSelectionEdit(
+        _ session: SessionCatalogItem,
+        blockId: String,
+        selection: SelectionEditTextRange,
+        selectedText: String,
+        instruction: String
+    ) async throws -> SelectionEditProposal {
+        let connection = try activeConnection()
+        return try await client.proposeSelectionEdit(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            blockId: blockId,
+            selection: selection,
+            selectedText: selectedText,
+            instruction: instruction
+        )
+    }
+
+    func applySelectionEdit(
+        _ session: SessionCatalogItem,
+        proposalId: String
+    ) async throws -> ApplySelectionEditResponse {
+        let connection = try activeConnection()
+        return try await client.applySelectionEdit(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            proposalId: proposalId
+        )
+    }
+
+    func cancelSelectionEdit(
+        _ session: SessionCatalogItem,
+        proposalId: String
+    ) async throws -> SelectionEditProposal {
+        let connection = try activeConnection()
+        return try await client.cancelSelectionEdit(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            proposalId: proposalId
+        )
     }
 
     func setMarkdownBlockLock(

@@ -806,6 +806,7 @@ function observeRendererDiagnostics(page, diagnostics) {
     if (!["error", "warning"].includes(message.type())) return;
     const value = message.text();
     if (/Failed to load resource: the server responded with a status of 404/i.test(value)) return;
+    if (/^%cElectron Security Warning \(Insecure Content-Security-Policy\)/.test(value)) return;
     diagnostics.console.push(`${message.type()}: ${value}`);
   });
   page.on("response", (response) => {

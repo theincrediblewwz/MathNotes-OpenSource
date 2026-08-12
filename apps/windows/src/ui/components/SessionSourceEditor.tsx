@@ -87,6 +87,13 @@ type SessionSourceEditorProps = {
   onSelectionLocked: () => void;
   onSourceReferenceClick: (reference: SourceHeaderReference) => void;
   onDeleteBlockRequest: (blockId: string) => void;
+  onCreateBlockAfterRequest?: (blockId: string) => void;
+  onAiSelectionEditRequest?: (input: {
+    blockId: string;
+    from: number;
+    to: number;
+    selectedText: string;
+  }) => void;
   onReorderBlocksRequest?: (blockIds: string[], direction: "up" | "down") => void;
   onRerecognizeBlockRequest?: (blockId: string) => void;
   onTransferBlocksRequest?: (blockIds: string[], mode: "copy" | "move") => void;
@@ -138,6 +145,8 @@ type AssistantSelectionFrame = {
   width: number;
   height: number;
   text: string;
+  from: number;
+  to: number;
 };
 
 type SourceTopEdgeClickDetail = {
@@ -312,6 +321,8 @@ export function SessionSourceEditor({
   onSelectionLocked,
   onSourceReferenceClick,
   onDeleteBlockRequest,
+  onCreateBlockAfterRequest,
+  onAiSelectionEditRequest,
   assistantRemarks = [],
   onAssistantRemarkOpen,
   assistantOpen = false,
@@ -1066,8 +1077,37 @@ export function SessionSourceEditor({
               <button onClick={() => void runContextCommand("foldAll")} type="button">收起全部</button>
               <button onClick={() => void runContextCommand("unfoldAll")} type="button">展开全部</button>
               <span />
+              <button
+                disabled={contextMenu.block.locked || contextMenu.view.state.selection.main.empty}
+                onClick={() => {
+                  const selection = contextMenu.view.state.selection.main;
+                  const selectedText = contextMenu.view.state.doc.sliceString(selection.from, selection.to);
+                  const blockId = contextMenu.block.blockId;
+                  setContextMenu(null);
+                  onAiSelectionEditRequest?.({
+                    blockId,
+                    from: selection.from,
+                    to: selection.to,
+                    selectedText
+                  });
+                }}
+                type="button"
+              >
+                用 AI 修改选中文字
+              </button>
+              <span />
             </>
           ) : null}
+          <button
+            onClick={() => {
+              const blockId = contextMenu.block.blockId;
+              setContextMenu(null);
+              onCreateBlockAfterRequest?.(blockId);
+            }}
+            type="button"
+          >
+            在下方新建文本块
+          </button>
           {!selectionMode ? (
             <button onClick={() => beginBlockSelection(contextMenu.block.blockId)} type="button">
               多选块
@@ -1389,7 +1429,9 @@ function BlockMarkdownEditor({
         top: Math.max(0, start.top - host.top - 3),
         width: Math.max(12, right - left + 8),
         height: Math.max(18, end.bottom - start.top + 6),
-        text: view.state.doc.sliceString(from, to)
+        text: view.state.doc.sliceString(from, to),
+        from,
+        to
       });
     });
   }
@@ -1415,7 +1457,9 @@ function BlockMarkdownEditor({
       kind: "selection",
       blockId: blockRef.current.blockId,
       label: `选区 · block ${blockRef.current.blockId}`,
-      text: selectionFrame.text
+      text: selectionFrame.text,
+      from: selectionFrame.from,
+      to: selectionFrame.to
     });
   }
 
@@ -1580,6 +1624,7 @@ function BlockMarkdownEditor({
     applyingExternalMarkdownRef.current = true;
     try {
       view.dispatch({
+        annotations: Transaction.addToHistory.of(true),
         changes: {
           from: 0,
           to: view.state.doc.length,

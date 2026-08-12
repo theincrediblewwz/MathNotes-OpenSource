@@ -92,6 +92,7 @@ enum SidecarProtocolError: LocalizedError, Equatable {
     case pdfImportRejected(Int, String)
     case recognitionRejected(Int, String)
     case assistantRejected(Int, String)
+    case selectionEditRejected(Int, String)
     case exportRejected(Int, String)
     case providerRejected(Int, String, ProviderPurpose)
     case assetRejected(Int)
@@ -157,6 +158,15 @@ enum SidecarProtocolError: LocalizedError, Equatable {
             case "block_not_found": "当前内容段已发生变化，请刷新后重试。"
             case "remark_not_found": "这条学习批注已不存在，请刷新后重试。"
             default: "学习助手请求失败（HTTP \(status)，\(code)）。"
+            }
+        case let .selectionEditRejected(status, code):
+            switch code {
+            case "revision_conflict", "selection_stale": "内容在候选生成后发生了变化；当前笔记未改，候选仍保留。"
+            case "block_locked": "这个内容段已固定，AI 不能修改。"
+            case "protected_selection": "选区与固定内容重叠，Core 已拒绝修改。"
+            case "assistant_unavailable": "当前 Mac 尚未配置 AI 服务；笔记没有被修改。"
+            case "proposal_not_pending": "这个修改候选已经应用或取消，不能重复使用。"
+            default: "AI 选区修改失败（HTTP \(status)，\(code)）。"
             }
         case let .exportRejected(status, code):
             switch code {
@@ -381,6 +391,36 @@ struct SaveMarkdownBlockResponse: Codable, Equatable, Sendable {
     let version: Int
     let saved: Bool
     let block: ReadonlySessionBlock
+}
+
+struct SelectionEditTextRange: Codable, Equatable, Sendable {
+    let from: Int
+    let to: Int
+    let selectedText: String
+}
+
+struct SelectionEditProposal: Codable, Equatable, Identifiable, Sendable {
+    let version: Int
+    let id: String
+    let notebookId: String
+    let sessionId: String
+    let blockId: String
+    let baseRevision: String
+    let selection: SelectionEditTextRange
+    let instruction: String
+    let replacementMarkdown: String
+    let providerName: String
+    let status: String
+    let createdAt: String
+    let updatedAt: String
+    let appliedAt: String?
+}
+
+struct ApplySelectionEditResponse: Codable, Equatable, Sendable {
+    let version: Int
+    let applied: Bool
+    let proposal: SelectionEditProposal
+    let result: SaveMarkdownBlockResponse
 }
 
 struct SessionMarkdownConflictSummary: Codable, Equatable, Identifiable, Sendable {

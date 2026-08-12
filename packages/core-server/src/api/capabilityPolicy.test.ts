@@ -93,6 +93,9 @@ describe("Core API capability policy", () => {
       "local.session.assistant.cancel",
       "local.session.assistant.delete",
       "local.session.assistant.promote",
+      "local.session.selection-edit.propose",
+      "local.session.selection-edit.apply",
+      "local.session.selection-edit.cancel",
       "local.session.export.create",
       "local.session.export.download",
       "local.session.asset",
@@ -145,6 +148,12 @@ describe("Core API capability policy", () => {
       .toBe("local.session.assistant.cancel");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/assistant/preview")?.id)
       .toBe("local.session.assistant.preview");
+    expect(resolveLocalShellApiRoute("POST", "/local/v1/session/selection-edit")?.id)
+      .toBe("local.session.selection-edit.propose");
+    expect(resolveLocalShellApiRoute("POST", "/local/v1/session/selection-edit/apply")?.id)
+      .toBe("local.session.selection-edit.apply");
+    expect(resolveLocalShellApiRoute("POST", "/local/v1/session/selection-edit/cancel")?.id)
+      .toBe("local.session.selection-edit.cancel");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/export")?.id).toBe("local.session.export.create");
     expect(resolveLocalShellApiRoute("GET", "/local/v1/session/export")?.id).toBe("local.session.export.download");
     expect(resolveLocalShellApiRoute("GET", "/local/v1/provider")?.capability).toBe("local.provider.manage");

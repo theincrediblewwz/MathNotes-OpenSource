@@ -5,6 +5,8 @@ import {
   readWorkspaceContext,
   RevisionEventLog,
   SessionBlockOrganizeService,
+  SessionEditService,
+  SessionSelectionEditService,
   writeWorkspaceContext,
   type CompanionUploadActivity,
   type MathNotesCore,
@@ -87,6 +89,7 @@ import type {
   PickImageForAnnotationResult,
   PickDirectoryInput,
   PickDirectoryResult,
+  ProposeSelectionEditInput,
   CreateNotesBackupResult,
   RevealPathInput,
   CancelRecognitionTaskInput,
@@ -109,6 +112,7 @@ import type {
   ReorderSessionBlocksInput,
   RetryRecognitionTaskInput,
   RunAssistantTaskInput,
+  SelectionEditProposalCommand,
   SetMarkdownBlockLockInput,
   TransferSessionBlocksInput,
   UploadCompletedEvent,
@@ -153,6 +157,7 @@ let currentSessionId = defaultSessionId;
 let cachedUserSettings: UserSettings | undefined;
 let defaultStoreInitialization: { rootDir: string; promise: Promise<void> } | undefined;
 let blockOrganizeRuntime: { rootDir: string; service: SessionBlockOrganizeService } | undefined;
+let selectionEditRuntime: { rootDir: string; service: SessionSelectionEditService } | undefined;
 let activeRecognitionPipeline: { rootDir: string; generation: number; promise: Promise<PhotoIngestPipeline> } | undefined;
 let recognitionPipelineGeneration = 0;
 const codexRuntimeManager = new CodexRuntimeManager();
@@ -875,6 +880,33 @@ function registerIpcHandlers() {
       notebookId: input.notebookId,
       sessionId: input.sessionId
     });
+  });
+
+  ipcMain.handle("mathnotes:propose-selection-edit", async (_event, input: ProposeSelectionEditInput) => {
+    await ensureDefaultStore();
+    return ensureSelectionEditService().propose({
+      notebookId: input.notebookId,
+      sessionId: input.sessionId,
+      blockId: input.blockId,
+      selection: { from: input.from, to: input.to, selectedText: input.selectedText },
+      instruction: input.instruction
+    });
+  });
+
+  ipcMain.handle("mathnotes:apply-selection-edit", async (_event, input: SelectionEditProposalCommand) => {
+    await ensureDefaultStore();
+    await ensureSelectionEditService().apply(input);
+    ingestServer?.publishCompanionChange(input.notebookId, input.sessionId);
+    return loadSessionDocumentFromStore({
+      store: await ensureDefaultStore(),
+      notebookId: input.notebookId,
+      sessionId: input.sessionId
+    });
+  });
+
+  ipcMain.handle("mathnotes:cancel-selection-edit", async (_event, input: SelectionEditProposalCommand) => {
+    await ensureDefaultStore();
+    return ensureSelectionEditService().cancel(input);
   });
 
   ipcMain.handle("mathnotes:save-markdown-block", async (_event, input: { notebookId: string; sessionId: string; blockId: string; markdown: string }) => {
@@ -1900,6 +1932,22 @@ async function ensureDefaultStore(): Promise<BlockStore> {
   }
   await defaultStoreInitialization.promise;
   return new BlockStore(rootDir);
+}
+
+function ensureSelectionEditService(): SessionSelectionEditService {
+  const rootDir = notesRootDir();
+  if (!selectionEditRuntime || selectionEditRuntime.rootDir !== rootDir) {
+    const editor = new SessionEditService(rootDir);
+    selectionEditRuntime = {
+      rootDir,
+      service: new SessionSelectionEditService(
+        rootDir,
+        () => createAssistantProviderForCurrentRuntime(),
+        editor
+      )
+    };
+  }
+  return selectionEditRuntime.service;
 }
 
 async function initializeDefaultStore(rootDir: string): Promise<void> {

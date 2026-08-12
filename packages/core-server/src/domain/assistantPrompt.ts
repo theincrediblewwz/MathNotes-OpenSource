@@ -6,8 +6,25 @@ const modeInstructions: Record<AssistantInput["mode"], string> = {
   summarize: "提炼所选内容的结构、主要结论和待确认事项，不补造原文没有的结论。"
 };
 
-export function buildAssistantPrompt(input: Pick<AssistantInput, "mode" | "markdownContext" | "question">): string {
+export function buildAssistantPrompt(input: Pick<AssistantInput, "intent" | "mode" | "markdownContext" | "question">): string {
   const question = input.question?.trim();
+  if (input.intent === "selection_edit") {
+    return [
+      "你是 MathNotes 的选区修改助手。用户将明确审阅差异后才可能应用你的候选。",
+      "请根据用户指令，只改写标记的精确选区；利用整块上下文保持术语、数学记号和语气一致。",
+      "",
+      "规则：",
+      "1. 只输出用于替换选区的 Markdown 正文，不输出解释、前后缀、代码围栏或差异标记。",
+      "2. 不要复述未选中的上下文，也不要声称已经修改原笔记。",
+      "3. 不确定内容继续保留 [看不清] 或 [不确定：...]，不得猜造公式或符号。",
+      "4. 数学公式使用 $...$ 与 $$...$$；不要生成完整 LaTeX 文档。",
+      question ? `5. 用户修改指令：${question}` : "5. 在不改变含义的前提下，提高选区的准确性与可读性。",
+      "",
+      "--- 块与选区上下文开始 ---",
+      input.markdownContext,
+      "--- 块与选区上下文结束 ---"
+    ].join("\n");
+  }
   return [
     "你是 MathNotes 的独立学习助手。下面内容来自用户已经保存的数学笔记快照。",
     modeInstructions[input.mode],

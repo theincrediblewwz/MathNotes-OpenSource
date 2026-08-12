@@ -26,6 +26,7 @@ import { SessionImageImportService } from "../session/sessionImageImportService"
 import { SessionWriteCoordinator } from "../session/sessionWriteCoordinator";
 import { SessionRecognitionService } from "../session/sessionRecognitionService";
 import { SessionAssistantService } from "../session/sessionAssistantService";
+import { SessionSelectionEditService } from "../session/sessionSelectionEditService";
 import { SessionExportService } from "../session/sessionExportService";
 import { SessionPhotoIngestAdapter } from "../session/sessionPhotoIngestAdapter";
 import { SessionPdfImportService } from "../session/sessionPdfImportService";
@@ -125,6 +126,11 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
     () => environment.providerFactory.createAssistantProvider(),
     sessionWrites
   );
+  const sessionSelectionEdit = new SessionSelectionEditService(
+    options.notesRootDir,
+    () => environment.providerFactory.createAssistantProvider(),
+    sessionEditor
+  );
   const sessionBlockOrganizer = new SessionBlockOrganizeService(
     options.notesRootDir,
     undefined,
@@ -188,6 +194,7 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
     sessionRecognition,
     readSessionCompanionActivity: (input) => companionActivityStore.read(input),
     sessionAssistant,
+    sessionSelectionEdit,
     providerRegistry,
     readPromptTemplates: () => guidanceSettings.readPromptTemplates(),
     savePromptTemplates: (input) => guidanceSettings.savePromptTemplates(input),

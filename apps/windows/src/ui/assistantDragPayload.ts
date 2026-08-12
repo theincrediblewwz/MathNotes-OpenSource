@@ -5,6 +5,8 @@ export type AssistantDragPayload = {
   blockId: string;
   label: string;
   text?: string;
+  from?: number;
+  to?: number;
 };
 
 export function writeAssistantDragPayload(transfer: DataTransfer, payload: AssistantDragPayload): void {
@@ -21,7 +23,9 @@ export function readAssistantDragPayload(transfer: DataTransfer): AssistantDragP
       kind: parsed.kind,
       blockId: parsed.blockId,
       label: parsed.label,
-      text: parsed.text
+      text: parsed.text,
+      from: Number.isInteger(parsed.from) ? parsed.from : undefined,
+      to: Number.isInteger(parsed.to) ? parsed.to : undefined
     };
   } catch {
     return null;

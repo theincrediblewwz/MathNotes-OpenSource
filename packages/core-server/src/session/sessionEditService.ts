@@ -1,6 +1,13 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
-import { createBlockRef, type BlockRef, type LockMeta, type SessionRecord } from "@mathnotes/shared";
+import {
+  applySelectionEdit as replaceSelection,
+  createBlockRef,
+  type BlockRef,
+  type LockMeta,
+  type SessionRecord,
+  type TextSelection
+} from "@mathnotes/shared";
 import { readReadonlySessionBlock, type ReadonlySessionBlock } from "./sessionReadService";
 import { markdownBlockRevision, sha256Text } from "./sessionRevision";
 import { SessionWriteCoordinator } from "./sessionWriteCoordinator";
@@ -66,6 +73,16 @@ export type AppendMarkdownBlockInput = Readonly<{
   sessionId: string;
   markdown: string;
   sourceName?: string;
+  insertAfterBlockId?: string;
+}>;
+
+export type ApplySelectionEditInput = Readonly<{
+  notebookId: string;
+  sessionId: string;
+  blockId: string;
+  baseRevision: string;
+  selection: TextSelection;
+  replacement: string;
 }>;
 
 export type SetMarkdownBlockLockInput = Readonly<{
@@ -97,6 +114,10 @@ export class SessionEditError extends Error {
       | "conflict_not_found"
       | "conflict_already_resolved"
       | "invalid_conflict_resolution"
+      | "invalid_selection"
+      | "selection_stale"
+      | "protected_selection"
+      | "stale_anchor"
       | "path_outside_session",
     readonly statusCode: number,
     readonly details?: Readonly<{ conflictId?: string }>
@@ -126,6 +147,12 @@ export class SessionEditService {
       const blockPath = resolve(sessionDir, path);
       assertInside(sessionDir, blockPath);
       const sourceName = input.sourceName?.trim();
+      const anchorIndex = input.insertAfterBlockId === undefined
+        ? session.blocks.length - 1
+        : session.blocks.findIndex((candidate) => candidate.id === input.insertAfterBlockId);
+      if (input.insertAfterBlockId !== undefined && anchorIndex < 0) {
+        throw new SessionEditError("stale_anchor", 409);
+      }
       const block = createBlockRef({
         id,
         type: "markdown",
@@ -136,7 +163,11 @@ export class SessionEditService {
       });
       const nextSession: SessionRecord = {
         ...session,
-        blocks: [...session.blocks, block],
+        blocks: [
+          ...session.blocks.slice(0, anchorIndex + 1),
+          block,
+          ...session.blocks.slice(anchorIndex + 1)
+        ],
         updatedAt: timestamp
       };
       await writeFileAtomically(blockPath, input.markdown);
@@ -153,6 +184,10 @@ export class SessionEditService {
         blockId: id
       });
     });
+  }
+
+  applySelectionEdit(input: ApplySelectionEditInput): Promise<SaveMarkdownBlockResult> {
+    return this.coordinator.run(input.notebookId, input.sessionId, () => this.applySelectionEditSerial(input));
   }
 
   setMarkdownBlockLock(input: SetMarkdownBlockLockInput): Promise<SetMarkdownBlockLockResult> {
@@ -224,6 +259,60 @@ export class SessionEditService {
     };
 
     await writeFileAtomically(blockPath, input.markdown);
+    try {
+      await writeFileAtomically(sessionPath, `${JSON.stringify(nextSession, null, 2)}\n`);
+    } catch (error) {
+      await writeFileAtomically(blockPath, beforeMarkdown);
+      throw error;
+    }
+    return {
+      version: 1,
+      saved: true,
+      block: await readReadonlySessionBlock({
+        rootDir: this.rootDir,
+        notebookId: input.notebookId,
+        sessionId: input.sessionId,
+        blockId: input.blockId
+      })
+    };
+  }
+
+  private async applySelectionEditSerial(input: ApplySelectionEditInput): Promise<SaveMarkdownBlockResult> {
+    const { session, sessionDir, sessionPath } = await readSession(this.rootDir, input.notebookId, input.sessionId);
+    const block = session.blocks.find((candidate) => candidate.id === input.blockId);
+    if (!block) throw new SessionEditError("block_not_found", 404);
+    if (block.type !== "markdown") throw new SessionEditError("not_markdown_block", 422);
+    if (block.status === "locked") throw new SessionEditError("block_locked", 423);
+    if (!isUserEditable(block)) throw new SessionEditError("block_not_editable", 423);
+
+    const blockPath = resolve(sessionDir, block.path);
+    assertInside(sessionDir, blockPath);
+    const beforeMarkdown = await readFile(blockPath, "utf8");
+    const locks = session.locks.filter((lock) => lock.blockId === block.id);
+    const currentRevision = markdownBlockRevision({ block, markdown: beforeMarkdown, locks });
+    if (input.baseRevision !== currentRevision) throw new SessionEditError("revision_conflict", 409);
+
+    const replacement = replaceSelection({
+      markdown: beforeMarkdown,
+      selection: input.selection,
+      replacement: input.replacement
+    });
+    if (!replacement.ok) {
+      if (replacement.reason === "invalid_range") throw new SessionEditError("invalid_selection", 422);
+      if (replacement.reason === "selection_stale") throw new SessionEditError("selection_stale", 409);
+      throw new SessionEditError("protected_selection", 423);
+    }
+
+    await validateLockedContent({ beforeMarkdown, afterMarkdown: replacement.markdown, locks });
+    const timestamp = this.now();
+    const nextBlock = { ...block, updatedAt: timestamp };
+    const nextSession: SessionRecord = {
+      ...session,
+      updatedAt: timestamp,
+      blocks: session.blocks.map((candidate) => candidate.id === block.id ? nextBlock : candidate),
+      locks: syncSpanLocks(session.locks, block.id, replacement.markdown, timestamp)
+    };
+    await writeFileAtomically(blockPath, replacement.markdown);
     try {
       await writeFileAtomically(sessionPath, `${JSON.stringify(nextSession, null, 2)}\n`);
     } catch (error) {

@@ -116,6 +116,7 @@ export type RecognitionProvider = {
 export type AssistantMode = "explain" | "teach" | "summarize";
 
 export type AssistantInput = {
+  intent?: "remark" | "selection_edit";
   mode: AssistantMode;
   markdownContext: string;
   imagePaths: string[];

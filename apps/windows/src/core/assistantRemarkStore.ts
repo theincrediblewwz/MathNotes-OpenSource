@@ -8,6 +8,8 @@ export type AssistantRemarkFocus = {
   blockId?: string;
   label: string;
   excerpt?: string;
+  from?: number;
+  to?: number;
 };
 
 export type AssistantRemark = {

@@ -15,6 +15,7 @@ import type { AssistantMode, BlockRef, ImageAnnotationObject, ImageTransformOper
 import type { AssistantTaskSummary } from "../core/assistantTask";
 import type { AssistantRemark } from "../core/assistantRemarkStore";
 import type { RecognitionProviderId as CoreRecognitionProviderId } from "../core/providerConfigStore";
+import type { SelectionEditProposal } from "@mathnotes/core-server";
 
 export type {
   NotebookSessionSummary,
@@ -217,6 +218,22 @@ export type CreateMarkdownBlockInput = {
   insertAfterBlockId?: string;
   markdown?: string;
   sourceName?: string;
+};
+
+export type ProposeSelectionEditInput = {
+  notebookId: string;
+  sessionId: string;
+  blockId: string;
+  from: number;
+  to: number;
+  selectedText: string;
+  instruction: string;
+};
+
+export type SelectionEditProposalCommand = {
+  notebookId: string;
+  sessionId: string;
+  proposalId: string;
 };
 
 export type SaveSessionSourceInput = {
@@ -585,6 +602,9 @@ export type MathNotesApi = {
   createNotebook(input: CreateNotebookInput): Promise<SessionDocument>;
   createSession(input?: CreateSessionInput): Promise<SessionDocument>;
   createMarkdownBlock(input: CreateMarkdownBlockInput): Promise<SessionDocument>;
+  proposeSelectionEdit(input: ProposeSelectionEditInput): Promise<SelectionEditProposal>;
+  applySelectionEdit(input: SelectionEditProposalCommand): Promise<SessionDocument>;
+  cancelSelectionEdit(input: SelectionEditProposalCommand): Promise<SelectionEditProposal>;
   saveMarkdownBlock(input: SaveMarkdownBlockInput): Promise<SessionDocument>;
   saveSessionSource(input: SaveSessionSourceInput): Promise<SessionDocument>;
   setMarkdownBlockLock(input: SetMarkdownBlockLockInput): Promise<SessionDocument>;

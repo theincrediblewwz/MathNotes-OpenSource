@@ -35,6 +35,10 @@ import {
 } from "../session/sessionAssistantService";
 import { SessionExportError, type SessionExportDownload, type ExportSessionMarkdownResult } from "../session/sessionExportService";
 import {
+  SessionSelectionEditError,
+  type SessionSelectionEditService
+} from "../session/sessionSelectionEditService";
+import {
   SessionBlockOrganizeError,
   type DeleteSessionBlocksInput,
   type ReorderSessionBlocksInput,
@@ -89,6 +93,7 @@ export type LocalShellServerOptions = {
     sessionId: string;
     markdown: string;
     sourceName?: string;
+    insertAfterBlockId?: string;
   }) => Promise<ReadonlySessionBlock>;
   saveSessionBlock?: (input: {
     notebookId: string;
@@ -138,6 +143,7 @@ export type LocalShellServerOptions = {
     sessionId: string;
   }) => CompanionUploadActivity | undefined | Promise<CompanionUploadActivity | undefined>;
   sessionAssistant?: SessionAssistantService;
+  sessionSelectionEdit?: SessionSelectionEditService;
   exportSessionMarkdown?: (input: {
     notebookId: string;
     sessionId: string;
@@ -411,7 +417,8 @@ export class LocalShellServer {
           notebookId,
           sessionId,
           markdown: body.markdown,
-          sourceName: body.sourceName
+          sourceName: body.sourceName,
+          insertAfterBlockId: body.insertAfterBlockId
         }));
         return;
       }
@@ -697,6 +704,38 @@ export class LocalShellServer {
         }
         return;
       }
+      if (route.id === "local.session.selection-edit.propose") {
+        if (!this.options.sessionSelectionEdit) return writeJson(response, 503, { error: "assistant_unavailable" });
+        const body = await readJsonBody(request, MAX_ASSISTANT_BODY_BYTES);
+        if (!isSelectionEditProposalBody(body)) throw new BodyError("invalid_selection_edit_body", 400);
+        writeJson(response, 200, await this.options.sessionSelectionEdit.propose({
+          notebookId,
+          sessionId,
+          blockId: body.blockId,
+          selection: {
+            from: body.from,
+            to: body.to,
+            selectedText: body.selectedText
+          },
+          instruction: body.instruction
+        }));
+        return;
+      }
+      if (route.id === "local.session.selection-edit.apply" || route.id === "local.session.selection-edit.cancel") {
+        if (!this.options.sessionSelectionEdit) return writeJson(response, 503, { error: "assistant_unavailable" });
+        const body = await readJsonBody(request, MAX_ASSISTANT_BODY_BYTES);
+        if (!isSelectionEditCommandBody(body)) throw new BodyError("invalid_selection_edit_body", 400);
+        if (route.id === "local.session.selection-edit.apply") {
+          writeJson(response, 200, await this.options.sessionSelectionEdit.apply({
+            notebookId, sessionId, proposalId: body.proposalId
+          }));
+        } else {
+          writeJson(response, 200, await this.options.sessionSelectionEdit.cancel({
+            notebookId, sessionId, proposalId: body.proposalId
+          }));
+        }
+        return;
+      }
       if (route.id === "local.session.export.create") {
         if (!this.options.exportSessionMarkdown) return writeJson(response, 503, { error: "export_unavailable" });
         const baseRevision = url.searchParams.get("baseRevision")?.trim() || undefined;
@@ -737,6 +776,7 @@ export class LocalShellServer {
         : error instanceof SessionReadError || error instanceof SessionEditError || error instanceof SessionImageImportError ||
           error instanceof SessionPdfImportError ||
           error instanceof SessionRecognitionError || error instanceof SessionAssistantError ||
+          error instanceof SessionSelectionEditError ||
           error instanceof SessionExportError ||
           error instanceof SessionBlockOrganizeError || error instanceof BodyError
           ? error.statusCode
@@ -745,7 +785,7 @@ export class LocalShellServer {
         error: statusCode === 500 ? "local_request_failed" :
           error instanceof SessionEditError || error instanceof SessionImageImportError || error instanceof SessionPdfImportError ||
           error instanceof SessionExportError || error instanceof RuntimeProviderConfigurationError ||
-          error instanceof SessionAssistantError || error instanceof SessionBlockOrganizeError ||
+          error instanceof SessionAssistantError || error instanceof SessionSelectionEditError || error instanceof SessionBlockOrganizeError ||
           error instanceof WorkspaceCommandError ? error.code :
           error instanceof Error ? error.message : "invalid_request",
         ...(error instanceof SessionEditError && error.details?.conflictId
@@ -855,10 +895,15 @@ function isStandaloneMarkdownBody(value: unknown): value is { markdown: string }
     typeof (value as { markdown?: unknown }).markdown === "string";
 }
 
-function isAppendMarkdownBody(value: unknown): value is { markdown: string; sourceName?: string } {
+function isAppendMarkdownBody(value: unknown): value is {
+  markdown: string;
+  sourceName?: string;
+  insertAfterBlockId?: string;
+} {
   if (!isStandaloneMarkdownBody(value)) return false;
-  const sourceName = (value as { sourceName?: unknown }).sourceName;
-  return sourceName === undefined || (typeof sourceName === "string" && sourceName.trim().length > 0 && sourceName.length <= 240);
+  const body = value as { sourceName?: unknown; insertAfterBlockId?: unknown };
+  return (body.sourceName === undefined || (typeof body.sourceName === "string" && body.sourceName.trim().length > 0 && body.sourceName.length <= 240)) &&
+    (body.insertAfterBlockId === undefined || (typeof body.insertAfterBlockId === "string" && isSafeLocalIdentifier(body.insertAfterBlockId)));
 }
 
 function isReorderBlocksBody(value: unknown): value is {
@@ -967,6 +1012,28 @@ function isRemarkCommandBody(value: unknown): value is { remarkId: string } {
   if (!value || typeof value !== "object") return false;
   const remarkId = (value as Record<string, unknown>).remarkId;
   return typeof remarkId === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(remarkId);
+}
+
+function isSelectionEditProposalBody(value: unknown): value is {
+  blockId: string;
+  from: number;
+  to: number;
+  selectedText: string;
+  instruction: string;
+} {
+  if (!value || typeof value !== "object") return false;
+  const body = value as Record<string, unknown>;
+  return typeof body.blockId === "string" && isSafeLocalIdentifier(body.blockId) &&
+    Number.isSafeInteger(body.from) && (body.from as number) >= 0 &&
+    Number.isSafeInteger(body.to) && (body.to as number) > (body.from as number) &&
+    typeof body.selectedText === "string" && body.selectedText.length > 0 && body.selectedText.length <= 12_000 &&
+    typeof body.instruction === "string" && body.instruction.trim().length > 0 && body.instruction.length <= 8_000;
+}
+
+function isSelectionEditCommandBody(value: unknown): value is { proposalId: string } {
+  if (!value || typeof value !== "object") return false;
+  const proposalId = (value as Record<string, unknown>).proposalId;
+  return typeof proposalId === "string" && /^selection_[0-9a-f-]{36}$/.test(proposalId);
 }
 
 function optionalBoundedText(value: unknown, maximum: number): boolean {

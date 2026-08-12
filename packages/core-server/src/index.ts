@@ -20,6 +20,7 @@ export * from "./session/sessionPdfIngestAdapter";
 export * from "./session/sessionRecognitionService";
 export * from "./session/sessionRecognitionContext";
 export * from "./session/sessionAssistantService";
+export * from "./session/sessionSelectionEditService";
 export * from "./session/sessionExportService";
 export * from "./api/capabilityPolicy";
 export * from "./api/networkApiContracts";
