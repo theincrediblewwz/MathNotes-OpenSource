@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T17:03:26.955Z",
+  "generatedAt": "2026-08-12T17:12:54.519Z",
   "fileCount": 656,
-  "snapshotSha256": "623d34fe42c635ffaf8431a948441362c551ca62f09ab51fb132f156bfe7f0a8",
+  "snapshotSha256": "37bb74d899029f3e12b8f4beaf7bac4cb994803cbe32ea74c76a232a5c61fa56",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -23,8 +23,8 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "bytes": 1675,
-      "sha256": "ea02b77ea50c05b26908e532193b3f20e09884875c26d16ce68946be4c291a03"
+      "bytes": 1716,
+      "sha256": "c5488eb989b99a17adcd9ba556d19369dcc387e64ec2354a9222c10edbd5e5a4"
     },
     {
       "path": ".github/workflows/dependency-review.yml",
@@ -1658,8 +1658,8 @@
     },
     {
       "path": "apps/windows/src/core/ingestServer.test.ts",
-      "bytes": 32381,
-      "sha256": "8b956a92800c9c4fee464cd0759f99975dd59f0b4d1eeeb8c5019a8ecd5f52e3"
+      "bytes": 32380,
+      "sha256": "d880248adf4f83de437e747bb966e87c697cc218fd776a0fa4d2e09a39b54a59"
     },
     {
       "path": "apps/windows/src/core/ingestServer.ts",

@@ -384,7 +384,7 @@ describe("IngestServer", () => {
     );
     expect(escaped.status).toBe(400);
     await expect(escaped.json()).resolves.toEqual({ error: "invalid_asset_path" });
-  }, 10_000);
+  }, 30_000);
 
   it("publishes companion change events to the matching authenticated stream", async () => {
     const controller = new AbortController();

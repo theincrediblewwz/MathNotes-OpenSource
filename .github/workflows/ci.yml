@@ -26,6 +26,7 @@ jobs:
           cache: gradle
       - run: npm ci
       - run: npm run test:ci-config
+      - run: npm run build:headless-network
       - run: npm run test:unit
       - run: npm run build:windows
       - run: npm run test:electron-smoke
