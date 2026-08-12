@@ -26,7 +26,7 @@
     "katex": "^0.17.0",
     "lucide-react": "^0.562.0",
     "markdown-it": "^14.2.0",
-    "pdfjs-dist": "^6.1.200",
+    "pdfjs-dist": "^6.2.108",
     "qrcode": "^1.5.4",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
