@@ -1194,6 +1194,10 @@ button:disabled,
   transition: opacity 160ms ease, transform 160ms ease;
 }
 
+.popover {
+  z-index: 80;
+}
+
 .drawer.open,
 .popover.open {
   opacity: 1;

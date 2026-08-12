@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T17:24:58.308Z",
+  "generatedAt": "2026-08-12T17:32:03.694Z",
   "fileCount": 656,
-  "snapshotSha256": "ce542f45daca30b308132311e9207ec66633cd1bd1a9b7440b9a57a7b02344bd",
+  "snapshotSha256": "2841b35df580267319b257b220e89a0b9f1c8835c28a35242fc49547b8d2428c",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -2013,8 +2013,8 @@
     },
     {
       "path": "apps/windows/src/styles.css",
-      "bytes": 97875,
-      "sha256": "190c0195eab721de31265ea66df597bb4f4f27d2e12394ab7b675f003dc0009b"
+      "bytes": 97898,
+      "sha256": "4ef2565b7d427b3bb95a2712815306009eb85e856a0b797a7db4ade23ce57a74"
     },
     {
       "path": "apps/windows/src/types/global.d.ts",
