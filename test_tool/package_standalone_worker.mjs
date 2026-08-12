@@ -22,10 +22,7 @@ await cp(path.join(root, "apps", "worker", "src"), path.join(ready, "src"), { re
 await copyFile(path.join(root, "apps", "worker", "wrangler.jsonc"), path.join(ready, "wrangler.jsonc"));
 await copyFile(path.join(root, "apps", "worker", "package.json"), path.join(ready, "package.json"));
 await copyFile(path.join(root, "apps", "worker", "README.md"), path.join(ready, "README.md"));
-await copyFile(
-  path.join(root, "docs", "deployment", "standalone-gateway-contract-v1.md"),
-  path.join(ready, "网关接口合同.md")
-);
+await writeFile(path.join(ready, "网关接口合同.md"), publicGatewayContract(), "utf8");
 
 // The staged config is self-contained: assets live next to the worker.
 const stagedConfigPath = path.join(ready, "wrangler.jsonc");
@@ -107,6 +104,24 @@ npm run test:standalone-worker-package
 8. \`npx wrangler deploy\` 最终版本。
 
 真实 Provider 调用、正式域名和任何收费资源仍需单独窄范围批准。
+`;
+}
+
+function publicGatewayContract() {
+  return `# MathNotes 独立识别网关公开接口
+
+本包只在同一 HTTPS origin 暴露以下入口：
+
+- \`GET /v1/capabilities\`：返回网关能力；
+- \`POST /v1/recognitions\`：提交一次由用户明确触发的识别请求；
+- 其他 \`GET/HEAD\`：读取随包附带的 PWA 静态资源。
+
+识别请求必须包含 \`Authorization: Bearer <gateway token>\`、JSON content type 和非空
+\`Idempotency-Key\`。Worker 的 Provider key 只能写入部署平台 secret，不得放进 PWA、仓库、
+Release、日志或浏览器存储。未知路径返回 404；没有配置秘密时应 fail closed。
+
+当前包不承诺持久幂等存储、账号体系或自动计费保护。正式公开域名部署前应补充持久去重、
+限流、费用上限、日志脱敏和回滚验证。
 `;
 }
 

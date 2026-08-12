@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T18:09:41.208Z",
+  "generatedAt": "2026-08-12T18:25:18.759Z",
   "fileCount": 656,
-  "snapshotSha256": "190d5790dfc402549a49cba5ba02f8be568daa9b564e54c3a930c076f827c2ae",
+  "snapshotSha256": "2c2c4ab7d51da44387c1d1495f17c00dd9004b277bf96943bb5a3cb8f961799e",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -2248,8 +2248,8 @@
     },
     {
       "path": "apps/worker/README.md",
-      "bytes": 3124,
-      "sha256": "992b3487c6b4389d3c0a1f1dae649cf89ef3e046de04b552a9c89e7b9cd031ef"
+      "bytes": 3169,
+      "sha256": "4d7266a517b6434959117c3ea2076de03e99a0ac4ee8d61e6bd0e79f5f7f0018"
     },
     {
       "path": "apps/worker/package.json",
@@ -3148,8 +3148,8 @@
     },
     {
       "path": "test_tool/package_mobile_standalone.mjs",
-      "bytes": 6792,
-      "sha256": "7e28700205132fc0e96b5ccddb374341b9c380bf40b9d36e94b2f757c3a82a99"
+      "bytes": 7632,
+      "sha256": "bdbe527bdb3cd371fedd84df763c6a223a15cb78a351ba87207c1f2e6ce7e9ad"
     },
     {
       "path": "test_tool/package_pwa_companion.mjs",
@@ -3158,8 +3158,8 @@
     },
     {
       "path": "test_tool/package_standalone_worker.mjs",
-      "bytes": 6816,
-      "sha256": "6058e70e48659df8022f5b5f9e787b5eb30712c5df349ee8e8448e8d2d17de17"
+      "bytes": 7603,
+      "sha256": "f5a3139f12e8716344bea780b61f095718365ecdabefadb16061aeb061df1133"
     },
     {
       "path": "test_tool/package_windows_portable.mjs",

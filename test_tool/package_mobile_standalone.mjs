@@ -32,16 +32,13 @@ await copyFile(path.join(root, "apps", "worker", "README.md"), path.join(workerD
 const workerConfig = (await readFile(path.join(root, "apps", "worker", "wrangler.jsonc"), "utf8"))
   .replace('"directory": "../pwa/dist"', '"directory": "./pwa-site"');
 await writeFile(path.join(workerDir, "wrangler.jsonc"), workerConfig, "utf8");
-await copyFile(
-  path.join(root, "docs", "deployment", "standalone-gateway-contract-v1.md"),
-  path.join(workerDir, "网关接口合同.md")
-);
+await writeFile(path.join(workerDir, "网关接口合同.md"), publicGatewayContract(), "utf8");
 
 const gatewayDir = path.join(ready, "gateway-local-fake");
 await mkdir(gatewayDir, { recursive: true });
 await copyFile(path.join(root, "test_tool", "standalone_gateway_fake.mjs"), path.join(gatewayDir, "standalone_gateway_fake.mjs"));
-await copyFile(path.join(root, "docs", "deployment", "standalone-gateway-contract-v1.md"), path.join(gatewayDir, "接口与启动说明.md"));
-await copyFile(path.join(root, "docs", "deployment", "standalone-pwa-hosting-v1.md"), path.join(ready, "PWA托管说明.md"));
+await writeFile(path.join(gatewayDir, "接口与启动说明.md"), publicGatewayContract(), "utf8");
+await writeFile(path.join(ready, "PWA托管说明.md"), publicHostingGuide(), "utf8");
 await writeFile(path.join(ready, "首次使用.md"), `# MathNotes 手机独立版 ${pkg.version}\n\n` +
   `构建提交：${head}\n\n` +
   `- Android：安装 \`${apkName}\`。这是开发签名验收包，可直接安装；不是应用商店正式签名。\n` +
@@ -101,4 +98,24 @@ async function directoryBytes(dir) {
   let total = 0;
   for (const relative of await listFiles(dir)) total += (await stat(path.join(dir, relative))).size;
   return total;
+}
+
+function publicGatewayContract() {
+  return `# MathNotes 独立识别网关公开接口
+
+同一 HTTPS origin 提供 \`GET /v1/capabilities\`、\`POST /v1/recognitions\` 与 PWA 静态资源。
+识别请求必须携带 Bearer gateway token、JSON content type 和非空 \`Idempotency-Key\`。
+Provider key 只能进入服务端 secret；禁止写入 PWA、Git、Release、日志或浏览器存储。
+当前实现不替代持久去重、费用上限和正式域名部署验收。
+`;
+}
+
+function publicHostingGuide() {
+  return `# PWA 托管说明
+
+PWA 必须部署到稳定 HTTPS origin 才能供 iPhone 主屏幕安装。纯静态托管可提供本地工作区，
+但不能安全保存 Provider key；真实识别请使用随包 Worker 或等价的同源服务端网关。
+部署前应配置服务端 secrets、限流、持久幂等、费用上限和回滚，再在真实 iPhone Safari 验证
+首次打开、主屏幕安装、离线重开、相机/文件选择与识别。
+`;
 }
