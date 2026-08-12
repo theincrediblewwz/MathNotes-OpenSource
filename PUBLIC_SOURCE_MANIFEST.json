@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T18:25:18.759Z",
+  "generatedAt": "2026-08-12T19:07:17.184Z",
   "fileCount": 656,
-  "snapshotSha256": "2c2c4ab7d51da44387c1d1495f17c00dd9004b277bf96943bb5a3cb8f961799e",
+  "snapshotSha256": "2f1b9b1e22416f6f153da4ab5b90355aa0213bac8fa8375353d1825709ce591e",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -58,8 +58,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 4413,
-      "sha256": "988e7d55d3f3d3aec634e31ccdafd45460a1c18531e2532d71453a2eeab7c4bb"
+      "bytes": 4538,
+      "sha256": "7e34d119664345e8d191b301ea52c3d2ebc7abc5a3f960a6145d4807dc6f2b5c"
     },
     {
       "path": "SECURITY.md",

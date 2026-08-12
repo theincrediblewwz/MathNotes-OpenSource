@@ -101,7 +101,7 @@ Notebook 包含多个 Session；Session 由按序 block 组成。PDF 保持原�
 - PWA：可自行部署；同域 Worker 方案要求在托管平台安全配置 Provider secret。
 - 尚不可宣称：稳定版、商店上架、已完成所有真机矩阵或无安全漏洞。
 
-本仓库不会提供 API key、配对 token、签名密钥或第三方服务额度。当前 npm 审计仍有已知 high 级依赖链问题，升级需独立回归。
+本仓库不会提供 API key、配对 token、签名密钥或第三方服务额度。`v0.1.11-alpha.1` 发布时完整 `npm audit` 为 0 vulnerabilities，GitHub open Dependabot alerts 为 0；依赖安全状态会随时间变化，请以当前 Security 页面和本地审计结果为准。
 
 ## 许可证
 
