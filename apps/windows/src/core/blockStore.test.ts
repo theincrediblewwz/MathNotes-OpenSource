@@ -82,6 +82,39 @@ describe("BlockStore", () => {
     expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0002_ai_transcript.md"), "utf8")).toBe("## OCR 草稿");
   });
 
+  it("does not lose blocks when independent pipelines append to one session concurrently", async () => {
+    await store.createSession({
+      notebookId: "functional_analysis",
+      sessionId: "lecture",
+      title: "Lecture",
+      now: "2026-06-26T10:00:00.000Z"
+    });
+    const independentStore = new BlockStore(root);
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        index % 2 === 0
+          ? store.appendImageBlock({
+              notebookId: "functional_analysis",
+              sessionId: "lecture",
+              assetPath: `assets/photos/photo_${index}.jpg`,
+              now: `2026-06-26T10:01:${String(index).padStart(2, "0")}.000Z`
+            })
+          : independentStore.appendMarkdownBlock({
+              notebookId: "functional_analysis",
+              sessionId: "lecture",
+              source: "ai_transcription",
+              markdown: `provider-${index}`,
+              now: `2026-06-26T10:01:${String(index).padStart(2, "0")}.000Z`
+            })
+      )
+    );
+
+    const session = await store.readSession("functional_analysis", "lecture");
+    expect(session.blocks).toHaveLength(20);
+    expect(new Set(session.blocks.map((block) => block.id)).size).toBe(20);
+  });
+
   it("does not reuse existing block ids after deleting a middle markdown block", async () => {
     await store.createSession({
       notebookId: "functional_analysis",
