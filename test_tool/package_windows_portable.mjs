@@ -121,12 +121,18 @@ await access(path.join(pwaRoot, "sw.js"));
 await cp(pwaRoot, packagedPwaRoot, { recursive: true });
 await access(path.join(packagedPwaRoot, "index.html"));
 await access(path.join(packagedPwaRoot, "sw.js"));
-await copyFile(path.join(projectRoot, "docs", "acceptance", "windows-portable-readme.txt"), path.join(packagedRoot, "首次运行说明.txt"));
+await writeFile(path.join(packagedRoot, "首次运行说明.txt"), [
+  "MathNotes Windows 便携版",
+  "",
+  "1. 解压整个目录后运行 MathNotes.exe，不要只复制 exe。",
+  "2. Windows 可能提示发布者未知；本项目当前不提供付费代码签名，请仅从官方仓库下载并自行核对 SHA-256。",
+  "3. 软件默认把笔记保存在本机。首次使用前请在设置中确认笔记目录，并定期备份。",
+  "4. 如需在 WSL 中调用 Codex，请先在自己的 WSL 发行版中安装并登录 Codex；默认命令为 codex。",
+  "5. 许可证、构建方法和已知限制请阅读同目录 README.md 与 SECURITY.md。",
+  ""
+].join("\r\n"), "utf8");
 await copyFile(path.join(projectRoot, "README.md"), path.join(packagedRoot, "README.md"));
 await copyFile(path.join(projectRoot, "SECURITY.md"), path.join(packagedRoot, "SECURITY.md"));
-await copyFile(path.join(projectRoot, "CHANGELOG.md"), path.join(packagedRoot, "CHANGELOG.md"));
-await copyFile(path.join(projectRoot, "docs", "privacy-and-security.md"), path.join(packagedRoot, "隐私与安全.md"));
-await copyFile(path.join(projectRoot, "docs", "data-backup-and-recovery.md"), path.join(packagedRoot, "备份与恢复.md"));
 await copyFile(path.join(projectRoot, "output", "release-metadata", "windows-sbom.cdx.json"), path.join(packagedRoot, "windows-sbom.cdx.json"));
 await copyFile(path.join(projectRoot, "output", "release-metadata", "third-party-licenses.json"), path.join(packagedRoot, "third-party-licenses.json"));
 await copyFile(path.join(projectRoot, "output", "release-metadata", "release-manifest.json"), path.join(packagedRoot, "release-manifest.json"));

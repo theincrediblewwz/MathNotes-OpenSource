@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T17:32:03.694Z",
+  "generatedAt": "2026-08-12T17:39:03.260Z",
   "fileCount": 656,
-  "snapshotSha256": "2841b35df580267319b257b220e89a0b9f1c8835c28a35242fc49547b8d2428c",
+  "snapshotSha256": "677abbb3ae334e8cf5014c7f019670b63e50b890e88e15a27720e2405aa667ec",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -3163,8 +3163,8 @@
     },
     {
       "path": "test_tool/package_windows_portable.mjs",
-      "bytes": 8028,
-      "sha256": "b7f29bfd0b15673fc43600d001c76731b5b1ffe0578d622afd8c9a33251ac499"
+      "bytes": 8227,
+      "sha256": "e2cb80bee26e3c77eaf5d65c4b0c62f72e1238d4eb0d7560fc540f823106a6ae"
     },
     {
       "path": "test_tool/prepare_recognition_image_ab.ts",
@@ -3278,8 +3278,8 @@
     },
     {
       "path": "test_tool/windows_portable_smoke.mjs",
-      "bytes": 5961,
-      "sha256": "382cf6f90084005a60ff7fc33d06b36ee0f8770ce17c48caf7434feb890cebbc"
+      "bytes": 5914,
+      "sha256": "b3e15695c7a0aac8442a69d5169ac59bf9dbb07c6d23d11a7f22e3284df24304"
     },
     {
       "path": "tsconfig.base.json",

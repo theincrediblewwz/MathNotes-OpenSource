@@ -119,9 +119,7 @@ async function assertReleaseFiles(packagedRoot) {
   const required = [
     "README.md",
     "SECURITY.md",
-    "CHANGELOG.md",
-    "隐私与安全.md",
-    "备份与恢复.md",
+    "首次运行说明.txt",
     "windows-sbom.cdx.json",
     "third-party-licenses.json",
     "release-manifest.json",
