@@ -1,6 +1,6 @@
 {
   "name": "readandanalysis",
-  "version": "0.1.11",
+  "version": "0.2.0",
   "description": "Local-first cross-platform mathematics notes with desktop, Android and PWA clients.",
   "private": true,
   "workspaces": [

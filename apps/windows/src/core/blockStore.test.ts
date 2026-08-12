@@ -756,6 +756,34 @@ describe("BlockStore", () => {
     expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0002_ai_transcript.md"), "utf8")).toBe("second");
   });
 
+  it("inserts a markdown block after an explicit anchor and never appends for a stale anchor", async () => {
+    await store.createSession({
+      notebookId: "functional_analysis", sessionId: "lecture", title: "Lecture",
+      now: "2026-08-13T04:10:00.000Z"
+    });
+    const first = await store.appendMarkdownBlock({
+      notebookId: "functional_analysis", sessionId: "lecture", source: "user", markdown: "first",
+      now: "2026-08-13T04:11:00.000Z"
+    });
+    const tail = await store.appendMarkdownBlock({
+      notebookId: "functional_analysis", sessionId: "lecture", source: "user", markdown: "tail",
+      now: "2026-08-13T04:12:00.000Z"
+    });
+    const middle = await store.appendMarkdownBlock({
+      notebookId: "functional_analysis", sessionId: "lecture", source: "user", markdown: "middle",
+      insertAfterBlockId: first.id, now: "2026-08-13T04:13:00.000Z"
+    });
+    expect((await store.readSession("functional_analysis", "lecture")).blocks.map((block) => block.id))
+      .toEqual([first.id, middle.id, tail.id]);
+
+    await expect(store.appendMarkdownBlock({
+      notebookId: "functional_analysis", sessionId: "lecture", source: "user", markdown: "lost",
+      insertAfterBlockId: "gone", now: "2026-08-13T04:14:00.000Z"
+    })).rejects.toThrow("Insert anchor gone is stale");
+    expect((await store.readSession("functional_analysis", "lecture")).blocks.map((block) => block.id))
+      .toEqual([first.id, middle.id, tail.id]);
+  });
+
   it("rejects AI updates that would change a block-level locked markdown block", async () => {
     await store.createSession({
       notebookId: "functional_analysis",

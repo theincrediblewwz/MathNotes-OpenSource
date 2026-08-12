@@ -45,6 +45,7 @@ struct SessionAssistantWindowContext {
     let activeBlockID: String?
     let selectedText: String
     let selectedTextBlockID: String?
+    let onSelectionEditRequested: (() -> Void)?
     let onSessionChanged: () async -> Void
 }
 
@@ -76,6 +77,7 @@ struct SessionAssistantWindowRoot: View {
                     selectedText: context.selectedText,
                     selectedTextBlockID: context.selectedTextBlockID,
                     supervisor: supervisor,
+                    onSelectionEditRequested: context.onSelectionEditRequested,
                     onSessionChanged: context.onSessionChanged,
                     onClose: { dismissWindow(id: "session-assistant") }
                 )

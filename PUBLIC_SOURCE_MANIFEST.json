@@ -2,14 +2,14 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T19:07:17.184Z",
-  "fileCount": 656,
-  "snapshotSha256": "2f1b9b1e22416f6f153da4ab5b90355aa0213bac8fa8375353d1825709ce591e",
+  "generatedAt": "2026-08-12T20:38:27.239Z",
+  "fileCount": 660,
+  "snapshotSha256": "08894a4898de545de16cff765753e23c1b39092ca3263b92e65670f822ff1d75",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
-      "bytes": 805,
-      "sha256": "859dd9b356745ae37f1cf08d61946669daa344c491839284312ae5585340847e"
+      "bytes": 838,
+      "sha256": "2a6d42b036252ff3d81096fb3ef22bae9422b0a4e79020da2cce0c72a337ff60"
     },
     {
       "path": ".github/dependabot.yml",
@@ -18,28 +18,28 @@
     },
     {
       "path": ".github/pull_request_template.md",
-      "bytes": 342,
-      "sha256": "1637c4804087e55d721b92f7331aba38af471c9e08d80e499e0d2b201705c117"
+      "bytes": 351,
+      "sha256": "d1898f5d5cbf87a40a8f2556a062d465af7983cc5236aa95703512b82a7707f3"
     },
     {
       "path": ".github/workflows/ci.yml",
-      "bytes": 2126,
-      "sha256": "7195d9ecea9f8c178439fb369f856c552ee7674df95a4ca023229508f44199fc"
+      "bytes": 2140,
+      "sha256": "f22f777be51567cb5b1e268f3e885c1c082db4518dac0654f643cddcea697a49"
     },
     {
       "path": ".github/workflows/dependency-review.yml",
-      "bytes": 381,
-      "sha256": "1cb002c8a7837e51e4ba58ecc03b0951cacbf2b5cc443a971bcc5b05267e6553"
+      "bytes": 383,
+      "sha256": "b194eeaa5530f18701fa65fdc9578b7530bcae6a828de4fb4da6aa92b1551bae"
     },
     {
       "path": ".github/workflows/package-macos-native.yml",
-      "bytes": 1843,
-      "sha256": "e0f5dd00ff1566cd81c374f48a0b7b23f60c15153fae51f155e469116f6cb785"
+      "bytes": 1846,
+      "sha256": "1cd2fe4970940ae24069fddb56b19f325ec2c81059b37b1c17e216acd10579f4"
     },
     {
       "path": ".gitignore",
-      "bytes": 668,
-      "sha256": "3b9f07a7c56e1345bed442263d127e1db256145880028a091d6fd5beeba68ec4"
+      "bytes": 678,
+      "sha256": "d57fdf0ad8f0f085452491c9f1fde5c4ab5f52c53d703a576793f815c2fd7e17"
     },
     {
       "path": "CODE_OF_CONDUCT.md",
@@ -48,33 +48,33 @@
     },
     {
       "path": "CONTRIBUTING.md",
-      "bytes": 1046,
-      "sha256": "c74335035128ef15ce4c301c20440b327b2c0933fc927bc34a095c3a8572a2c3"
+      "bytes": 1052,
+      "sha256": "940727bb87786355659785f45a86554307a1ae24bff993d96c22789427ca5830"
     },
     {
       "path": "LICENSE",
-      "bytes": 35149,
-      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      "bytes": 35823,
+      "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809"
     },
     {
       "path": "README.md",
-      "bytes": 4538,
-      "sha256": "7e34d119664345e8d191b301ea52c3d2ebc7abc5a3f960a6145d4807dc6f2b5c"
+      "bytes": 4656,
+      "sha256": "267a48cc43e3c044026255bf3c866c21e5dd5cd65a060ded2ed0a726ef966e6d"
     },
     {
       "path": "SECURITY.md",
-      "bytes": 926,
-      "sha256": "09ecdfa6a38873c9483b61d633db5dc8cde54b4207499e0e03aa9fbba3eca795"
+      "bytes": 931,
+      "sha256": "51da6cddb0c4e0fa98297db78cb4e91b0d0350cc95cf53fcb7bd82e1c05b9c95"
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
-      "bytes": 1050,
-      "sha256": "ffc731f3f1058185012f77238f7ef0f77bf3606b7454814e11c8254049716aad"
+      "bytes": 1066,
+      "sha256": "0c502f155defd42d1be0d3dd5e863b8b3a124c3fb1e334b807b7ba2aab16e053"
     },
     {
       "path": "apps/android/app/build.gradle.kts",
-      "bytes": 3127,
-      "sha256": "f92a1d06e9fd003d5aaeaec6938ba5bc1bb850592c7bdd76b1820d2beea6db57"
+      "bytes": 3125,
+      "sha256": "95ad50fa01cebeb5bea2f15f397742689d1b9c25ecce8cfa30ee224d6bd25e63"
     },
     {
       "path": "apps/android/app/proguard-rules.pro",
@@ -838,8 +838,8 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/LocalShellClient.swift",
-      "bytes": 45381,
-      "sha256": "13c9f3ff0daf5ca075c4050e6525389ae40c181f3ab552dbe5c4b58a12778996"
+      "bytes": 48718,
+      "sha256": "22d63667c78cfd38d2a84df80dfea846b8963da546ebb10547c796ef833c8ddb"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/MacRuntimeDiagnostics.swift",
@@ -883,8 +883,8 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/ReadonlySessionView.swift",
-      "bytes": 151859,
-      "sha256": "11f61e6d824ff91516dfae251c41fb11d5427c61e6cc93ca97eb14b3f40e4998"
+      "bytes": 170909,
+      "sha256": "7f6bde43d92758aec3c1e8b28829a6a20ac2abaabecb029d429c93cfd5e4afe3"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/Resources/katex/fonts/KaTeX_AMS-Regular.woff2",
@@ -993,13 +993,13 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/SelectionAwareTextEditor.swift",
-      "bytes": 6175,
-      "sha256": "d777e80827e51d314dc1a8f53c332901dad100aacf705fb4d0839ec47ddc104d"
+      "bytes": 8448,
+      "sha256": "ad0dc7c00a23a6c9071bb5a8db325eac1b19cc63dbfa0df39aa4f4d6468761b0"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/SessionAssistantWindow.swift",
-      "bytes": 3248,
-      "sha256": "6da78a501639c245f503dac68219175dc523b39460d3750e12302bc5d90b4c5d"
+      "bytes": 3370,
+      "sha256": "4bd757cfeacea62aab23e579246a67e5576fda92c37646c6561b9555430caed8"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/SidecarConfiguration.swift",
@@ -1008,13 +1008,13 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/SidecarProtocol.swift",
-      "bytes": 24982,
-      "sha256": "14fdadcae974fd41f0ecd3cde58bd05a3ad4a39d1a473d9b8997583fc8527ee1"
+      "bytes": 26507,
+      "sha256": "6aae367562b34501d158e3ecb2cecbc553dc7f4bdbf5e81e08af930fcfe2e975"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/SidecarSupervisor.swift",
-      "bytes": 35550,
-      "sha256": "a4b7c962b56b1757b37effbd89272a679ebdcb66efae1f547e822ec9e3fe2993"
+      "bytes": 37201,
+      "sha256": "f5449066f6092363171fb5a933a260bf51e8c530c1b5763ef65dd50de6e33414"
     },
     {
       "path": "apps/pwa/index.html",
@@ -1024,7 +1024,7 @@
     {
       "path": "apps/pwa/package.json",
       "bytes": 647,
-      "sha256": "cd33e935facbc2ed4db5d3a09d5e5bd8872a0fc9102a17fdfc49a16410009a20"
+      "sha256": "f93272cf90e20c634f3b9fc6df9326b5263eeda9e05ff0ff34a1d97168221a51"
     },
     {
       "path": "apps/pwa/public/_headers",
@@ -1318,13 +1318,13 @@
     },
     {
       "path": "apps/windows/electron/main.ts",
-      "bytes": 79387,
-      "sha256": "be1b5fded1ca29a0ba9adc09db4b1aaf74949aa6c56872648374944dee3f3d4e"
+      "bytes": 81124,
+      "sha256": "b99fb84dc1fdb0541825d5a343ed5c8d574e808f8401aecc184cfffa3545abef"
     },
     {
       "path": "apps/windows/electron/preload.ts",
-      "bytes": 8785,
-      "sha256": "313085b61312d86cf9b7d1b2c22d51f246507d26c20d7618939420c6c19b7fd4"
+      "bytes": 9072,
+      "sha256": "b5a612cd3eca6717d9c8ee37e0abf0e12d49e3133898011e2f455ca05ed38bf8"
     },
     {
       "path": "apps/windows/index.html",
@@ -1333,18 +1333,18 @@
     },
     {
       "path": "apps/windows/package.json",
-      "bytes": 1868,
-      "sha256": "411138694b025bda3feeef9ea478580e8031490d2e5e419406660dc1dbbb590a"
+      "bytes": 1866,
+      "sha256": "0fb84dc77ea13755f9440c1f2d9c07330b5ca277d09fcf50b97dc25bb000691d"
     },
     {
       "path": "apps/windows/src/App.test.tsx",
-      "bytes": 8825,
-      "sha256": "026109945de1b5bd4780d793d96ac8bfd4148962fa0db90929de7c66c4d4b4b8"
+      "bytes": 12368,
+      "sha256": "23aa6bcb1fa1670854623ad485e1d9b37e58ef49f3774435a6dcfed90dfb3102"
     },
     {
       "path": "apps/windows/src/App.tsx",
-      "bytes": 144530,
-      "sha256": "75bbb1efdcdac30004577db6a6fbbc7451584b2ddc724ec1a0a2c8e695eeab46"
+      "bytes": 151781,
+      "sha256": "6b3c472b9bf873c74cd32c65ed99c84f542702861d840814c07322fb188f5c61"
     },
     {
       "path": "apps/windows/src/buildChunking.test.ts",
@@ -1368,8 +1368,8 @@
     },
     {
       "path": "apps/windows/src/common/defaultUserSettings.ts",
-      "bytes": 323,
-      "sha256": "b773111fcf6c31dd303a65ec776080f3215eb2245056353e31073a3322236a56"
+      "bytes": 324,
+      "sha256": "ab88e4328755187af8169ac777085c1835237ad21c36f5a0bdaaf5e0b98c1302"
     },
     {
       "path": "apps/windows/src/common/lockSpan.test.ts",
@@ -1478,8 +1478,8 @@
     },
     {
       "path": "apps/windows/src/core/assistantProviderConfigStore.test.ts",
-      "bytes": 6750,
-      "sha256": "acccbb477fb6b0ab1d6530bd0e2d78b2f1c2004409b776ea1e8541cbbb93ab14"
+      "bytes": 6752,
+      "sha256": "17e42c9a77ea1faca4645375a64a7831c0d5ca0befdf5837944ba8a00e0d9912"
     },
     {
       "path": "apps/windows/src/core/assistantProviderConfigStore.ts",
@@ -1488,8 +1488,8 @@
     },
     {
       "path": "apps/windows/src/core/assistantRemarkStore.ts",
-      "bytes": 8495,
-      "sha256": "fbdd767338d1a4d8bcc5367c2c25971c3268081233ddee1886d47e40e70e376a"
+      "bytes": 8524,
+      "sha256": "9dd4fbd80c31ddbb6b042a4984bc7aa595d4b657a0c407098a361adfbdbda260"
     },
     {
       "path": "apps/windows/src/core/assistantTask.test.ts",
@@ -1503,13 +1503,13 @@
     },
     {
       "path": "apps/windows/src/core/blockStore.test.ts",
-      "bytes": 29883,
-      "sha256": "97a2f6235fb068ec95903048e4cf2106bc57a488eb461936a6ee388423e45361"
+      "bytes": 31343,
+      "sha256": "00b65ad2be8e0612c96372506ce72cdc727a2879683a7a10b10d46a66e2a9ea1"
     },
     {
       "path": "apps/windows/src/core/blockStore.ts",
-      "bytes": 20057,
-      "sha256": "56a98c1f730a9aa70f8a297cdb756c06e677da3f71e70f401aa52d5aa4655353"
+      "bytes": 20277,
+      "sha256": "4cf13e70f70e526f2e6f7b3ae5ac07a0e175b597252b5abbfb1cd0dc7439092b"
     },
     {
       "path": "apps/windows/src/core/blockWriter.test.ts",
@@ -1553,13 +1553,13 @@
     },
     {
       "path": "apps/windows/src/core/codexRuntimeManager.test.ts",
-      "bytes": 5461,
-      "sha256": "ca20259ed57aca3c3438be0710c81f8970ed1a740856d64afb5a2c1053c2b85f"
+      "bytes": 5464,
+      "sha256": "90bcbbd4f0a0d3e492f6b06c0ddad6b3677aaa4c99224a9b4c6fe74731d63550"
     },
     {
       "path": "apps/windows/src/core/codexRuntimeManager.ts",
-      "bytes": 8168,
-      "sha256": "55800b745cec9c74a624855c2ce13881c2ad09337000b16d77c1d202c6c3fbaf"
+      "bytes": 8169,
+      "sha256": "0396b469e8bf02f8da1f7678800f89393da0ac91fcee1c3b963a092866ca730d"
     },
     {
       "path": "apps/windows/src/core/companionReadService.test.ts",
@@ -1658,8 +1658,8 @@
     },
     {
       "path": "apps/windows/src/core/ingestServer.test.ts",
-      "bytes": 32385,
-      "sha256": "bb49bae489a86bafc2556c2e4be082b1eb9751c02f5bbcf26f01d34fa11485f9"
+      "bytes": 32389,
+      "sha256": "c184f5f4d8d719568e932adf0a3d7fcfb78db670cff3f86be74b8154fc471947"
     },
     {
       "path": "apps/windows/src/core/ingestServer.ts",
@@ -1813,13 +1813,13 @@
     },
     {
       "path": "apps/windows/src/core/providerConfigStore.test.ts",
-      "bytes": 8071,
-      "sha256": "8599f58c54436dc685232e7079e261bb956b09b7bbd81c2e6fadec12eaa04323"
+      "bytes": 8073,
+      "sha256": "3918f0e8767a07d48f9a0b2fc1f7b0b86fd81bc967336d842852a292a52c0b12"
     },
     {
       "path": "apps/windows/src/core/providerConfigStore.ts",
-      "bytes": 6120,
-      "sha256": "002f0673c654c1ff948c233858820c7408bf6704c7868730dc37368e569d04d7"
+      "bytes": 6122,
+      "sha256": "e82d8e0eb7d623bb78db9f94a25adf2d04f551f0fe2c7596cddba6f8b7203d03"
     },
     {
       "path": "apps/windows/src/core/providerHealth.test.ts",
@@ -2013,8 +2013,8 @@
     },
     {
       "path": "apps/windows/src/styles.css",
-      "bytes": 97898,
-      "sha256": "4ef2565b7d427b3bb95a2712815306009eb85e856a0b797a7db4ade23ce57a74"
+      "bytes": 100005,
+      "sha256": "fa6da7cd177db7676fb376725ef3dba15f890b003f2b4dfa32bf4ac60fe785a6"
     },
     {
       "path": "apps/windows/src/types/global.d.ts",
@@ -2023,13 +2023,13 @@
     },
     {
       "path": "apps/windows/src/types/mathNotesApi.ts",
-      "bytes": 18701,
-      "sha256": "4cc4fbfc7d5a7a238aa67978b7bff3c5d42b86d7bf2990d42eda661b605a9e5a"
+      "bytes": 19332,
+      "sha256": "d8fb174e80717931d52ca6164c70944cebfc6ff31754b1f0670d36221cf68e5f"
     },
     {
       "path": "apps/windows/src/ui/assetReferences.test.ts",
-      "bytes": 2190,
-      "sha256": "3588d723b5f089f7904157b8112ca4366e7339e12059ffe29837f0565e142279"
+      "bytes": 2193,
+      "sha256": "b3ec319e47077df6330134f403d44a8b7463ab98d228477bc484a94cbe2ffbdc"
     },
     {
       "path": "apps/windows/src/ui/assetReferences.ts",
@@ -2038,28 +2038,28 @@
     },
     {
       "path": "apps/windows/src/ui/assistantDragPayload.ts",
-      "bytes": 987,
-      "sha256": "9c1be2429880a6a6c91fcb5a2f77c23ad578ba1dc76f3d2b666ce76130cd9455"
+      "bytes": 1147,
+      "sha256": "dd44efbd5b55c9d39b84f840c362a362c3ec6dd5d0cc0ac3ccad22e5b929f874"
     },
     {
       "path": "apps/windows/src/ui/components/AssistantWorkspace.test.tsx",
-      "bytes": 5541,
-      "sha256": "c6ba055da6f839bc5887a4ed9fea822098a0201eebb569cbd016a7e33ae3290c"
+      "bytes": 5854,
+      "sha256": "3792914c3313aeb3871063980a5447e3a19b0646e053f1f126e5167c4b6b1f2d"
     },
     {
       "path": "apps/windows/src/ui/components/AssistantWorkspace.tsx",
-      "bytes": 16032,
-      "sha256": "da2166313189cef23cba2e1995bba25fd2f4cef16684e1352fc7689b74243743"
+      "bytes": 16844,
+      "sha256": "945469f7745e2cd72bbeddfb00a4e091a743e0071c6390e2e3bfebb0302a62d7"
     },
     {
       "path": "apps/windows/src/ui/components/Drawers.test.tsx",
-      "bytes": 28630,
-      "sha256": "d2ba45cdff71f87e61592ef2f80dafadc66b1afa054038fe2ce489a6cd331199"
+      "bytes": 28631,
+      "sha256": "8422105450629a9c1122402e07044e3893861e763dfe4cfed70078d8670245be"
     },
     {
       "path": "apps/windows/src/ui/components/Drawers.tsx",
-      "bytes": 70848,
-      "sha256": "7d046a6fe3b0d1063f597e707033f43875510ae49233f99742885810533a6430"
+      "bytes": 70851,
+      "sha256": "73032ea02eb54d6d5813e40ef3cff8bc2b14e833a78975f70f81ce6cff14b9c2"
     },
     {
       "path": "apps/windows/src/ui/components/FloatingButton.tsx",
@@ -2108,8 +2108,8 @@
     },
     {
       "path": "apps/windows/src/ui/components/PreviewPane.test.tsx",
-      "bytes": 21061,
-      "sha256": "6b7a05eb5727908b197450749a56f0265d3b68b29221fa00776bdee845165c12"
+      "bytes": 21065,
+      "sha256": "c2140493dd4868af44d613b9e46b033789962ebea212d1180297e521f86911c7"
     },
     {
       "path": "apps/windows/src/ui/components/PreviewPane.tsx",
@@ -2133,13 +2133,13 @@
     },
     {
       "path": "apps/windows/src/ui/components/SessionSourceEditor.test.tsx",
-      "bytes": 15811,
-      "sha256": "19b7f5fd09c238c5001e2e469b33d5f55a184a3d10e0945a5b104c71d1ad6766"
+      "bytes": 24331,
+      "sha256": "38b4f1810ceeea0c16c644c66503c8f58cd2071820659fe076da6655b3dbbaf5"
     },
     {
       "path": "apps/windows/src/ui/components/SessionSourceEditor.tsx",
-      "bytes": 69370,
-      "sha256": "8222ed01815eb44e9dd9a2828e1077a209db8d5b62357bb259b8c369b3c9a8b3"
+      "bytes": 70881,
+      "sha256": "872d7e4e54ec2270d29c26d987cea4c9b3b6da5c4db8075a8217576c6f5e8ca6"
     },
     {
       "path": "apps/windows/src/ui/components/SourceTanStackLab.test.tsx",
@@ -2238,8 +2238,8 @@
     },
     {
       "path": "apps/windows/vite.config.ts",
-      "bytes": 1443,
-      "sha256": "b54c9490cc342e870eaba589a0c5d119cf33a7759d1bee8b9ba88e5fbe4a6b27"
+      "bytes": 1450,
+      "sha256": "f51551d8aa367f060ee1523634c4c2c8ff3285628d16d2a8acef8d8a73c4729a"
     },
     {
       "path": "apps/worker/.gitignore",
@@ -2248,13 +2248,13 @@
     },
     {
       "path": "apps/worker/README.md",
-      "bytes": 3169,
-      "sha256": "4d7266a517b6434959117c3ea2076de03e99a0ac4ee8d61e6bd0e79f5f7f0018"
+      "bytes": 3170,
+      "sha256": "c7a63ce8a82dd76d4e608430743ddc01151ed76dfd9632e73ff29fd889849f9d"
     },
     {
       "path": "apps/worker/package.json",
       "bytes": 396,
-      "sha256": "8b52c475a360d6fa1fa72ef29fb4c0393f707c6526f3c8d840494608c4836633"
+      "sha256": "e48ba8760207fbd85f37e53b4739ccbb4a1343c4d0eed7cde935262b01b41f70"
     },
     {
       "path": "apps/worker/src/index.js",
@@ -2333,18 +2333,18 @@
     },
     {
       "path": "package-lock.json",
-      "bytes": 378116,
-      "sha256": "1a8a86cb1dcd4d336456a20e778be0c925451cf06410116f1c9debde1876b874"
+      "bytes": 378108,
+      "sha256": "b52f73b309b767b12a6b5032a715525879bce0bd7e08fbb77aab929a6542cb93"
     },
     {
       "path": "package.json",
-      "bytes": 7653,
-      "sha256": "b685b2783ba26c67844d191a2e1cf83454bd16a24139cd76e03f96e66f3c1d77"
+      "bytes": 7651,
+      "sha256": "553abda4fc69eaafb34752a546a2cff9b73f9cabf0b3262abbac3fbd3241c5db"
     },
     {
       "path": "packages/core-server/package.json",
-      "bytes": 1540,
-      "sha256": "f61bd6fb7fc6e08756190dd466bc27644b2fb56b72383bbd34d963861ffeba2b"
+      "bytes": 1542,
+      "sha256": "7290d7f236f86cf017ae0bf5fa6b171cb33619e1f717773f53e8f9eea4fafef4"
     },
     {
       "path": "packages/core-server/src/adapters/node/workspaceContextStore.test.ts",
@@ -2358,23 +2358,23 @@
     },
     {
       "path": "packages/core-server/src/api/capabilityPolicy.test.ts",
-      "bytes": 8810,
-      "sha256": "ce487e8c7150b2d283597ade5af965f0b9aa1ff3c16079bfa8f5ed66ce4b8093"
+      "bytes": 9363,
+      "sha256": "b48f709e43322311a83a652b1f04829f3096ae640667fcf856ff419802088643"
     },
     {
       "path": "packages/core-server/src/api/capabilityPolicy.ts",
-      "bytes": 14729,
-      "sha256": "e0ec797349de5b183fd64cdbbd867c8ef37ca896ccda64640ec3e5883121a906"
+      "bytes": 15298,
+      "sha256": "c358153f1733ad991b656efdeda5d6e3d0c91a644e8204a55c6fd4272d9a4760"
     },
     {
       "path": "packages/core-server/src/api/localShellServer.test.ts",
-      "bytes": 55460,
-      "sha256": "d13b1435977b52d258a671a2d220eb434c94aa4985769874dcd291c6566830cc"
+      "bytes": 66327,
+      "sha256": "28377a4b78ee06947fd756fe8cccad2a416c29461bc935e557e1db69a857618d"
     },
     {
       "path": "packages/core-server/src/api/localShellServer.ts",
-      "bytes": 47502,
-      "sha256": "189745eee1e221be0a36a9d15b170f73d18fa62b086156062f224924c1b3c520"
+      "bytes": 50697,
+      "sha256": "d864172e23fe9a6a2c92b18750b2fe972112f22707a4afb69816efe3ff8dabc9"
     },
     {
       "path": "packages/core-server/src/api/networkApiContracts.ts",
@@ -2433,8 +2433,8 @@
     },
     {
       "path": "packages/core-server/src/domain/assistantPrompt.ts",
-      "bytes": 1679,
-      "sha256": "93318a2e70f35831a8196a733e63e720686f4164f991bda133c20ee14cd514e1"
+      "bytes": 2705,
+      "sha256": "a4dbb2eecda780499cc3fd63749264625a66f9666748b4341746b6ef07820222"
     },
     {
       "path": "packages/core-server/src/domain/faithfulTranscriptionPrompt.ts",
@@ -2523,8 +2523,8 @@
     },
     {
       "path": "packages/core-server/src/index.ts",
-      "bytes": 1925,
-      "sha256": "7599cf8875334ba15096cf2315f986e8b00ed453c6d3da7b622e3b060bcb11c7"
+      "bytes": 1979,
+      "sha256": "e5be7a4b5d191cbe0080d3248654b503f9dbae4b3044268bfd95d1ca397aa0d1"
     },
     {
       "path": "packages/core-server/src/mathNotesCore.test.ts",
@@ -2633,13 +2633,13 @@
     },
     {
       "path": "packages/core-server/src/session/sessionEditService.test.ts",
-      "bytes": 14776,
-      "sha256": "a9b1df8220b95d3c708e90cd18d32d6479e41eac11c3025410146801c166bfe0"
+      "bytes": 18753,
+      "sha256": "ebe349c28c67fe3ebb0f18bbc40a35b428df60a3eda760ee9ab066cdcfc0a58c"
     },
     {
       "path": "packages/core-server/src/session/sessionEditService.ts",
-      "bytes": 23224,
-      "sha256": "2163ed8807d9afe4aaba69eb3135e317b50dfd364cd212a6b0dd39eae8d8a799"
+      "bytes": 26776,
+      "sha256": "436922089a8b4f736f326a21eb06991c23a3581b13bfa56c39af60f142e1d67c"
     },
     {
       "path": "packages/core-server/src/session/sessionExportService.test.ts",
@@ -2717,6 +2717,16 @@
       "sha256": "862de3e47c53dda391aef9ddcc4404d7d35363c3685e0ddfec3d3a704ef6e379"
     },
     {
+      "path": "packages/core-server/src/session/sessionSelectionEditService.test.ts",
+      "bytes": 6862,
+      "sha256": "48fbe6bed6e66d3bd5e79c7f2c3598817e7a09cace504890b3756c7f646314ab"
+    },
+    {
+      "path": "packages/core-server/src/session/sessionSelectionEditService.ts",
+      "bytes": 9074,
+      "sha256": "fb71cd1fd2faec6671559b888613bb5a609ae1aa574cf0b353a074e7204ed028"
+    },
+    {
       "path": "packages/core-server/src/session/sessionWriteCoordinator.ts",
       "bytes": 986,
       "sha256": "941128a803dbf96f2a52566d1064e7cef6fcf831241a15058b08a295ab738030"
@@ -2738,8 +2748,8 @@
     },
     {
       "path": "packages/core-server/src/sidecar/macosSidecar.ts",
-      "bytes": 16684,
-      "sha256": "0aa3378024f01d3477210369788bc0d6a96f6071b9053c74b94a696badac9487"
+      "bytes": 16970,
+      "sha256": "5b0c2a3b0161b7e5bbef90b398828a238e639db5b26524b231b0671ca04d2bee"
     },
     {
       "path": "packages/core-server/src/sidecar/main.ts",
@@ -2753,8 +2763,8 @@
     },
     {
       "path": "packages/shared/package.json",
-      "bytes": 474,
-      "sha256": "de84c582c52cf9a3f9427a433edaf340dd1d8e1d8ccc90b2a339a3cbbb363dda"
+      "bytes": 476,
+      "sha256": "08c1226c8a21ee8bf31cb0a0302664855f9332f032493912e7f8071b61fce8d8"
     },
     {
       "path": "packages/shared/src/assistantContext.test.ts",
@@ -2778,8 +2788,8 @@
     },
     {
       "path": "packages/shared/src/index.ts",
-      "bytes": 167,
-      "sha256": "8df7e07758ef0e6cd71b539c04cc2eb82b3cc1f5bf21c801f7506e180d44a1cf"
+      "bytes": 199,
+      "sha256": "9a969dbcf49fa4559179ef98efe9e42794712febaa2493f8e43f9c2d56006d28"
     },
     {
       "path": "packages/shared/src/markdownMath.ts",
@@ -2793,8 +2803,8 @@
     },
     {
       "path": "packages/shared/src/model.ts",
-      "bytes": 4127,
-      "sha256": "f45cfc401bad56708903755ccbd12f96263c1518c2e31d63328254427258fd49"
+      "bytes": 4165,
+      "sha256": "59c0c5698f3c5d15d31eaad75cdd7e5f3bed1dde7df238a638a20ff5d8878d19"
     },
     {
       "path": "packages/shared/src/providerCatalog.test.ts",
@@ -2807,14 +2817,24 @@
       "sha256": "f70d6ec462f2073688ef3ba8f35fdf7e6f44af8180a8204b66de5f741b926263"
     },
     {
+      "path": "packages/shared/src/selectionEdit.test.ts",
+      "bytes": 1513,
+      "sha256": "fa11b76e1fcd9c6b69d8fe7bab7daeecbe635e70dccbd629d8437aafbccf3b9e"
+    },
+    {
+      "path": "packages/shared/src/selectionEdit.ts",
+      "bytes": 1742,
+      "sha256": "07b8908bf4482dac01853af8706d565bd7ac6fa04cbb9aa50d096409003ac780"
+    },
+    {
       "path": "packages/shared/tsconfig.json",
       "bytes": 246,
       "sha256": "236ba41cfa5fec018778e1c2c7ef465100f94f97eb0d16cd744bbf55a1a37e35"
     },
     {
       "path": "packages/sync-contract/package.json",
-      "bytes": 563,
-      "sha256": "f0acbeb6cb3499f7fb5dc48e6957649a1c9bc4af76b3ed0414ed5b4dd8f183dd"
+      "bytes": 565,
+      "sha256": "23864fb315c3006d84afa900a5c7bb110118992ebae8afd7fa03beaa0bdecfde"
     },
     {
       "path": "packages/sync-contract/src/assetStore.ts",
@@ -2913,8 +2933,8 @@
     },
     {
       "path": "test_tool/check_ci_config.mjs",
-      "bytes": 5961,
-      "sha256": "0ea84f35d14a54ba7dd14b8a6f7a09beacdbfc384c0f1f80db88a28766cf12e6"
+      "bytes": 5991,
+      "sha256": "caf8c31a20c69d030825e82104be20b6d07ce816f84022d227f502aa0872c555"
     },
     {
       "path": "test_tool/check_core_boundaries.mjs",
@@ -2928,13 +2948,13 @@
     },
     {
       "path": "test_tool/check_public_release.mjs",
-      "bytes": 6968,
-      "sha256": "1077bc8bb749e00dfc65bd4c0a6a890f85a0d577eb0c7437dc42c6d01793dd21"
+      "bytes": 6992,
+      "sha256": "de2dc711211434ffda85171ed81beddba86710c42d92e4c274ce1aa57f812a18"
     },
     {
       "path": "test_tool/codex_app_server_probe.mjs",
-      "bytes": 7426,
-      "sha256": "5a240cc16718cdd6913d00c2462a1aebc81714d777c65d39194859b387134d21"
+      "bytes": 7433,
+      "sha256": "68698d446fcca485acd0825bc8b6a581f4bd4649d0fb4b43aec89928440cad66"
     },
     {
       "path": "test_tool/companion_snapshot_diagnostic.ts",
@@ -2993,8 +3013,8 @@
     },
     {
       "path": "test_tool/export_public_source.mjs",
-      "bytes": 5250,
-      "sha256": "e43fb60285923725827e6057a68197bc6d2caea00bf029c902c2faef84fb0f8c"
+      "bytes": 5373,
+      "sha256": "ad66da19226316506f63d8aeff5122de573474603eef56f4ff914c195bb97233"
     },
     {
       "path": "test_tool/generate_brand_assets.mjs",
@@ -3003,8 +3023,8 @@
     },
     {
       "path": "test_tool/generate_release_metadata.mjs",
-      "bytes": 8296,
-      "sha256": "8b6e851ba7af27ce37b932d3c2579cac09725c3ae74a02b3bed7a88814dd61fc"
+      "bytes": 8297,
+      "sha256": "21d63967ea73fcd786326beeb5b00378b875581956af682cb864cf35a25eb236"
     },
     {
       "path": "test_tool/headless_package_smoke.mjs",
@@ -3048,8 +3068,8 @@
     },
     {
       "path": "test_tool/macos_phase0b3_acceptance.test.mjs",
-      "bytes": 4601,
-      "sha256": "5417e179203d3f94d305d7586941fc9cfd0f36d3d8f07ebb2f52dee50f34e609"
+      "bytes": 4605,
+      "sha256": "709056872bff8fad83cbcb8a8f0e5f3fefdd2284e784b37c817aa93df6b90cd0"
     },
     {
       "path": "test_tool/macos_phase0b3_acceptance_lib.mjs",
@@ -3108,8 +3128,8 @@
     },
     {
       "path": "test_tool/macos_ui_contract.mjs",
-      "bytes": 39360,
-      "sha256": "15a887c8fa2ab2a8f15826522329be26a8b3d780de7b0a098b9293dc77368d56"
+      "bytes": 43614,
+      "sha256": "f9c7c382a98b6f698a96c89b20e452a75fbf724946c0bf98cf87b7daddcd0677"
     },
     {
       "path": "test_tool/mobile_katex_assets_contract.mjs",
@@ -3138,8 +3158,8 @@
     },
     {
       "path": "test_tool/package_macos_electron_bridge.mjs",
-      "bytes": 5177,
-      "sha256": "e6cdde7b8fcce753e9a5c3a6c6d0f9dcc95c05404ebfe75a8d440c093ca40b41"
+      "bytes": 5178,
+      "sha256": "bb3df0273e0dc27f5ed819036aea13e380c9cc9bef0c7d79abf81ac423001383"
     },
     {
       "path": "test_tool/package_macos_native.mjs",
@@ -3148,8 +3168,8 @@
     },
     {
       "path": "test_tool/package_mobile_standalone.mjs",
-      "bytes": 7632,
-      "sha256": "bdbe527bdb3cd371fedd84df763c6a223a15cb78a351ba87207c1f2e6ce7e9ad"
+      "bytes": 7657,
+      "sha256": "e68a4fde94b5e5259f62bdb3b439a544091d20dedd05a596d7d31b96cba38ca6"
     },
     {
       "path": "test_tool/package_pwa_companion.mjs",
@@ -3158,13 +3178,13 @@
     },
     {
       "path": "test_tool/package_standalone_worker.mjs",
-      "bytes": 7603,
-      "sha256": "f5a3139f12e8716344bea780b61f095718365ecdabefadb16061aeb061df1133"
+      "bytes": 7624,
+      "sha256": "955a4e43086f437184d1576c19a96eacc3fbdd81ac4b25c51c507145574e6e0e"
     },
     {
       "path": "test_tool/package_windows_portable.mjs",
-      "bytes": 8227,
-      "sha256": "e2cb80bee26e3c77eaf5d65c4b0c62f72e1238d4eb0d7560fc540f823106a6ae"
+      "bytes": 8240,
+      "sha256": "62857d62c562841db943125d6765bad7e2e3fdacceaf840d9a8626c8349bdd35"
     },
     {
       "path": "test_tool/prepare_recognition_image_ab.ts",
@@ -3278,8 +3298,8 @@
     },
     {
       "path": "test_tool/windows_portable_smoke.mjs",
-      "bytes": 5914,
-      "sha256": "b3e15695c7a0aac8442a69d5169ac59bf9dbb07c6d23d11a7f22e3284df24304"
+      "bytes": 5917,
+      "sha256": "800322912aad783f3db97db06eb034eaabb4ebc43e42afa0b5dadf0e8a434e47"
     },
     {
       "path": "tsconfig.base.json",

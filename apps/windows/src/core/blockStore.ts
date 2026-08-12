@@ -192,6 +192,9 @@ export class BlockStore {
 
   async appendMarkdownBlock(args: AppendMarkdownBlockArgs): Promise<BlockRef> {
     const session = await this.readSession(args.notebookId, args.sessionId);
+    if (args.insertAfterBlockId !== undefined && !session.blocks.some((block) => block.id === args.insertAfterBlockId)) {
+      throw new Error(`Insert anchor ${args.insertAfterBlockId} is stale`);
+    }
     const id = nextBlockId(session);
     const path = `blocks/${id}_${markdownFileStem(args.source)}.md`;
     const absolutePath = join(this.sessionDir(args.notebookId, args.sessionId), path);
@@ -475,8 +478,7 @@ function insertBlock(session: SessionRecord, block: BlockRef, insertAfterBlockId
 
   const index = session.blocks.findIndex((candidate) => candidate.id === insertAfterBlockId);
   if (index === -1) {
-    session.blocks.push(block);
-    return;
+    throw new Error(`Insert anchor ${insertAfterBlockId} is stale`);
   }
 
   session.blocks.splice(index + 1, 0, block);

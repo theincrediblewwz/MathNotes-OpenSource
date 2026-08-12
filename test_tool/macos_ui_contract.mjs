@@ -72,6 +72,14 @@ const activityHistorySection = reader.slice(
   reader.indexOf("private func compactRecognitionHistoryRow"),
   reader.indexOf("private func load(showLoading")
 );
+const selectionEditBlockSection = reader.slice(
+  reader.indexOf("private var hasEditableSelection"),
+  reader.indexOf("private struct MacSelectionEditDraft")
+);
+const selectionEditSheetSection = reader.slice(
+  reader.indexOf("private struct MacSelectionEditSheet"),
+  reader.indexOf("private struct SessionTransferTarget")
+);
 
 const checks = [
   [content.includes("NavigationSplitView"), "native split-view shell is required"],
@@ -385,6 +393,56 @@ const checks = [
   ,[(providerSettings.match(/Button\("测试连通"\)/g) ?? []).length === 2 && providerSettings.includes("可能产生少量计费") && providerSettings.includes("不会在后台自动测试"), "Mac provider cards must expose explicit one-request connectivity tests with billing disclosure"]
   ,[providerSettings.includes("supervisor.providerRestorationError") && providerSettings.includes("supervisor.assistantProviderRestorationError"), "Mac provider cards must distinguish saved restoration failures from unconfigured state"]
   ,[reader.includes("recognitionActivityDetail(task)") && reader.includes("task.error?.trimmingCharacters") && reader.includes(".lineLimit(2)"), "Mac recognition activity must show a concise terminal failure reason"]
+  ,[selectionEditSheetSection.includes('Button(proposal == nil ? "生成修改候选" : "重新生成")') &&
+    selectionEditSheetSection.includes("replacementMarkdown") &&
+    selectionEditSheetSection.includes("onGenerate(") &&
+    localShellClient.includes("local/v1/session/selection-edit") &&
+    localShellClient.includes("ProposeSelectionEditRequest(") &&
+    localShellClient.includes("from: selection.from") &&
+    localShellClient.includes("to: selection.to") &&
+    localShellClient.includes("selectedText: selectedText") &&
+    localShellClient.includes("instruction: instruction"),
+    "AI candidate generation must pass exact UTF-16 selection and text through the trusted loopback route"]
+  ,[selectionEditSheetSection.includes('Button(proposal == nil ? "生成修改候选" : "重新生成")') &&
+    selectionEditSheetSection.includes("proposal?.id") &&
+    reader.includes("if let replacingProposalID") &&
+    reader.includes("cancelSelectionEdit(session, proposalId: replacingProposalID)"),
+    "regenerating an AI candidate must supersede and cancel the previous proposal"]
+  ,[selectionEditSheetSection.includes('Button("应用修改")') &&
+    reader.includes("先生成候选并比较；只有点击“应用修改”才会写入笔记。") &&
+    reader.includes("supervisor.applySelectionEdit(session, proposalId: proposal.id)") &&
+    reader.includes("workspace.applyAISelectionEdit(response.result.block)") &&
+    localShellClient.includes("local/v1/session/selection-edit/apply"),
+    "AI replacements must require explicit apply and write through the shared apply route"]
+  ,[selectionEditSheetSection.includes('Button("取消")') &&
+    selectionEditSheetSection.includes("try await onCancel(proposal)") &&
+    reader.includes("supervisor.cancelSelectionEdit(session, proposalId: proposal.id)") &&
+    localShellClient.includes("local/v1/session/selection-edit/cancel"),
+    "AI selection edits must expose explicit cancellation of the current proposal"]
+  ,[selectionEditSheetSection.includes("Keep the proposal visible so a revision conflict never destroys the user's candidate.") &&
+    selectionEditSheetSection.includes('.interactiveDismissDisabled(proposal?.status == "pending")') &&
+    reader.includes("原笔记没有被覆盖。请选择明确结果，冲突证据会继续保留。"),
+    "apply conflicts must keep the AI proposal and original note evidence intact"]
+  ,[selectionEditor.includes("let shouldRegisterAIUndo = context.coordinator.externalEditEpoch != externalEditEpoch") &&
+    selectionEditor.includes("applyUndoableExternalText") &&
+    selectionEditor.includes("textView.undoManager?.registerUndo") &&
+    selectionEditor.includes('setActionName("AI 选区修改")') &&
+    reader.includes("aiEditEpochs[payload.block.id, default: 0] += 1") &&
+    reader.includes("externalEditEpoch: workspace.aiEditEpochs[manifest.id, default: 0]"),
+    "applied AI edits must bump a per-block epoch and register a native undoable replacement"]
+  ,[selectionEditBlockSection.includes("supervisor.appendMarkdown(") &&
+    selectionEditBlockSection.includes("insertAfterBlockId: manifest.id") &&
+    localShellClient.includes("AppendMarkdownRequest(") &&
+    localShellClient.includes("insertAfterBlockId: insertAfterBlockId") &&
+    localShellClient.includes("let insertAfterBlockId: String?") &&
+    supervisor.includes("insertAfterBlockId: String? = nil"),
+    "insert-after must carry the precise right-clicked block anchor through the shared append contract"]
+  ,[selectionEditBlockSection.includes("markdownLockState != true") &&
+    reader.includes(".disabled(!hasEditableSelection)") &&
+    reader.includes("else if manifest.editable, !markdown.blockLocked") &&
+    reader.includes("这个内容段已固定") &&
+    reader.includes('Label("用 AI 修改选中文字"'),
+    "AI selection editing must be disabled for whole-block locked content and fall back to fixed read-only text"]
   ,[!unsafeRawRecognitionEvent, "Markdown headings must not terminate single-hash Swift raw JSON fixtures"]
 ];
 

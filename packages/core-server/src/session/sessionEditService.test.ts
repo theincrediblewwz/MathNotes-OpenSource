@@ -48,6 +48,74 @@ describe("SessionEditService", () => {
     expect(stored.blocks.map((block) => block.id)).toEqual(["0001", "0002"]);
   });
 
+  it("inserts a user Markdown block after the explicit anchor and rejects a stale anchor", async () => {
+    const service = new SessionEditService(root, () => "2026-08-13T04:00:00.000Z");
+    await service.appendMarkdownBlock({
+      notebookId: "analysis", sessionId: "lecture", markdown: "tail", sourceName: "tail.md"
+    });
+    const inserted = await service.appendMarkdownBlock({
+      notebookId: "analysis", sessionId: "lecture", markdown: "middle", insertAfterBlockId: "0001"
+    });
+    expect(inserted.block.id).toBe("0003");
+    let stored = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+    expect(stored.blocks.map((block) => block.id)).toEqual(["0001", "0003", "0002"]);
+
+    await expect(service.appendMarkdownBlock({
+      notebookId: "analysis", sessionId: "lecture", markdown: "must-not-append", insertAfterBlockId: "gone"
+    })).rejects.toMatchObject({ code: "stale_anchor", statusCode: 409 });
+    stored = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+    expect(stored.blocks.map((block) => block.id)).toEqual(["0001", "0003", "0002"]);
+  });
+
+  it("applies an exact UTF-16 selection edit and rejects stale, locked, or protected targets", async () => {
+    const original = "😀重复，重复";
+    await writeFile(join(sessionDir, "blocks", "0001.md"), original);
+    const service = new SessionEditService(root, () => "2026-08-13T04:01:00.000Z");
+    const before = await readBlock();
+    if (before.content.kind !== "markdown") throw new Error("expected markdown");
+    const from = original.lastIndexOf("重复");
+    const applied = await service.applySelectionEdit({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: before.content.baseRevision,
+      selection: { from, to: from + 2, selectedText: "重复" },
+      replacement: "已修改"
+    });
+    expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8")).toBe("😀重复，已修改");
+    await expect(service.applySelectionEdit({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: before.content.baseRevision,
+      selection: { from, to: from + 2, selectedText: "重复" }, replacement: "再次修改"
+    })).rejects.toMatchObject({ code: "revision_conflict", statusCode: 409 });
+
+    if (applied.block.content.kind !== "markdown") throw new Error("expected markdown");
+    await service.setMarkdownBlockLock({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001", locked: true
+    });
+    await expect(service.applySelectionEdit({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: applied.block.content.baseRevision,
+      selection: { from: 0, to: 2, selectedText: "😀" }, replacement: "x"
+    })).rejects.toMatchObject({ code: "block_locked", statusCode: 423 });
+  });
+
+  it("rejects a selection that overlaps a protected span before writing", async () => {
+    const protectedText = "不可修改";
+    const hash = sha256Text(protectedText);
+    const markdown = `前文\n<!-- lock:start id="span-1" hash="${hash}" -->\n${protectedText}\n<!-- lock:end id="span-1" -->\n后文`;
+    await writeFile(join(sessionDir, "blocks", "0001.md"), markdown);
+    await writeSession([lock("span-1", "span", hash)]);
+    const before = await readBlock();
+    if (before.content.kind !== "markdown") throw new Error("expected markdown");
+    const from = markdown.indexOf(protectedText);
+    await expect(new SessionEditService(root).applySelectionEdit({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: before.content.baseRevision,
+      selection: { from, to: from + protectedText.length, selectedText: protectedText },
+      replacement: "修改"
+    })).rejects.toMatchObject({ code: "protected_selection", statusCode: 423 });
+    expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8")).toBe(markdown);
+  });
+
   it("allows the user to correct an AI transcription draft", async () => {
     const sessionPath = join(sessionDir, "session.json");
     const session = JSON.parse(await readFile(sessionPath, "utf8")) as SessionRecord;

@@ -291,9 +291,14 @@ struct LocalShellClient {
         notebookId: String,
         sessionId: String,
         markdown: String,
-        sourceName: String
+        sourceName: String,
+        insertAfterBlockId: String? = nil
     ) async throws -> ReadonlySessionBlock {
-        let body = try JSONEncoder().encode(AppendMarkdownRequest(markdown: markdown, sourceName: sourceName))
+        let body = try JSONEncoder().encode(AppendMarkdownRequest(
+            markdown: markdown,
+            sourceName: sourceName,
+            insertAfterBlockId: insertAfterBlockId
+        ))
         let (data, response) = try await request(
             path: "local/v1/session/markdown",
             queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
@@ -301,6 +306,66 @@ struct LocalShellClient {
         )
         guard response.statusCode == 201 else { throw SidecarProtocolError.sessionRejected(response.statusCode) }
         return try JSONDecoder().decode(ReadonlySessionBlock.self, from: data)
+    }
+
+    func proposeSelectionEdit(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        blockId: String,
+        selection: SelectionEditTextRange,
+        selectedText: String,
+        instruction: String
+    ) async throws -> SelectionEditProposal {
+        let body = try JSONEncoder().encode(ProposeSelectionEditRequest(
+            blockId: blockId,
+            from: selection.from,
+            to: selection.to,
+            selectedText: selectedText,
+            instruction: instruction
+        ))
+        let (data, response) = try await request(
+            path: "local/v1/session/selection-edit",
+            queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
+            ready: ready, token: token, timeout: 120, method: "POST", body: body
+        )
+        guard response.statusCode == 200 else { throw selectionEditError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(SelectionEditProposal.self, from: data)
+    }
+
+    func applySelectionEdit(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        proposalId: String
+    ) async throws -> ApplySelectionEditResponse {
+        let body = try JSONEncoder().encode(SelectionEditCommandRequest(proposalId: proposalId))
+        let (data, response) = try await request(
+            path: "local/v1/session/selection-edit/apply",
+            queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
+            ready: ready, token: token, timeout: 15, method: "POST", body: body
+        )
+        guard response.statusCode == 200 else { throw selectionEditError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(ApplySelectionEditResponse.self, from: data)
+    }
+
+    func cancelSelectionEdit(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        proposalId: String
+    ) async throws -> SelectionEditProposal {
+        let body = try JSONEncoder().encode(SelectionEditCommandRequest(proposalId: proposalId))
+        let (data, response) = try await request(
+            path: "local/v1/session/selection-edit/cancel",
+            queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
+            ready: ready, token: token, timeout: 10, method: "POST", body: body
+        )
+        guard response.statusCode == 200 else { throw selectionEditError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(SelectionEditProposal.self, from: data)
     }
 
     func sessionAsset(
@@ -957,6 +1022,11 @@ struct LocalShellClient {
         return .assistantRejected(status, code)
     }
 
+    private func selectionEditError(data: Data, status: Int) -> SidecarProtocolError {
+        let code = (try? JSONDecoder().decode(LocalShellErrorPayload.self, from: data).error) ?? "unknown"
+        return .selectionEditRejected(status, code)
+    }
+
     private func organizeError(data: Data, status: Int) -> Error {
         let code = (try? JSONDecoder().decode(LocalShellErrorPayload.self, from: data).error) ?? "unknown"
         return SidecarProtocolError.organizeRejected(status, code)
@@ -1028,7 +1098,23 @@ private struct MarkdownPreviewRequest: Encodable {
 }
 
 private struct StandaloneMarkdownRequest: Encodable { let markdown: String }
-private struct AppendMarkdownRequest: Encodable { let markdown: String; let sourceName: String }
+private struct AppendMarkdownRequest: Encodable {
+    let markdown: String
+    let sourceName: String
+    let insertAfterBlockId: String?
+}
+
+private struct ProposeSelectionEditRequest: Encodable {
+    let blockId: String
+    let from: Int
+    let to: Int
+    let selectedText: String
+    let instruction: String
+}
+
+private struct SelectionEditCommandRequest: Encodable {
+    let proposalId: String
+}
 
 private struct ReorderSessionBlocksRequest: Encodable {
     let blockIds: [String]

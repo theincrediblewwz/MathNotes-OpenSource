@@ -4190,6 +4190,56 @@ details label {
 .assistant-dialog-actions { justify-content: flex-end; }
 .assistant-dialog-actions button { width: auto; min-width: 104px; }
 
+.selection-edit-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 160;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(31, 33, 29, 0.32);
+  backdrop-filter: blur(3px);
+}
+
+.selection-edit-dialog {
+  width: min(760px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid var(--line-soft, #d8d8d0);
+  border-radius: 18px;
+  background: var(--paper, #fbfaf7);
+  box-shadow: 0 24px 70px rgba(25, 27, 23, 0.2);
+}
+
+.selection-edit-dialog header,
+.selection-edit-dialog footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.selection-edit-dialog header > div { display: grid; gap: 4px; }
+.selection-edit-dialog header span,
+.selection-edit-diff article > span { color: var(--ink-muted, #73746d); font-size: 11px; letter-spacing: .08em; }
+.selection-edit-dialog header strong { font-size: 20px; }
+.selection-edit-dialog header button { width: 34px; height: 34px; padding: 7px; border-radius: 50%; }
+.selection-edit-dialog header svg { width: 18px; height: 18px; }
+.selection-edit-dialog label { display: grid; gap: 8px; margin-top: 18px; font-weight: 700; }
+.selection-edit-dialog textarea { width: 100%; resize: vertical; box-sizing: border-box; }
+.selection-edit-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0; }
+.selection-edit-diff article { min-width: 0; padding: 13px; border: 1px solid var(--line-soft, #deded7); border-radius: 12px; background: rgba(127, 130, 119, .045); }
+.selection-edit-diff pre { margin: 8px 0 0; min-height: 96px; max-height: 250px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; }
+.selection-edit-error { margin: 0 0 14px; color: #a34840; }
+.selection-edit-dialog footer { justify-content: flex-end; }
+.selection-edit-dialog footer button { width: auto; min-width: 104px; }
+.selection-edit-dialog footer .primary { color: white; background: #2f6f59; border-color: #2f6f59; }
+
+@media (max-width: 700px) {
+  .selection-edit-diff { grid-template-columns: 1fr; }
+}
+
 .assistant-trigger-button {
   display: inline-flex;
   align-items: center;

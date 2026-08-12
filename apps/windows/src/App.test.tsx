@@ -10,8 +10,113 @@ import {
   recognitionTaskToastTitle,
   resolvePdfImportTarget,
   SessionDeleteConfirmPrompt,
+  SelectionEditDialog,
   upsertCompanionUploadActivity
 } from "./App";
+
+describe("SelectionEditDialog", () => {
+  const baseDraft = {
+    blockId: "0007",
+    from: 2,
+    to: 8,
+    selectedText: "原始选区",
+    instruction: "修正语病",
+    proposal: null,
+    status: "idle" as const
+  };
+
+  it("shows before/candidate evidence and never applies before explicit confirmation", () => {
+    const onApply = vi.fn();
+    const onGenerate = vi.fn();
+    const { rerender } = render(
+      <SelectionEditDialog
+        draft={baseDraft}
+        onApply={onApply}
+        onCancel={vi.fn()}
+        onGenerate={onGenerate}
+        onInstructionChange={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    expect(screen.getByText("原始选区")).toBeTruthy();
+    expect(screen.getByText(/此时不会修改笔记/)).toBeTruthy();
+    expect(onApply).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "生成修改候选" }));
+    expect(onGenerate).toHaveBeenCalledTimes(1);
+    expect(onApply).not.toHaveBeenCalled();
+
+    rerender(
+      <SelectionEditDialog
+        draft={{
+          ...baseDraft,
+          proposal: {
+            version: 1,
+            id: "selection_00000000-0000-0000-0000-000000000000",
+            notebookId: "book",
+            sessionId: "session",
+            blockId: "0007",
+            baseRevision: "a".repeat(64),
+            selection: { from: 2, to: 8, selectedText: "原始选区" },
+            instruction: "修正语病",
+            replacementMarkdown: "修改候选",
+            providerName: "Mimo v2.5",
+            status: "proposed",
+            createdAt: "2026-08-13T00:00:00.000Z",
+            updatedAt: "2026-08-13T00:00:00.000Z"
+          }
+        }}
+        onApply={onApply}
+        onCancel={vi.fn()}
+        onGenerate={onGenerate}
+        onInstructionChange={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    expect(screen.getByText("修改候选")).toBeTruthy();
+    expect(onApply).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "应用修改" }));
+    expect(onApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a conflict message with the candidate and exposes retry/cancel", () => {
+    const onCancel = vi.fn();
+    const onRetry = vi.fn();
+    render(
+      <SelectionEditDialog
+        draft={{
+          ...baseDraft,
+          error: "应用失败：内容已变化，候选仍保留",
+          proposal: {
+            version: 1,
+            id: "selection_00000000-0000-0000-0000-000000000000",
+            notebookId: "book",
+            sessionId: "session",
+            blockId: "0007",
+            baseRevision: "a".repeat(64),
+            selection: { from: 2, to: 8, selectedText: "原始选区" },
+            instruction: "修正语病",
+            replacementMarkdown: "修改候选",
+            providerName: "Mimo v2.5",
+            status: "proposed",
+            createdAt: "2026-08-13T00:00:00.000Z",
+            updatedAt: "2026-08-13T00:00:00.000Z"
+          }
+        }}
+        onApply={vi.fn()}
+        onCancel={onCancel}
+        onGenerate={vi.fn()}
+        onInstructionChange={vi.fn()}
+        onRetry={onRetry}
+      />
+    );
+    expect(screen.getByRole("alert").textContent).toContain("候选仍保留");
+    expect(screen.getByText("修改候选")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("window drag gesture arbitration", () => {
   it("keeps a click editable until pointer movement crosses the drag threshold", () => {

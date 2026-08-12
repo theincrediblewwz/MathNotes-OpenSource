@@ -32,12 +32,15 @@ describe("AssistantWorkspace", () => {
   });
 
   it("accepts a copied editor selection as the next assistant focus", () => {
-    const props = renderWorkspace();
+    const onEditSelection = vi.fn();
+    const props = renderWorkspace({ onEditSelection });
     const payload = {
       kind: "selection",
       blockId: "0007",
       label: "选区 · block 0007",
-      text: "一致有界原理"
+      text: "一致有界原理",
+      from: 4,
+      to: 10
     };
     const dataTransfer = {
       types: [assistantDragMime],
@@ -47,6 +50,13 @@ describe("AssistantWorkspace", () => {
 
     fireEvent.drop(screen.getByTestId("assistant-workspace"), { dataTransfer });
     expect(screen.getByTestId("assistant-focus-preview").textContent).toContain("一致有界原理");
+    fireEvent.click(screen.getByRole("button", { name: "修改选中文字" }));
+    expect(onEditSelection).toHaveBeenCalledWith({
+      blockId: "0007",
+      from: 4,
+      to: 10,
+      selectedText: "一致有界原理"
+    });
     expect(screen.getByTestId("assistant-context-budget").textContent).toContain("实际笔记上下文");
     fireEvent.change(screen.getByLabelText("向 AI 学习助手提问"), { target: { value: "为什么？" } });
     fireEvent.click(screen.getByTitle("发送"));

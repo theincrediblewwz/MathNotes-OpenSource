@@ -34,6 +34,7 @@ type AssistantWorkspaceProps = {
   onDeleteRemark: (remarkId: string) => void;
   onPromoteRemark: (remarkId: string) => void;
   onSelectedRemarkChange?: (remarkId: string | null) => void;
+  onEditSelection?: (input: { blockId: string; from: number; to: number; selectedText: string }) => void;
   onSubmit: (input: AssistantWorkspaceSubmitInput) => void;
   detached?: boolean;
 };
@@ -79,6 +80,7 @@ export function AssistantWorkspace({
   onDeleteRemark,
   onPromoteRemark,
   onSelectedRemarkChange,
+  onEditSelection,
   onSubmit,
   detached = false
 }: AssistantWorkspaceProps) {
@@ -142,7 +144,9 @@ export function AssistantWorkspace({
       kind: payload.kind,
       blockId: payload.blockId,
       label: payload.label,
-      excerpt: payload.text
+      excerpt: payload.text,
+      from: payload.from,
+      to: payload.to
     });
     setDropActive(false);
     inputRef.current?.focus();
@@ -311,6 +315,20 @@ export function AssistantWorkspace({
               </div>
             ) : null}
           </div>
+          {focus.kind === "selection" && focus.blockId && focus.excerpt && Number.isInteger(focus.from) && Number.isInteger(focus.to) ? (
+            <button
+              className="assistant-edit-selection"
+              disabled={running || !onEditSelection}
+              onClick={() => onEditSelection?.({
+                blockId: focus.blockId!,
+                from: focus.from!,
+                to: focus.to!,
+                selectedText: focus.excerpt!
+              })}
+              title="生成修改候选；明确应用后才会写入笔记"
+              type="button"
+            >修改选中文字</button>
+          ) : null}
           {running ? (
             <button className="assistant-stop" onClick={onCancel} title="中断生成" type="button"><Square /></button>
           ) : (

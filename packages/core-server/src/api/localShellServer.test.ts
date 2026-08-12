@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { request } from "node:http";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantProvider, RecognitionProvider, SessionRecord } from "@mathnotes/shared";
 import { SessionRecognitionService } from "../session/sessionRecognitionService";
 import { SessionAssistantService } from "../session/sessionAssistantService";
+import { SessionEditError, SessionEditService } from "../session/sessionEditService";
+import { SessionSelectionEditService } from "../session/sessionSelectionEditService";
 import { LocalShellServer } from "./localShellServer";
 import { RuntimeProviderRegistry } from "../provider/runtimeProviderRegistry";
 import type { PromptTemplate } from "../provider/aiGuidanceSettingsService";
@@ -1096,6 +1098,199 @@ describe("LocalShellServer", () => {
       await fixture.cleanup();
     }
   }, 15_000);
+
+  it("forwards an explicit markdown insert anchor and surfaces stale anchor failures", async () => {
+    const token = "i".repeat(48);
+    const calls: Array<{
+      notebookId: string;
+      sessionId: string;
+      markdown: string;
+      insertAfterBlockId?: string;
+    }> = [];
+    const server = new LocalShellServer({
+      port: 0,
+      token,
+      appendSessionMarkdown: async (input) => {
+        calls.push(input);
+        if (input.insertAfterBlockId === "gone") throw new SessionEditError("stale_anchor", 409);
+        return {
+          version: 1,
+          notebookId: input.notebookId,
+          sessionId: input.sessionId,
+          block: {
+            id: "0003", order: 2, type: "markdown", source: "user", status: "draft",
+            sourceName: "middle.md", renderInNote: true, editable: true,
+            updatedAt: "2026-08-13T04:00:00.000Z"
+          },
+          content: {
+            kind: "markdown", html: "<p>middle</p>", markdown: input.markdown,
+            baseRevision: "a".repeat(64), blockLocked: false, protectedSpanCount: 0
+          }
+        };
+      }
+    });
+    const started = await server.start();
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const query = "notebookId=analysis&sessionId=lecture";
+    try {
+      const anchored = await postJson(`${started.url}/local/v1/session/markdown?${query}`, headers, {
+        markdown: "middle", insertAfterBlockId: "0001"
+      });
+      expect(anchored.status).toBe(201);
+      expect(anchored.body).toMatchObject({ block: { id: "0003" } });
+
+      const stale = await postJson(`${started.url}/local/v1/session/markdown?${query}`, headers, {
+        markdown: "must-not-append", insertAfterBlockId: "gone"
+      });
+      expect(stale.status).toBe(409);
+      expect(stale.body).toEqual({ error: "stale_anchor" });
+      expect(calls).toEqual([
+        { notebookId: "analysis", sessionId: "lecture", markdown: "middle", insertAfterBlockId: "0001" },
+        { notebookId: "analysis", sessionId: "lecture", markdown: "must-not-append", insertAfterBlockId: "gone" }
+      ]);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("routes selection-edit propose/apply/cancel with a mock provider and temporary session", async () => {
+    const fixture = await selectionEditFixture();
+    const token = "s".repeat(48);
+    const server = new LocalShellServer({ port: 0, token, sessionSelectionEdit: fixture.service });
+    const started = await server.start();
+    const query = "notebookId=analysis&sessionId=lecture";
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const blockPath = join(fixture.sessionDir, "blocks", "0001.md");
+    try {
+      const markdown = await readFile(blockPath, "utf8");
+      const from = markdown.lastIndexOf("原句重复");
+      const proposed = await fetch(`${started.url}/local/v1/session/selection-edit?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          blockId: "0001", from, to: from + 4, selectedText: "原句重复", instruction: "改得更简洁"
+        })
+      });
+      expect(proposed.status).toBe(200);
+      const proposal = (await proposed.json()) as { id: string; status: string; replacementMarkdown: string };
+      expect(proposal).toMatchObject({ status: "proposed", replacementMarkdown: "精简句" });
+      expect(await readFile(blockPath, "utf8")).toBe(markdown);
+
+      const applied = await fetch(`${started.url}/local/v1/session/selection-edit/apply?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ proposalId: proposal.id })
+      });
+      expect(applied.status).toBe(200);
+      await expect(applied.json()).resolves.toMatchObject({
+        applied: true,
+        proposal: { id: proposal.id, status: "applied" }
+      });
+      expect(await readFile(blockPath, "utf8")).toBe("原句重复；精简句");
+
+      const secondMarkdown = await readFile(blockPath, "utf8");
+      const secondFrom = secondMarkdown.lastIndexOf("精简句");
+      const second = await fetch(`${started.url}/local/v1/session/selection-edit?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          blockId: "0001", from: secondFrom, to: secondFrom + 3, selectedText: "精简句", instruction: "再改"
+        })
+      });
+      expect(second.status).toBe(200);
+      const secondProposal = (await second.json()) as { id: string };
+      const cancelled = await fetch(`${started.url}/local/v1/session/selection-edit/cancel?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ proposalId: secondProposal.id })
+      });
+      expect(cancelled.status).toBe(200);
+      await expect(cancelled.json()).resolves.toMatchObject({ id: secondProposal.id, status: "cancelled" });
+      expect(await readFile(blockPath, "utf8")).toBe(secondMarkdown);
+
+      const reapplied = await fetch(`${started.url}/local/v1/session/selection-edit/apply?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ proposalId: secondProposal.id })
+      });
+      expect(reapplied.status).toBe(409);
+      await expect(reapplied.json()).resolves.toEqual({ error: "proposal_not_pending" });
+      expect(await readFile(blockPath, "utf8")).toBe(secondMarkdown);
+    } finally {
+      await server.stop();
+      await fixture.cleanup();
+    }
+  });
+
+  it("rejects malformed selection-edit bodies and forwards service errors instead of 500", async () => {
+    const fixture = await selectionEditFixture();
+    const token = "t".repeat(48);
+    const server = new LocalShellServer({ port: 0, token, sessionSelectionEdit: fixture.service });
+    const started = await server.start();
+    const query = "notebookId=analysis&sessionId=lecture";
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    try {
+      const invalidRange = await fetch(`${started.url}/local/v1/session/selection-edit?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ blockId: "0001", from: 2, to: 2, selectedText: "原", instruction: "改" })
+      });
+      expect(invalidRange.status).toBe(400);
+      await expect(invalidRange.json()).resolves.toEqual({ error: "invalid_selection_edit_body" });
+
+      const invalidProposalId = await fetch(`${started.url}/local/v1/session/selection-edit/apply?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ proposalId: "not-a-proposal" })
+      });
+      expect(invalidProposalId.status).toBe(400);
+      await expect(invalidProposalId.json()).resolves.toEqual({ error: "invalid_selection_edit_body" });
+
+      const stale = await fetch(`${started.url}/local/v1/session/selection-edit?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ blockId: "0001", from: 0, to: 2, selectedText: "不存在", instruction: "改" })
+      });
+      expect(stale.status).toBe(409);
+      await expect(stale.json()).resolves.toEqual({ error: "selection_stale" });
+
+      const missing = await fetch(`${started.url}/local/v1/session/selection-edit/apply?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ proposalId: "selection_00000000-0000-0000-0000-000000000000" })
+      });
+      expect(missing.status).toBe(404);
+      await expect(missing.json()).resolves.toEqual({ error: "proposal_not_found" });
+    } finally {
+      await server.stop();
+      await fixture.cleanup();
+    }
+  });
+
+  it("returns 503 when no selection-edit service is wired", async () => {
+    const token = "n".repeat(48);
+    const server = new LocalShellServer({ port: 0, token });
+    const started = await server.start();
+    const query = "notebookId=analysis&sessionId=lecture";
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    try {
+      for (const path of [
+        "/local/v1/session/selection-edit",
+        "/local/v1/session/selection-edit/apply",
+        "/local/v1/session/selection-edit/cancel"
+      ]) {
+        const response = await fetch(`${started.url}${path}?${query}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({})
+        });
+        expect(response.status).toBe(503);
+        await expect(response.json()).resolves.toEqual({ error: "assistant_unavailable" });
+      }
+    } finally {
+      await server.stop();
+    }
+  });
 });
 
 async function recognitionFixture(createProvider: () => Promise<RecognitionProvider>) {
@@ -1172,6 +1367,36 @@ async function assistantTaskFixture(createProvider: () => Promise<AssistantProvi
   await writeFile(join(sessionDir, "session.json"), `${JSON.stringify(session, null, 2)}\n`);
   return {
     service: new SessionAssistantService(root, createProvider),
+    cleanup: () => rm(root, { recursive: true, force: true })
+  };
+}
+
+async function selectionEditFixture() {
+  const root = await mkdtemp(join(tmpdir(), "mathnotes-local-selection-edit-"));
+  const sessionDir = join(root, "notebooks", "analysis", "sessions", "lecture");
+  await mkdir(join(sessionDir, "blocks"), { recursive: true });
+  await writeFile(join(sessionDir, "blocks", "0001.md"), "原句重复；原句重复");
+  const session: SessionRecord = {
+    id: "lecture", title: "第三讲", status: "draft",
+    createdAt: "2026-07-24T00:00:00.000Z", updatedAt: "2026-07-24T00:00:00.000Z",
+    currentDraftPolicy: "append_only", exportPolicy: { includeMetadataComments: true, includeImageLinks: true },
+    locks: [],
+    blocks: [{
+      id: "0001", type: "markdown", path: "blocks/0001.md", source: "user", status: "draft",
+      readonly: false, editableByAi: false,
+      createdAt: "2026-07-24T00:00:00.000Z", updatedAt: "2026-07-24T00:00:00.000Z"
+    }]
+  };
+  await writeFile(join(sessionDir, "session.json"), `${JSON.stringify(session, null, 2)}\n`);
+  const provider: AssistantProvider = {
+    name: "selection-edit-fixture",
+    async assist() {
+      return { markdown: "```markdown\n精简句\n```" };
+    }
+  };
+  return {
+    service: new SessionSelectionEditService(root, async () => provider, new SessionEditService(root)),
+    sessionDir,
     cleanup: () => rm(root, { recursive: true, force: true })
   };
 }
@@ -1260,5 +1485,34 @@ function requestStatus(baseUrl: string, token: string): Promise<number> {
     });
     outgoing.once("error", reject);
     outgoing.end();
+  });
+}
+
+function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  return new Promise((resolve, reject) => {
+    const bytes = Buffer.from(JSON.stringify(body));
+    const outgoing = request(url, {
+      method: "POST",
+      headers: { ...headers, "Content-Length": String(bytes.byteLength) }
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.once("end", () => {
+        try {
+          resolve({
+            status: response.statusCode ?? 0,
+            body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    outgoing.once("error", reject);
+    outgoing.end(bytes);
   });
 }

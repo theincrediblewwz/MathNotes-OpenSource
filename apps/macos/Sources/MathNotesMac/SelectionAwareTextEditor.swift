@@ -1,12 +1,21 @@
 import AppKit
 import SwiftUI
 
+struct UTF16TextSelection: Equatable, Sendable {
+    let from: Int
+    let to: Int
+
+    var isEmpty: Bool { to <= from }
+}
+
 /// Native source editor that exposes the user's current selection to the
 /// learning assistant without copying it into the note or a hidden store.
 struct SelectionAwareTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var selectedText: String
+    @Binding var selectedRange: UTF16TextSelection?
     @Binding var contentHeight: CGFloat
+    let externalEditEpoch: Int
     let fontPreset: String
     let fontSize: Double
     let onActivate: () -> Void
@@ -15,7 +24,9 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
         Coordinator(
             text: $text,
             selectedText: $selectedText,
+            selectedRange: $selectedRange,
             contentHeight: $contentHeight,
+            externalEditEpoch: externalEditEpoch,
             onActivate: onActivate
         )
     }
@@ -46,12 +57,14 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
 
     func updateNSView(_ textView: NSTextView, context: Context) {
         context.coordinator.onActivate = onActivate
+        let shouldRegisterAIUndo = context.coordinator.externalEditEpoch != externalEditEpoch
+        context.coordinator.externalEditEpoch = externalEditEpoch
         if textView.string != text {
-            let oldSelection = textView.selectedRange()
-            textView.string = text
-            let location = min(oldSelection.location, (text as NSString).length)
-            let length = min(oldSelection.length, (text as NSString).length - location)
-            textView.setSelectedRange(NSRange(location: location, length: length))
+            if shouldRegisterAIUndo {
+                context.coordinator.applyUndoableExternalText(text, to: textView)
+            } else {
+                context.coordinator.replaceTextWithoutUndo(text, in: textView)
+            }
         }
         textView.font = editorFont
         context.coordinator.scheduleHeightMeasurement()
@@ -73,7 +86,9 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         private var text: Binding<String>
         private var selectedText: Binding<String>
+        private var selectedRange: Binding<UTF16TextSelection?>
         private var contentHeight: Binding<CGFloat>
+        var externalEditEpoch: Int
         var onActivate: () -> Void
         weak var textView: NSTextView?
         private var pendingHeightMeasurement: DispatchWorkItem?
@@ -81,12 +96,16 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
         init(
             text: Binding<String>,
             selectedText: Binding<String>,
+            selectedRange: Binding<UTF16TextSelection?>,
             contentHeight: Binding<CGFloat>,
+            externalEditEpoch: Int,
             onActivate: @escaping () -> Void
         ) {
             self.text = text
             self.selectedText = selectedText
+            self.selectedRange = selectedRange
             self.contentHeight = contentHeight
+            self.externalEditEpoch = externalEditEpoch
             self.onActivate = onActivate
         }
 
@@ -142,6 +161,40 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
             if selectedText.wrappedValue != value {
                 selectedText.wrappedValue = value
             }
+            let nextRange = range.length > 0 && NSMaxRange(range) <= string.length
+                ? UTF16TextSelection(from: range.location, to: NSMaxRange(range))
+                : nil
+            if selectedRange.wrappedValue != nextRange {
+                selectedRange.wrappedValue = nextRange
+            }
+        }
+
+        func replaceTextWithoutUndo(_ value: String, in textView: NSTextView) {
+            let oldSelection = textView.selectedRange()
+            textView.string = value
+            restoreSelection(oldSelection, in: textView)
+        }
+
+        func applyUndoableExternalText(_ value: String, to textView: NSTextView) {
+            guard textView.string != value else { return }
+            let previous = textView.string
+            let oldSelection = textView.selectedRange()
+            textView.undoManager?.registerUndo(withTarget: self) { coordinator in
+                coordinator.applyUndoableExternalText(previous, to: textView)
+            }
+            textView.undoManager?.setActionName("AI 选区修改")
+            textView.string = value
+            restoreSelection(oldSelection, in: textView)
+            text.wrappedValue = value
+            publishSelection(from: textView)
+            scheduleHeightMeasurement()
+        }
+
+        private func restoreSelection(_ oldSelection: NSRange, in textView: NSTextView) {
+            let length = (textView.string as NSString).length
+            let location = min(oldSelection.location, length)
+            let selectionLength = min(oldSelection.length, length - location)
+            textView.setSelectedRange(NSRange(location: location, length: selectionLength))
         }
     }
 }

@@ -19,6 +19,7 @@ struct ReadonlySessionView: View {
     @State private var isExporting = false
     @State private var exportError: String?
     @State private var exportNotice: String?
+    @State private var assistantSelectionEditDraft: MacSelectionEditDraft?
     @State private var selectedBlockID: String?
     @State private var recognitionActivity: SessionRecognitionTask?
     @State private var recognitionActivityDraft = ""
@@ -106,6 +107,27 @@ struct ReadonlySessionView: View {
             Button("好", role: .cancel) { exportNotice = nil }
         } message: {
             Text(exportNotice ?? "Markdown 已保存。")
+        }
+        .sheet(item: $assistantSelectionEditDraft) { draft in
+            MacSelectionEditSheet(
+                draft: draft,
+                onGenerate: { instruction, replacingProposalID in
+                    if let replacingProposalID {
+                        _ = try? await supervisor.cancelSelectionEdit(session, proposalId: replacingProposalID)
+                    }
+                    return try await generateAssistantSelectionEdit(draft: draft, instruction: instruction)
+                },
+                onApply: { proposal in
+                    let response = try await supervisor.applySelectionEdit(session, proposalId: proposal.id)
+                    sourceWorkspace.applyAISelectionEdit(response.result.block)
+                    await load()
+                    return response
+                },
+                onCancel: { proposal in
+                    guard let proposal else { return }
+                    _ = try await supervisor.cancelSelectionEdit(session, proposalId: proposal.id)
+                }
+            )
         }
     }
 
@@ -225,6 +247,9 @@ struct ReadonlySessionView: View {
                     activeBlockID: selectedBlockID,
                     selectedText: sourceWorkspace.selectedExcerpt,
                     selectedTextBlockID: sourceWorkspace.selectedExcerptBlockID,
+                    onSelectionEditRequested: canEditCurrentSelection ? {
+                        beginAssistantSelectionEdit()
+                    } : nil,
                     onSessionChanged: { await load() }
                 ))
                 openWindow(id: "session-assistant")
@@ -798,6 +823,79 @@ struct ReadonlySessionView: View {
         }
         state = .loaded(manifest)
     }
+
+    private var canEditCurrentSelection: Bool {
+        guard let blockID = sourceWorkspace.selectedExcerptBlockID,
+              sourceWorkspace.selectedExcerptRange?.isEmpty == false,
+              !sourceWorkspace.selectedExcerpt.isEmpty,
+              let payload = sourceWorkspace.payloads[blockID],
+              payload.block.editable,
+              case let .markdown(markdown) = payload.content else { return false }
+        return !markdown.blockLocked
+    }
+
+    private func beginAssistantSelectionEdit() {
+        guard canEditCurrentSelection,
+              let blockID = sourceWorkspace.selectedExcerptBlockID,
+              let range = sourceWorkspace.selectedExcerptRange else { return }
+        assistantSelectionEditDraft = MacSelectionEditDraft(
+            blockId: blockID,
+            selection: SelectionEditTextRange(
+                from: range.from,
+                to: range.to,
+                selectedText: sourceWorkspace.selectedExcerpt
+            ),
+            selectedText: sourceWorkspace.selectedExcerpt
+        )
+    }
+
+    private func generateAssistantSelectionEdit(
+        draft: MacSelectionEditDraft,
+        instruction: String
+    ) async throws -> SelectionEditProposal {
+        guard let payload = sourceWorkspace.payloads[draft.blockId],
+              case let .markdown(markdown) = payload.content else {
+            throw SidecarProtocolError.selectionEditRejected(409, "block_not_found")
+        }
+        if sourceWorkspace.isDirty(blockID: draft.blockId) {
+            guard let currentDraft = sourceWorkspace.drafts[draft.blockId] else {
+                throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
+            }
+            let saved = try await supervisor.saveMarkdownBlock(
+                session,
+                blockId: draft.blockId,
+                markdown: currentDraft,
+                baseRevision: markdown.baseRevision
+            )
+            sourceWorkspace.applySaved(saved)
+            await load()
+        }
+        try validateSelectionEditDraft(draft)
+        return try await supervisor.proposeSelectionEdit(
+            session,
+            blockId: draft.blockId,
+            selection: draft.selection,
+            selectedText: draft.selectedText,
+            instruction: instruction
+        )
+    }
+
+    private func validateSelectionEditDraft(_ draft: MacSelectionEditDraft) throws {
+        guard let current = sourceWorkspace.drafts[draft.blockId] else {
+            throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
+        }
+        let currentText = current as NSString
+        let selection = NSRange(
+            location: draft.selection.from,
+            length: draft.selection.to - draft.selection.from
+        )
+        guard selection.location >= 0,
+              selection.length > 0,
+              NSMaxRange(selection) <= currentText.length,
+              currentText.substring(with: selection) == draft.selectedText else {
+            throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
+        }
+    }
 }
 
 private enum WorkbenchPane: String, CaseIterable, Identifiable {
@@ -820,7 +918,9 @@ private final class SessionSourceWorkspace: ObservableObject {
     @Published private(set) var hasDirtyDrafts = false
     @Published private(set) var selectedExcerpt = ""
     @Published private(set) var selectedExcerptBlockID: String?
+    @Published private(set) var selectedExcerptRange: UTF16TextSelection?
     @Published private(set) var recognitionDrafts: [String: String] = [:]
+    @Published private(set) var aiEditEpochs: [String: Int] = [:]
 
     private var sessionID: String?
     private var revision: String?
@@ -838,7 +938,9 @@ private final class SessionSourceWorkspace: ObservableObject {
             originals.removeAll()
             selectedExcerpt = ""
             selectedExcerptBlockID = nil
+            selectedExcerptRange = nil
             recognitionDrafts.removeAll()
+            aiEditEpochs.removeAll()
             loadedUpdatedAt.removeAll()
             hasDirtyDrafts = false
             return
@@ -858,10 +960,12 @@ private final class SessionSourceWorkspace: ObservableObject {
         drafts = drafts.filter { validIDs.contains($0.key) }
         originals = originals.filter { validIDs.contains($0.key) }
         recognitionDrafts = recognitionDrafts.filter { validIDs.contains($0.key) }
+        aiEditEpochs = aiEditEpochs.filter { validIDs.contains($0.key) }
         loadedUpdatedAt = loadedUpdatedAt.filter { validIDs.contains($0.key) }
         if let selectedExcerptBlockID, !validIDs.contains(selectedExcerptBlockID) {
             selectedExcerpt = ""
             self.selectedExcerptBlockID = nil
+            selectedExcerptRange = nil
         }
         refreshDirtyState()
     }
@@ -893,15 +997,17 @@ private final class SessionSourceWorkspace: ObservableObject {
         refreshDirtyState()
     }
 
-    func setSelection(_ selection: String, blockID: String) {
+    func setSelection(_ selection: String, range: UTF16TextSelection?, blockID: String) {
         selectedExcerpt = selection
         selectedExcerptBlockID = selection.isEmpty ? nil : blockID
+        selectedExcerptRange = selection.isEmpty ? nil : range
     }
 
     func activate(blockID: String) {
         guard selectedExcerptBlockID != nil, selectedExcerptBlockID != blockID else { return }
         selectedExcerpt = ""
         selectedExcerptBlockID = nil
+        selectedExcerptRange = nil
     }
 
     func setRecognitionDraft(_ markdown: String, blockID: String) {
@@ -927,6 +1033,11 @@ private final class SessionSourceWorkspace: ObservableObject {
 
     func applySaved(_ payload: ReadonlySessionBlock) {
         store(payload, resetDraft: true)
+    }
+
+    func applyAISelectionEdit(_ payload: ReadonlySessionBlock) {
+        store(payload, resetDraft: true)
+        aiEditEpochs[payload.block.id, default: 0] += 1
     }
 
     private func store(_ payload: ReadonlySessionBlock, resetDraft: Bool) {
@@ -961,6 +1072,7 @@ private struct SessionSourcePane: View {
     @State private var organizeFailed = false
     @State private var pendingMoveTarget: SessionTransferTarget?
     @State private var isSelectionMode = false
+    @State private var pendingInsertedBlockID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -989,6 +1101,15 @@ private struct SessionSourcePane: View {
                             }
                         }
                         .padding(MathNotesTheme.Spacing.standard)
+                    }
+                    .onChange(of: blocks.map(\.id)) { _, blockIDs in
+                        guard let pendingInsertedBlockID,
+                              blockIDs.contains(pendingInsertedBlockID) else { return }
+                        selectedBlockID = pendingInsertedBlockID
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(pendingInsertedBlockID, anchor: .center)
+                        }
+                        self.pendingInsertedBlockID = nil
                     }
                 }
             }
@@ -1045,6 +1166,10 @@ private struct SessionSourcePane: View {
                     batchSelection.insert(block.id)
                 },
                 onManifestChanged: onReordered,
+                onBlockInserted: { blockID in
+                    pendingInsertedBlockID = blockID
+                    selectedBlockID = blockID
+                },
                 onSessionChanged: onSessionChanged
             )
             .id(block.id)
@@ -1217,6 +1342,7 @@ private struct SessionSourceBlockView: View {
     let onToggleBatchSelection: () -> Void
     let onBeginBatchSelection: () -> Void
     let onManifestChanged: (ReadonlySessionManifest) -> Void
+    let onBlockInserted: (String) -> Void
     let onSessionChanged: () async -> Void
     @State private var errorMessage: String?
     @State private var conflictID: String?
@@ -1227,6 +1353,8 @@ private struct SessionSourceBlockView: View {
     @State private var assetPreview: SessionAssetPreview?
     @State private var blockActionError: String?
     @State private var isConfirmingDelete = false
+    @State private var isAddingBlock = false
+    @State private var selectionEditDraft: MacSelectionEditDraft?
     @State private var isHovering = false
     @State private var editorMeasuredHeight: CGFloat = 96
     @AppStorage(MacPreferenceKeys.sourceFont) private var sourceFontRawValue = MacSourceFontPreset.systemMono.rawValue
@@ -1263,6 +1391,17 @@ private struct SessionSourceBlockView: View {
                 .frame(maxWidth: .infinity)
                 .draggable("mathnotes-block:\(manifest.id)")
                 .contextMenu {
+                    Button(action: beginSelectionEdit) {
+                        Label("用 AI 修改选中文字", systemImage: "sparkles")
+                    }
+                    .disabled(!hasEditableSelection)
+                    Button {
+                        Task { await addBlockAfter() }
+                    } label: {
+                        Label("在下方新建文本块", systemImage: "text.badge.plus")
+                    }
+                    .disabled(isAddingBlock)
+                    Divider()
                     Button(action: onBeginBatchSelection) {
                         Label("多选内容段", systemImage: "checklist")
                     }
@@ -1354,6 +1493,27 @@ private struct SessionSourceBlockView: View {
                 preview: preview,
                 session: session,
                 supervisor: supervisor
+            )
+        }
+        .sheet(item: $selectionEditDraft) { draft in
+            MacSelectionEditSheet(
+                draft: draft,
+                onGenerate: { instruction, replacingProposalID in
+                    if let replacingProposalID {
+                        _ = try? await supervisor.cancelSelectionEdit(session, proposalId: replacingProposalID)
+                    }
+                    return try await generateSelectionEdit(draft: draft, instruction: instruction)
+                },
+                onApply: { proposal in
+                    let response = try await supervisor.applySelectionEdit(session, proposalId: proposal.id)
+                    workspace.applyAISelectionEdit(response.result.block)
+                    await onSessionChanged()
+                    return response
+                },
+                onCancel: { proposal in
+                    guard let proposal else { return }
+                    _ = try await supervisor.cancelSelectionEdit(session, proposalId: proposal.id)
+                }
             )
         }
         .accessibilityElement(children: .contain)
@@ -1451,7 +1611,9 @@ private struct SessionSourceBlockView: View {
             SelectionAwareTextEditor(
                 text: draftBinding(fallback: markdown.markdown),
                 selectedText: selectionBinding,
+                selectedRange: selectionRangeBinding,
                 contentHeight: $editorMeasuredHeight,
+                externalEditEpoch: workspace.aiEditEpochs[manifest.id, default: 0],
                 fontPreset: sourceFontRawValue,
                 fontSize: sourceFontSize,
                 onActivate: onActivate
@@ -1467,6 +1629,19 @@ private struct SessionSourceBlockView: View {
                 .padding(MathNotesTheme.Spacing.compact)
                 .background(MathNotesTheme.canvas)
                 .clipShape(RoundedRectangle(cornerRadius: MathNotesTheme.Radius.control))
+                .contextMenu {
+                    Button(action: beginSelectionEdit) {
+                        Label("用 AI 修改选中文字", systemImage: "sparkles")
+                    }
+                    .disabled(!hasEditableSelection)
+                    Divider()
+                    Button {
+                        Task { await addBlockAfter() }
+                    } label: {
+                        Label("在下方新建文本块", systemImage: "text.badge.plus")
+                    }
+                    .disabled(isAddingBlock)
+                }
 
             if let errorMessage {
                 HStack(alignment: .firstTextBaseline) {
@@ -1535,11 +1710,88 @@ private struct SessionSourceBlockView: View {
                     ? workspace.selectedExcerpt
                     : ""
             },
-            set: { workspace.setSelection($0, blockID: manifest.id) }
+            set: { workspace.setSelection($0, range: workspace.selectedExcerptRange, blockID: manifest.id) }
+        )
+    }
+
+    private var selectionRangeBinding: Binding<UTF16TextSelection?> {
+        Binding(
+            get: {
+                workspace.selectedExcerptBlockID == manifest.id
+                    ? workspace.selectedExcerptRange
+                    : nil
+            },
+            set: { workspace.setSelection(workspace.selectedExcerpt, range: $0, blockID: manifest.id) }
         )
     }
 
     private var isSaving: Bool { workspace.savingIDs.contains(manifest.id) }
+
+    private var hasEditableSelection: Bool {
+        manifest.editable
+            && markdownLockState != true
+            && workspace.selectedExcerptBlockID == manifest.id
+            && workspace.selectedExcerptRange?.isEmpty == false
+            && !workspace.selectedExcerpt.isEmpty
+    }
+
+    private func beginSelectionEdit() {
+        guard hasEditableSelection,
+              let range = workspace.selectedExcerptRange else { return }
+        selectionEditDraft = MacSelectionEditDraft(
+            blockId: manifest.id,
+            selection: SelectionEditTextRange(
+                from: range.from,
+                to: range.to,
+                selectedText: workspace.selectedExcerpt
+            ),
+            selectedText: workspace.selectedExcerpt
+        )
+    }
+
+    private func generateSelectionEdit(
+        draft: MacSelectionEditDraft,
+        instruction: String
+    ) async throws -> SelectionEditProposal {
+        guard let payload = workspace.payloads[manifest.id],
+              case let .markdown(markdown) = payload.content else {
+            throw SidecarProtocolError.selectionEditRejected(409, "block_not_found")
+        }
+        if workspace.isDirty(blockID: manifest.id) {
+            guard let currentDraft = workspace.drafts[manifest.id] else {
+                throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
+            }
+            let saved = try await supervisor.saveMarkdownBlock(
+                session,
+                blockId: manifest.id,
+                markdown: currentDraft,
+                baseRevision: markdown.baseRevision
+            )
+            workspace.applySaved(saved)
+            await onSessionChanged()
+        }
+        guard let current = workspace.drafts[manifest.id] else {
+            throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
+        }
+        let currentText = current as NSString
+        let selection = NSRange(
+            location: draft.selection.from,
+            length: draft.selection.to - draft.selection.from
+        )
+        guard selection.location >= 0,
+              selection.length > 0,
+              NSMaxRange(selection) <= currentText.length,
+              currentText.substring(with: selection) == draft.selectedText else {
+            throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
+        }
+        return try await supervisor.proposeSelectionEdit(
+            session,
+            blockId: manifest.id,
+            selection: draft.selection,
+            selectedText: draft.selectedText,
+            instruction: instruction
+        )
+    }
 
     private func estimatedEditorHeight(markdown: String) -> CGFloat {
         let lineCount = markdown.reduce(into: 1) { count, character in
@@ -1671,6 +1923,24 @@ private struct SessionSourceBlockView: View {
         }
     }
 
+    private func addBlockAfter() async {
+        guard !isAddingBlock else { return }
+        isAddingBlock = true
+        defer { isAddingBlock = false }
+        do {
+            let inserted = try await supervisor.appendMarkdown(
+                session,
+                markdown: "## 新文本块\n\n在这里继续整理笔记。",
+                sourceName: "新文本块",
+                insertAfterBlockId: manifest.id
+            )
+            onBlockInserted(inserted.block.id)
+            await onSessionChanged()
+        } catch {
+            blockActionError = error.localizedDescription
+        }
+    }
+
     private func startRecognition() async {
         recognitionError = nil
         do {
@@ -1680,6 +1950,169 @@ private struct SessionSourceBlockView: View {
             )
         } catch {
             recognitionError = error.localizedDescription
+        }
+    }
+}
+
+private struct MacSelectionEditDraft: Identifiable {
+    let id = UUID()
+    let blockId: String
+    let selection: SelectionEditTextRange
+    let selectedText: String
+}
+
+private struct MacSelectionEditSheet: View {
+    let draft: MacSelectionEditDraft
+    let onGenerate: (String, String?) async throws -> SelectionEditProposal
+    let onApply: (SelectionEditProposal) async throws -> ApplySelectionEditResponse
+    let onCancel: (SelectionEditProposal?) async throws -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var instruction = "润色这段内容，使表达更清楚；保留原意、Markdown 和数学公式。"
+    @State private var proposal: SelectionEditProposal?
+    @State private var isGenerating = false
+    @State private var isApplying = false
+    @State private var isCancelling = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.section) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("AI 修改选中文字")
+                        .font(.title3.weight(.semibold))
+                    Text("先生成候选并比较；只有点击“应用修改”才会写入笔记。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("取消") { Task { await cancelAndDismiss() } }
+                    .disabled(isBusy)
+            }
+
+            VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.compact) {
+                Text("修改要求").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                TextEditor(text: $instruction)
+                    .font(.body)
+                    .frame(minHeight: 70, maxHeight: 105)
+                    .padding(6)
+                    .background(MathNotesTheme.canvas)
+                    .clipShape(RoundedRectangle(cornerRadius: MathNotesTheme.Radius.control))
+            }
+
+            HStack(alignment: .top, spacing: MathNotesTheme.Spacing.standard) {
+                diffColumn(
+                    title: "原文（不会自动覆盖）",
+                    text: draft.selectedText,
+                    tint: MathNotesTheme.failure.opacity(0.06)
+                )
+                diffColumn(
+                    title: "AI 候选",
+                    text: proposal?.replacementMarkdown ?? "生成后会在这里显示候选内容。",
+                    tint: proposal == nil ? Color.clear : MathNotesTheme.accent.opacity(0.07),
+                    placeholder: proposal == nil
+                )
+            }
+            .frame(maxHeight: .infinity)
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(MathNotesTheme.failure)
+                    .textSelection(.enabled)
+            }
+
+            HStack {
+                if let proposal {
+                    Text("候选由 \(proposal.providerName) 生成 · 尚未写入")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("选区位置：UTF-16 \(draft.selection.from)–\(draft.selection.to)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(proposal == nil ? "生成修改候选" : "重新生成") {
+                    Task { await generate() }
+                }
+                .disabled(isBusy || instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if let proposal {
+                    Button("应用修改") { Task { await apply(proposal) } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isBusy)
+                }
+            }
+        }
+        .padding(MathNotesTheme.Spacing.page)
+        .frame(minWidth: 720, idealWidth: 820, minHeight: 520, idealHeight: 600)
+        .interactiveDismissDisabled(proposal?.status == "pending")
+        .accessibilityLabel("AI 选区修改候选比较")
+    }
+
+    private var isBusy: Bool { isGenerating || isApplying || isCancelling }
+
+    private func diffColumn(
+        title: String,
+        text: String,
+        tint: Color,
+        placeholder: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.compact) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ScrollView {
+                Text(text)
+                    .font(.body.monospaced())
+                    .foregroundStyle(placeholder ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(MathNotesTheme.Spacing.standard)
+            }
+            .background(tint)
+            .clipShape(RoundedRectangle(cornerRadius: MathNotesTheme.Radius.control))
+            .overlay {
+                RoundedRectangle(cornerRadius: MathNotesTheme.Radius.control)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func generate() async {
+        isGenerating = true
+        errorMessage = nil
+        defer { isGenerating = false }
+        do {
+            proposal = try await onGenerate(
+                instruction.trimmingCharacters(in: .whitespacesAndNewlines),
+                proposal?.id
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func apply(_ proposal: SelectionEditProposal) async {
+        isApplying = true
+        errorMessage = nil
+        defer { isApplying = false }
+        do {
+            _ = try await onApply(proposal)
+            dismiss()
+        } catch {
+            // Keep the proposal visible so a revision conflict never destroys the user's candidate.
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func cancelAndDismiss() async {
+        isCancelling = true
+        errorMessage = nil
+        defer { isCancelling = false }
+        do {
+            try await onCancel(proposal)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }
@@ -3077,6 +3510,7 @@ struct SessionAssistantPanel: View {
     let selectedText: String
     let selectedTextBlockID: String?
     @ObservedObject var supervisor: SidecarSupervisor
+    let onSelectionEditRequested: (() -> Void)?
     let onSessionChanged: () async -> Void
     let onClose: () -> Void
 
@@ -3109,6 +3543,7 @@ struct SessionAssistantPanel: View {
         selectedText: String,
         selectedTextBlockID: String?,
         supervisor: SidecarSupervisor,
+        onSelectionEditRequested: (() -> Void)?,
         onSessionChanged: @escaping () async -> Void,
         onClose: @escaping () -> Void
     ) {
@@ -3118,6 +3553,7 @@ struct SessionAssistantPanel: View {
         self.selectedText = selectedText
         self.selectedTextBlockID = selectedTextBlockID
         self.supervisor = supervisor
+        self.onSelectionEditRequested = onSelectionEditRequested
         self.onSessionChanged = onSessionChanged
         self.onClose = onClose
         _scope = State(initialValue: selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .block : .selection)
@@ -3316,6 +3752,17 @@ struct SessionAssistantPanel: View {
                     Text(mode.label)
                 }
                 .menuStyle(.borderlessButton)
+
+                if scope == .selection {
+                    Button {
+                        onClose()
+                        onSelectionEditRequested?()
+                    } label: {
+                        Label("修改选中文字", systemImage: "wand.and.sparkles")
+                    }
+                    .disabled(!hasSelection || onSelectionEditRequested == nil)
+                    .help(onSelectionEditRequested == nil ? "选区为空或所在内容段已固定" : "先生成候选，明确应用后才修改笔记")
+                }
 
                 Spacer()
                 compactContextBudget

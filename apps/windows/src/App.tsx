@@ -14,6 +14,7 @@ import { appendRecognitionRuntimeEvent, clearRecognitionRuntimeEvents } from "./
 import { RenderCommitProbe, useRenderCommitProbe } from "./ui/performance/RenderCommitProbe";
 import { recordRecognitionTimeline } from "./ui/performance/RecognitionTimelineProbe";
 import type { AssistantRemark } from "./core/assistantRemarkStore";
+import type { SelectionEditProposal } from "@mathnotes/core-server";
 import { providerRuntimeProgressTitle, providerRuntimeStateForProvider } from "./ui/providerRuntimeState";
 import { type AssetPreviewReference, resolveSessionAssetPreview } from "./ui/assetReferences";
 import type { RenderBlock, SessionDocument } from "./common/sessionDocument";
@@ -123,6 +124,17 @@ type PreviewProjectionSnapshot = {
   markdownByBlockId: SessionMarkdownProjection;
 };
 
+export type SelectionEditDraft = {
+  blockId: string;
+  from: number;
+  to: number;
+  selectedText: string;
+  instruction: string;
+  proposal: SelectionEditProposal | null;
+  status: "idle" | "generating" | "applying";
+  error?: string;
+};
+
 const previewProjectionLabStorageKey = "mathnotes:preview-projection-lab";
 
 function createPreviewProjectionSnapshot(document: SessionSourceDocument): PreviewProjectionSnapshot {
@@ -208,6 +220,7 @@ export function App() {
   const [selectedAssistantRemarkId, setSelectedAssistantRemarkId] = useState<string | null>(null);
   const [runningAssistantTaskId, setRunningAssistantTaskId] = useState<string | null>(null);
   const [assistantLastError, setAssistantLastError] = useState<string | null>(null);
+  const [selectionEditDraft, setSelectionEditDraft] = useState<SelectionEditDraft | null>(null);
   const [sourceCreateMenuOpen, setSourceCreateMenuOpen] = useState(false);
   const [hoverTip, setHoverTip] = useState<{ visible: boolean; x: number; y: number; text: string }>({
     visible: false,
@@ -1659,7 +1672,7 @@ export function App() {
     }
   }
 
-  async function createUserTextBlock() {
+  async function createUserTextBlock(insertAfterBlockId = activeSourceBlock?.blockId) {
     if (!window.mathNotes) {
       showToast("浏览器预览模式：已新建文本块");
       return;
@@ -1676,7 +1689,7 @@ export function App() {
       const document = await window.mathNotes.createMarkdownBlock({
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
-        insertAfterBlockId: activeSourceBlock?.blockId
+        insertAfterBlockId
       });
       applySessionDocument(document, { preserveViewport: true });
       const created = document.sourceDocument.markdownBlocks.find(
@@ -1692,6 +1705,84 @@ export function App() {
     } finally {
       setSavingSource(false);
     }
+  }
+
+  function openSelectionEdit(input: { blockId: string; from: number; to: number; selectedText: string }) {
+    const block = sourceDocument.markdownBlocks.find((candidate) => candidate.blockId === input.blockId);
+    if (block?.locked) {
+      showToast("这个块已固定，AI 不能修改");
+      return;
+    }
+    setSelectionEditDraft({ ...input, instruction: "", proposal: null, status: "idle" });
+  }
+
+  async function generateSelectionEdit() {
+    const draft = selectionEditDraft;
+    if (!draft || !draft.instruction.trim()) return;
+    if (!window.mathNotes) {
+      setSelectionEditDraft({ ...draft, error: "浏览器预览模式不能调用 AI。" });
+      return;
+    }
+    setSelectionEditDraft({ ...draft, proposal: null, status: "generating", error: undefined });
+    try {
+      if (sourceSaveStateRef.current !== "saved") {
+        const saved = await window.mathNotes.saveSessionSource({
+          notebookId: currentSession.notebookId,
+          sessionId: currentSession.sessionId,
+          sourceText: sourceTextRef.current
+        });
+        applySessionDocument(saved, { preserveViewport: true });
+      }
+      const proposal = await window.mathNotes.proposeSelectionEdit({
+        notebookId: currentSession.notebookId,
+        sessionId: currentSession.sessionId,
+        blockId: draft.blockId,
+        from: draft.from,
+        to: draft.to,
+        selectedText: draft.selectedText,
+        instruction: draft.instruction
+      });
+      setSelectionEditDraft((current) => current ? { ...current, proposal, status: "idle", error: undefined } : null);
+    } catch (error) {
+      setSelectionEditDraft((current) => current ? {
+        ...current,
+        status: "idle",
+        error: `生成失败：${error instanceof Error ? error.message : "unknown error"}`
+      } : null);
+    }
+  }
+
+  async function applySelectionEditProposal() {
+    const draft = selectionEditDraft;
+    if (!draft?.proposal || !window.mathNotes) return;
+    setSelectionEditDraft({ ...draft, status: "applying", error: undefined });
+    try {
+      const document = await window.mathNotes.applySelectionEdit({
+        notebookId: currentSession.notebookId,
+        sessionId: currentSession.sessionId,
+        proposalId: draft.proposal.id
+      });
+      applySessionDocument(document, { preserveViewport: true });
+      setSelectionEditDraft(null);
+      showToast("已应用 AI 修改；可用 Ctrl+Z 撤销");
+    } catch (error) {
+      setSelectionEditDraft((current) => current ? {
+        ...current,
+        status: "idle",
+        error: `应用冲突：${error instanceof Error ? error.message : "unknown error"}。候选已保留。`
+      } : null);
+    }
+  }
+
+  async function cancelSelectionEdit() {
+    const proposal = selectionEditDraft?.proposal;
+    setSelectionEditDraft(null);
+    if (!proposal || proposal.status !== "proposed" || !window.mathNotes) return;
+    await window.mathNotes.cancelSelectionEdit({
+      notebookId: proposal.notebookId,
+      sessionId: proposal.sessionId,
+      proposalId: proposal.id
+    }).catch(() => undefined);
   }
 
   async function insertEmbeddedImage() {
@@ -2583,6 +2674,8 @@ export function App() {
               onSelectionLocked={() => showToast("已固定选区，保存后写入 lock metadata")}
               onSourceReferenceClick={openAssetPreview}
               onDeleteBlockRequest={(blockId) => void deleteMarkdownBlock(blockId)}
+              onCreateBlockAfterRequest={(blockId) => void createUserTextBlock(blockId)}
+              onAiSelectionEditRequest={openSelectionEdit}
               onReorderBlocksRequest={(blockIds, direction) => void reorderSessionBlocks(blockIds, direction)}
               onRerecognizeBlockRequest={rerecognizeBlock}
               onTransferBlocksRequest={(blockIds, mode) => void openBlockTransfer(blockIds, mode)}
@@ -2806,6 +2899,10 @@ export function App() {
         onDeleteRemark={(remarkId) => void deleteAssistantRemark(remarkId)}
         onPromoteRemark={(remarkId) => void promoteAssistantRemark(remarkId)}
         onSelectedRemarkChange={setSelectedAssistantRemarkId}
+        onEditSelection={(input) => {
+          setAssistantWorkspaceOpen(false);
+          openSelectionEdit(input);
+        }}
         onSubmit={(input) => void runLearningAssistant(input)}
         open={assistantWorkspaceOpen}
         providerLabel={
@@ -2819,6 +2916,27 @@ export function App() {
         running={Boolean(runningAssistantTaskId)}
         contextBlocks={assistantContextBlocks}
         sessionDir={sessionDir}
+      />
+      <SelectionEditDialog
+        draft={selectionEditDraft}
+        onApply={() => void applySelectionEditProposal()}
+        onCancel={() => void cancelSelectionEdit()}
+        onGenerate={() => void generateSelectionEdit()}
+        onInstructionChange={(instruction) => setSelectionEditDraft((current) => current ? {
+          ...current, instruction, error: undefined
+        } : null)}
+        onRetry={() => {
+          const proposal = selectionEditDraft?.proposal;
+          if (proposal && window.mathNotes) {
+            void window.mathNotes.cancelSelectionEdit({
+              notebookId: proposal.notebookId,
+              sessionId: proposal.sessionId,
+              proposalId: proposal.id
+            }).catch(() => undefined);
+          }
+          setSelectionEditDraft((current) => current ? { ...current, proposal: null, error: undefined } : null);
+          void generateSelectionEdit();
+        }}
       />
       <CloseConfirmPrompt
         onCancel={() => setCloseConfirmOpen(false)}
@@ -2986,6 +3104,72 @@ export function AssetPreviewOverlay({
           </div>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+export function SelectionEditDialog({
+  draft,
+  onApply,
+  onCancel,
+  onGenerate,
+  onInstructionChange,
+  onRetry
+}: {
+  draft: SelectionEditDraft | null;
+  onApply: () => void;
+  onCancel: () => void;
+  onGenerate: () => void;
+  onInstructionChange: (instruction: string) => void;
+  onRetry: () => void;
+}) {
+  if (!draft) return null;
+  const busy = draft.status !== "idle";
+  return (
+    <div className="selection-edit-layer" data-testid="selection-edit-dialog">
+      <section aria-label="AI 修改选中文字" aria-modal="true" className="selection-edit-dialog" role="dialog">
+        <header>
+          <div><span>AI SELECTION EDIT</span><strong>修改 block {draft.blockId} 的精确选区</strong></div>
+          <button aria-label="取消 AI 修改" disabled={busy} onClick={onCancel} type="button"><X /></button>
+        </header>
+        <label>
+          修改要求
+          <textarea
+            autoFocus={!draft.proposal}
+            disabled={busy || Boolean(draft.proposal)}
+            onChange={(event) => onInstructionChange(event.target.value)}
+            placeholder="例如：修正语病，但保留公式和原意"
+            rows={3}
+            value={draft.instruction}
+          />
+        </label>
+        <div className="selection-edit-diff">
+          <article>
+            <span>原选区</span>
+            <pre>{draft.selectedText}</pre>
+          </article>
+          <article>
+            <span>AI 替换候选</span>
+            <pre>{draft.proposal?.replacementMarkdown ?? (draft.status === "generating" ? "正在生成候选…" : "生成后将在这里显示；此时不会修改笔记。")}</pre>
+          </article>
+        </div>
+        {draft.error ? <p className="selection-edit-error" role="alert">{draft.error}</p> : null}
+        <footer>
+          <button disabled={busy} onClick={onCancel} type="button">取消</button>
+          {draft.proposal ? (
+            <>
+              <button disabled={busy} onClick={onRetry} type="button">重新生成</button>
+              <button className="primary" disabled={busy} onClick={onApply} type="button">
+                {draft.status === "applying" ? "正在应用…" : "应用修改"}
+              </button>
+            </>
+          ) : (
+            <button className="primary" disabled={busy || !draft.instruction.trim()} onClick={onGenerate} type="button">
+              {draft.status === "generating" ? "正在生成…" : "生成修改候选"}
+            </button>
+          )}
+        </footer>
+      </section>
     </div>
   );
 }
