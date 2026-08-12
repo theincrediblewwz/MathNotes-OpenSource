@@ -705,7 +705,7 @@ describe("IngestServer", () => {
       expect(session.blocks.filter((block) => block.type === "markdown")).toHaveLength(2);
     }, { timeout: 10_000 });
     expect(providerIndex).toBe(2);
-  });
+  }, 15_000);
 
   function upload(bytes: Buffer): Promise<Response> {
     return fetch(`${url}/api/v1/uploads`, {

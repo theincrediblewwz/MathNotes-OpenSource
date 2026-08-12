@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T17:12:54.519Z",
+  "generatedAt": "2026-08-12T17:19:02.591Z",
   "fileCount": 656,
-  "snapshotSha256": "37bb74d899029f3e12b8f4beaf7bac4cb994803cbe32ea74c76a232a5c61fa56",
+  "snapshotSha256": "58c0551187ee7731ca40444bd35303b469ecabe917abef4564b2f0d7e80671fb",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -1658,8 +1658,8 @@
     },
     {
       "path": "apps/windows/src/core/ingestServer.test.ts",
-      "bytes": 32380,
-      "sha256": "d880248adf4f83de437e747bb966e87c697cc218fd776a0fa4d2e09a39b54a59"
+      "bytes": 32385,
+      "sha256": "bb49bae489a86bafc2556c2e4be082b1eb9751c02f5bbcf26f01d34fa11485f9"
     },
     {
       "path": "apps/windows/src/core/ingestServer.ts",
