@@ -1,0 +1,52 @@
+name: Package macOS Native
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_artifact:
+        description: "Upload the final package for transfer (stores it for one day)"
+        required: true
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "macos-package-*"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Verify Apple silicon runner
+        run: test "$(uname -m)" = "arm64"
+      - name: Select installed Xcode 26
+        shell: bash
+        run: |
+          XCODE_PATH="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort -V | tail -n 1)"
+          test -n "$XCODE_PATH"
+          echo "DEVELOPER_DIR=$XCODE_PATH/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$XCODE_PATH/Contents/Developer" swift --version
+      - run: npm ci
+      - run: npm run test:macos:native-package
+      - run: npm run test:macos:native
+      - run: npm run test:macos:ui
+      - run: npm run test:macos:long-session
+      - run: npm run package:macos:native
+      - name: Upload final package artifact
+        if: github.event_name == 'push' || inputs.upload_artifact == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: MathNotes-macOS-native-arm64
+          path: |
+            output/releases/MathNotes-macOS-native-arm64-*-unsigned.zip
+            output/releases/MathNotes-macOS-native-arm64-*-unsigned.zip.sha256
+          if-no-files-found: error
+          retention-days: 1

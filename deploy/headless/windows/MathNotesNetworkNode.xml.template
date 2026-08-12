@@ -1,0 +1,16 @@
+<service>
+  <id>MathNotesNetworkNode</id>
+  <name>MathNotes Network Node</name>
+  <description>Runs the local-first MathNotes companion and synchronization endpoint.</description>
+  <executable>@@NODE_EXECUTABLE@@</executable>
+  <arguments>&quot;@@PACKAGE_ROOT@@\bin\mathnotes-network-node.cjs&quot; --config &quot;@@CONFIG_PATH@@&quot;</arguments>
+  <workingdirectory>@@PACKAGE_ROOT@@</workingdirectory>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <onfailure action="restart" delay="5 sec" />
+  <logpath>@@LOG_DIR@@</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "node"],
+    "paths": {
+      "@mathnotes/core-server": ["../../packages/core-server/src/index.ts"],
+      "@mathnotes/shared": ["../../packages/shared/src/index.ts"]
+    },
+    "noEmit": true,
+    "baseUrl": "."
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,22 @@
+{
+  // MathNotes standalone gateway + PWA host.
+  // Requires Wrangler >= 4.36 when the rate-limit binding is enabled.
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "mathnotes-standalone-gateway",
+  "main": "./src/index.js",
+  "compatibility_date": "2026-08-12",
+  "assets": {
+    "directory": "../pwa/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  // Optional per-user recognition rate limit. Uncomment and choose an
+  // integer string that is unique to your Cloudflare account (example only).
+  // "ratelimits": [
+  //   {
+  //     "name": "MATHNOTES_RATE_LIMITER",
+  //     "namespace_id": "1001",
+  //     "simple": { "limit": 60, "period": 60 }
+  //   }
+  // ]
+}

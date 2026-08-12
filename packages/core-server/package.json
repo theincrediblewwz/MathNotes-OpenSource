@@ -1,0 +1,49 @@
+{
+  "name": "@mathnotes/core-server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "mathnotes-network-node": "./dist/headless/networkNodeCli.cjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./provider/open-ai-compatible": {
+      "types": "./dist/provider/openAiCompatibleVisionProvider.d.ts",
+      "import": "./dist/provider/openAiCompatibleVisionProvider.js"
+    },
+    "./provider/image-data-url": {
+      "types": "./dist/provider/imageDataUrl.d.ts",
+      "import": "./dist/provider/imageDataUrl.js"
+    },
+    "./domain/faithful-transcription-prompt": {
+      "types": "./dist/domain/faithfulTranscriptionPrompt.d.ts",
+      "import": "./dist/domain/faithfulTranscriptionPrompt.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run build:headless",
+    "build:headless": "esbuild src/headless/networkNodeCli.ts --bundle --platform=node --format=cjs --outfile=dist/headless/networkNodeCli.cjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mathnotes/shared": "file:../shared",
+    "busboy": "^1.6.0",
+    "katex": "^0.17.0",
+    "markdown-it": "^14.2.0"
+  },
+  "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.10.3",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

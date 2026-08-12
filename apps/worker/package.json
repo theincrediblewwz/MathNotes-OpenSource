@@ -1,0 +1,14 @@
+{
+  "name": "@mathnotes/standalone-worker",
+  "version": "0.1.11",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "description": "Cloudflare Worker that serves the MathNotes standalone PWA and exposes the same-origin recognition gateway contract.",
+  "scripts": {
+    "test": "node --test test/worker.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

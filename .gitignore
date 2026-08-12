@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.npm-cache/
+node_modules-*-link/
+.worktrees/
+
+# Build outputs
+dist/
+build/
+out/
+output/
+release/
+apps/windows/electron-dist/
+
+# Electron / frontend caches
+.vite/
+.turbo/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Android / Gradle outputs
+.gradle/
+**/build/
+local.properties
+*.apk
+*.aab
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local runtime data
+MyMathNotes/
+*.log
+.codex-remote-attachments/
+
+# Environment files
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# Signing material (never commit)
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# Cloudflare Wrangler local state
+.wrangler/

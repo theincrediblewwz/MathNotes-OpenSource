@@ -1,0 +1,55 @@
+{
+  "valid": [
+    {
+      "name": "windows-hotspot",
+      "payload": "mathnotes://pair?v=1&host=192.168.137.1&port=37621&token=0123456789abcdef0123456789abcdef&notebook=functional_analysis&session=lecture_03&transport=private_http",
+      "host": "192.168.137.1",
+      "port": 37621,
+      "notebookId": "functional_analysis",
+      "sessionId": "lecture_03"
+    },
+    {
+      "name": "usb-network",
+      "payload": "mathnotes://pair?v=1&host=192.168.42.129&port=37621&token=abcdef0123456789abcdef0123456789&notebook=pde&session=seminar_01&transport=private_http",
+      "host": "192.168.42.129",
+      "port": 37621,
+      "notebookId": "pde",
+      "sessionId": "seminar_01"
+    },
+    {
+      "name": "trusted-lan",
+      "payload": "mathnotes://pair?v=1&host=10.0.0.8&port=48080&token=fedcba9876543210fedcba9876543210&notebook=geometry&session=reading.2026-07-13&transport=private_http",
+      "host": "10.0.0.8",
+      "port": 48080,
+      "notebookId": "geometry",
+      "sessionId": "reading.2026-07-13"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "public-address",
+      "payload": "mathnotes://pair?v=1&host=8.8.8.8&port=37621&token=0123456789abcdef0123456789abcdef&notebook=pde&session=lecture&transport=private_http",
+      "error": "private_address_required"
+    },
+    {
+      "name": "hostname-not-numeric",
+      "payload": "mathnotes://pair?v=1&host=mathnotes.local&port=37621&token=0123456789abcdef0123456789abcdef&notebook=pde&session=lecture&transport=private_http",
+      "error": "numeric_ipv4_required"
+    },
+    {
+      "name": "legacy-unversioned",
+      "payload": "mathnotes://pair?host=192.168.137.1&port=37621&token=0123456789abcdef0123456789abcdef&session=lecture",
+      "error": "unsupported_version"
+    },
+    {
+      "name": "short-token",
+      "payload": "mathnotes://pair?v=1&host=192.168.137.1&port=37621&token=too-short&notebook=pde&session=lecture&transport=private_http",
+      "error": "invalid_token"
+    },
+    {
+      "name": "loopback",
+      "payload": "mathnotes://pair?v=1&host=127.0.0.1&port=37621&token=0123456789abcdef0123456789abcdef&notebook=pde&session=lecture&transport=private_http",
+      "error": "unreachable_loopback"
+    }
+  ]
+}

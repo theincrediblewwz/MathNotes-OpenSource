@@ -1,0 +1,16 @@
+[Unit]
+Description=MathNotes headless network node
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@@PACKAGE_ROOT@@
+ExecStart=@@NODE_EXECUTABLE@@ @@PACKAGE_ROOT@@/bin/mathnotes-network-node.cjs --config @@CONFIG_PATH@@
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

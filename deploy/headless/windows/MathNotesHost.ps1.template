@@ -1,0 +1,147 @@
+param(
+  [ValidateSet("check", "start", "status", "pair", "stop")]
+  [string]$Action = "status"
+)
+
+$ErrorActionPreference = "Stop"
+
+$Root = "@@MATHNOTES_ROOT@@"
+$CliPath = "@@CLI_PATH@@"
+$ConfigPath = "@@CONFIG_PATH@@"
+$SecretPath = "@@SECRET_PATH@@"
+$ProcessStatePath = Join-Path $Root "data\status\process.json"
+$LogRoot = Join-Path $Root "data\logs"
+$NodePath = (Get-Command node -ErrorAction Stop).Source
+
+function Set-MathNotesEnvironment {
+  $secret = Get-Content -LiteralPath $SecretPath -Raw | ConvertFrom-Json
+  $env:MATHNOTES_HEADLESS_TOKEN = [string]$secret.token
+  $env:MATHNOTES_HEADLESS_URL = [string]$secret.advertisedUrl
+}
+
+function Get-ManagedProcess {
+  if (-not (Test-Path -LiteralPath $ProcessStatePath -PathType Leaf)) {
+    return $null
+  }
+  $state = Get-Content -LiteralPath $ProcessStatePath -Raw | ConvertFrom-Json
+  $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($state.pid)" -ErrorAction SilentlyContinue
+  if ($null -eq $process) {
+    return $null
+  }
+  $commandLine = ([string]$process.CommandLine).ToLowerInvariant()
+  if (-not $commandLine.Contains($CliPath.ToLowerInvariant()) -or
+      -not $commandLine.Contains($ConfigPath.ToLowerInvariant())) {
+    throw "PID $($state.pid) is not the managed MathNotes host process."
+  }
+  return $process
+}
+
+function Wait-ForHealth {
+  $deadline = [DateTime]::UtcNow.AddSeconds(15)
+  do {
+    try {
+      $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:1051/api/v1/health" -TimeoutSec 2
+      if ($response.StatusCode -eq 200) {
+        return
+      }
+    } catch {
+      Start-Sleep -Milliseconds 250
+    }
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "MathNotes host did not become healthy on 127.0.0.1:1051."
+}
+
+function New-PairingLink {
+  $headers = @{ Authorization = "Bearer $env:MATHNOTES_HEADLESS_TOKEN" }
+  $challenge = Invoke-RestMethod `
+    -Method Post `
+    -Uri "http://127.0.0.1:1051/api/v2/pairing/challenge" `
+    -Headers $headers `
+    -TimeoutSec 10
+  $link = "mathnotes://pair?challenge=$([Uri]::EscapeDataString($challenge.challengeId))" +
+    "&code=$([Uri]::EscapeDataString($challenge.userCode))" +
+    "&expires=$([Uri]::EscapeDataString($challenge.expiresAt))"
+  [ordered]@{
+    code = [string]$challenge.userCode
+    expiresAt = [string]$challenge.expiresAt
+    computerAddress = [string]$env:MATHNOTES_HEADLESS_URL
+    pairingLink = $link
+  } | ConvertTo-Json -Depth 3
+}
+
+Set-MathNotesEnvironment
+
+switch ($Action) {
+  "check" {
+    & $NodePath $CliPath --config $ConfigPath --check
+    exit $LASTEXITCODE
+  }
+  "status" {
+    $process = Get-ManagedProcess
+    if ($null -eq $process) {
+      Write-Output "MATHNOTES_HOST_STOPPED"
+      exit 1
+    }
+    & $NodePath $CliPath --config $ConfigPath --status
+    exit $LASTEXITCODE
+  }
+  "pair" {
+    if ($null -eq (Get-ManagedProcess)) {
+      throw "MathNotes host is not running. Start it before creating a pairing code."
+    }
+    New-PairingLink
+  }
+  "start" {
+    $existing = Get-ManagedProcess
+    if ($null -ne $existing) {
+      Write-Output "MATHNOTES_HOST_ALREADY_RUNNING pid=$($existing.ProcessId)"
+      exit 0
+    }
+    & $NodePath $CliPath --config $ConfigPath --check
+    if ($LASTEXITCODE -ne 0) {
+      throw "MathNotes host preflight failed."
+    }
+    $stamp = [DateTime]::Now.ToString("yyyyMMdd-HHmmss")
+    $stdoutPath = Join-Path $LogRoot "host-$stamp.stdout.log"
+    $stderrPath = Join-Path $LogRoot "host-$stamp.stderr.log"
+    $process = Start-Process `
+      -FilePath $NodePath `
+      -ArgumentList @($CliPath, "--config", $ConfigPath) `
+      -WorkingDirectory $Root `
+      -WindowStyle Hidden `
+      -RedirectStandardOutput $stdoutPath `
+      -RedirectStandardError $stderrPath `
+      -PassThru
+    $state = [ordered]@{
+      schemaVersion = 1
+      pid = $process.Id
+      startedAt = [DateTimeOffset]::Now.ToString("o")
+      cliPath = $CliPath
+      configPath = $ConfigPath
+      stdoutPath = $stdoutPath
+      stderrPath = $stderrPath
+    }
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText(
+      $ProcessStatePath,
+      ($state | ConvertTo-Json -Depth 4) + "`n",
+      $utf8
+    )
+    try {
+      Wait-ForHealth
+    } catch {
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      throw
+    }
+    Write-Output "MATHNOTES_HOST_STARTED pid=$($process.Id)"
+  }
+  "stop" {
+    $process = Get-ManagedProcess
+    if ($null -eq $process) {
+      Write-Output "MATHNOTES_HOST_ALREADY_STOPPED"
+      exit 0
+    }
+    Stop-Process -Id $process.ProcessId -Force
+    Write-Output "MATHNOTES_HOST_STOPPED pid=$($process.ProcessId)"
+  }
+}
