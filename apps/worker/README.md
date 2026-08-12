@@ -15,7 +15,7 @@
 - 其余请求一律转发 `env.ASSETS.fetch(request)`。
 
 请求/响应与 `apps/pwa/src/standaloneGatewayClient.ts` 和
-`docs/deployment/standalone-gateway-contract-v1.md` 保持兼容。
+发布包会生成不依赖内部项目文档的 `网关接口合同.md`；其接口与本 README 保持兼容。
 
 ## 绑定（无秘密）
 
