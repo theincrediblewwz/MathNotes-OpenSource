@@ -42,7 +42,7 @@ jobs:
       - run: npm run package:macos:native
       - name: Upload final package artifact
         if: github.event_name == 'push' || inputs.upload_artifact == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MathNotes-macOS-native-arm64
           path: |
