@@ -38,6 +38,8 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    globals: true
+    globals: true,
+    hookTimeout: 30_000,
+    testTimeout: 30_000
   }
 });

@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T17:19:02.591Z",
+  "generatedAt": "2026-08-12T17:24:58.308Z",
   "fileCount": 656,
-  "snapshotSha256": "58c0551187ee7731ca40444bd35303b469ecabe917abef4564b2f0d7e80671fb",
+  "snapshotSha256": "ce542f45daca30b308132311e9207ec66633cd1bd1a9b7440b9a57a7b02344bd",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -2238,8 +2238,8 @@
     },
     {
       "path": "apps/windows/vite.config.ts",
-      "bytes": 1398,
-      "sha256": "f57654223110b51f7135aef9407b9644e7c9dc64f3980ae87b6a23070660f3ce"
+      "bytes": 1443,
+      "sha256": "b54c9490cc342e870eaba589a0c5d119cf33a7759d1bee8b9ba88e5fbe4a6b27"
     },
     {
       "path": "apps/worker/.gitignore",
