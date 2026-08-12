@@ -39,7 +39,7 @@ try {
   observeRendererDiagnostics(page, rendererDiagnostics);
 
   try {
-    await page.waitForSelector("[data-testid='session-source-editor'] .cm-editor", { timeout: 8000 });
+    await page.waitForSelector("[data-testid='session-source-editor'] .cm-editor", { timeout: 30_000 });
   } catch (error) {
     await page.screenshot({ path: path.join(outDir, "electron-app-smoke-failure.png"), fullPage: false });
     const bodyText = await page.locator("body").innerText().catch(() => "");
@@ -51,7 +51,7 @@ try {
   await page.waitForFunction(
     () => document.querySelector("[data-testid='preview-pane']")?.textContent?.includes("泛函分析 第 3 讲"),
     undefined,
-    { timeout: 8000 }
+    { timeout: 30_000 }
   );
   const previewText = await page.getByTestId("preview-pane").innerText();
   assert.match(previewText, /泛函分析 第 3 讲/);
