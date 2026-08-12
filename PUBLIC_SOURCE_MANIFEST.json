@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T20:38:27.239Z",
+  "generatedAt": "2026-08-12T20:47:10.258Z",
   "fileCount": 660,
-  "snapshotSha256": "08894a4898de545de16cff765753e23c1b39092ca3263b92e65670f822ff1d75",
+  "snapshotSha256": "45a7071154e410d7da7cffce2307eb7f28e06ef5683bed54046a3f8541f0697e",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -1333,8 +1333,8 @@
     },
     {
       "path": "apps/windows/package.json",
-      "bytes": 1866,
-      "sha256": "0fb84dc77ea13755f9440c1f2d9c07330b5ca277d09fcf50b97dc25bb000691d"
+      "bytes": 1867,
+      "sha256": "1f69a2553ef25ebe45fd36b9b47aacee12cc79696232f080b969c37aa3a7e604"
     },
     {
       "path": "apps/windows/src/App.test.tsx",
@@ -2333,13 +2333,13 @@
     },
     {
       "path": "package-lock.json",
-      "bytes": 378108,
-      "sha256": "b52f73b309b767b12a6b5032a715525879bce0bd7e08fbb77aab929a6542cb93"
+      "bytes": 354906,
+      "sha256": "c8108b232dc478b401107d6d6ce947fb88b52785480baee5ecb4de849b2df33a"
     },
     {
       "path": "package.json",
-      "bytes": 7651,
-      "sha256": "553abda4fc69eaafb34752a546a2cff9b73f9cabf0b3262abbac3fbd3241c5db"
+      "bytes": 7652,
+      "sha256": "bb212f9a0449950348912284d4062dbcb21636b343ea25c20e07d96193889793"
     },
     {
       "path": "packages/core-server/package.json",
@@ -3008,8 +3008,8 @@
     },
     {
       "path": "test_tool/electron_app_smoke.mjs",
-      "bytes": 43756,
-      "sha256": "505f5ae7d5bc6ac7cb0aea58214021f151f88d514ac38fba1bdce06d624f8bd9"
+      "bytes": 43847,
+      "sha256": "1e4c0af9f44900545fbb0eb693606eed59ec9d70acb0c5b8dc6376f8b3ee1801"
     },
     {
       "path": "test_tool/export_public_source.mjs",
