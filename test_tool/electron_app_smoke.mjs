@@ -1,6 +1,6 @@
 import { _electron as electron } from "playwright";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -21,6 +21,7 @@ let firstIngestIdentity;
 let blockedPortServer;
 
 try {
+  await mkdir(outDir, { recursive: true });
   await writeFile(importImagePath, Buffer.from("electron smoke local image"));
   await writeFile(embeddedImagePath, Buffer.from("electron smoke embedded image"));
   await writeFile(importPdfPath, createMinimalPdf());
@@ -38,7 +39,7 @@ try {
   observeRendererDiagnostics(page, rendererDiagnostics);
 
   try {
-    await page.waitForSelector("[data-testid='session-source-editor'] .cm-editor", { timeout: 8000 });
+    await page.waitForSelector("[data-testid='session-source-editor'] .cm-editor", { timeout: 30_000 });
   } catch (error) {
     await page.screenshot({ path: path.join(outDir, "electron-app-smoke-failure.png"), fullPage: false });
     const bodyText = await page.locator("body").innerText().catch(() => "");
@@ -50,7 +51,7 @@ try {
   await page.waitForFunction(
     () => document.querySelector("[data-testid='preview-pane']")?.textContent?.includes("泛函分析 第 3 讲"),
     undefined,
-    { timeout: 8000 }
+    { timeout: 30_000 }
   );
   const previewText = await page.getByTestId("preview-pane").innerText();
   assert.match(previewText, /泛函分析 第 3 讲/);
@@ -95,6 +96,132 @@ try {
   assert.equal(await page.evaluate(() => typeof window.mathNotes?.runAssistantTask), "function");
   assert.equal(await page.evaluate(() => typeof window.mathNotes?.cancelAssistantTask), "function");
   assert.ok(await page.locator(".session-source-editor .cm-foldGutter").count(), "Source block editors should show Markdown fold gutters");
+
+  console.log("[electron smoke] context menu inserts exactly after the right-clicked block");
+  const sourceBlockIdsBeforeInsert = await page.locator("[data-testid='source-block']").evaluateAll((blocks) =>
+    blocks.map((block) => block.getAttribute("data-block-id"))
+  );
+  const insertionAnchorId = sourceBlockIdsBeforeInsert[1];
+  const insertionSuccessorId = sourceBlockIdsBeforeInsert[2];
+  assert.ok(insertionAnchorId && insertionSuccessorId, "Context insertion smoke requires an anchor and original successor");
+  const insertionAnchor = page.locator(`[data-testid='source-block'][data-block-id='${insertionAnchorId}']`);
+  await insertionAnchor.locator(".cm-content").click({ button: "right", position: { x: 24, y: 18 } });
+  await assertVisible(page, "[data-testid='editor-context-menu']");
+  await page.screenshot({ path: path.join(outDir, "electron-context-insert-menu.png"), fullPage: false });
+  await page.getByRole("button", { name: "在下方新建文本块", exact: true }).click();
+  await page.waitForFunction(
+    ({ anchorId, successorId, previousLength }) => {
+      const ids = [...document.querySelectorAll("[data-testid='source-block']")]
+        .map((block) => block.getAttribute("data-block-id"));
+      const anchorIndex = ids.indexOf(anchorId);
+      return ids.length === previousLength + 1 && anchorIndex >= 0 && ids[anchorIndex + 2] === successorId;
+    },
+    { anchorId: insertionAnchorId, successorId: insertionSuccessorId, previousLength: sourceBlockIdsBeforeInsert.length },
+    { timeout: 5000 }
+  );
+  const sourceBlockIdsAfterInsert = await page.locator("[data-testid='source-block']").evaluateAll((blocks) =>
+    blocks.map((block) => block.getAttribute("data-block-id"))
+  );
+  const insertionAnchorIndex = sourceBlockIdsAfterInsert.indexOf(insertionAnchorId);
+  const insertedBlockId = sourceBlockIdsAfterInsert[insertionAnchorIndex + 1];
+  assert.ok(insertedBlockId && !sourceBlockIdsBeforeInsert.includes(insertedBlockId), "A new block must occupy the exact slot after the anchor");
+  assert.equal(sourceBlockIdsAfterInsert[insertionAnchorIndex + 2], insertionSuccessorId, "The original successor must remain after the inserted block");
+
+  console.log("[electron smoke] AI selection edit previews, explicitly applies, and participates in undo");
+  const selectionTarget = page.locator("[data-testid='source-block']").first();
+  const selectionTargetId = await selectionTarget.getAttribute("data-block-id");
+  assert.ok(selectionTargetId, "Selection edit smoke requires a concrete block id");
+  const selectionEditor = selectionTarget.locator(".cm-content");
+  await selectionEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+End");
+  const selectedHeading = (await page.evaluate(() => window.getSelection()?.toString() ?? "")).trim();
+  assert.match(selectedHeading, /^## 泛函分析 第 3 讲$/, "The real editor must expose the exact selected heading");
+  await selectionEditor.click({ button: "right", position: { x: 48, y: 10 } });
+  await page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).click();
+  const selectionDialog = page.getByRole("dialog", { name: "AI 修改选中文字" });
+  await selectionDialog.waitFor({ state: "visible", timeout: 3000 });
+  assert.match(await selectionDialog.innerText(), /原选区[\s\S]*## 泛函分析 第 3 讲/);
+  assert.match(await selectionDialog.innerText(), /此时不会修改笔记/);
+  await selectionDialog.getByPlaceholder("例如：修正语病，但保留公式和原意").fill("把标题改得更清楚，保留数学含义");
+  await selectionDialog.getByRole("button", { name: "生成修改候选", exact: true }).click();
+  await selectionDialog.getByText("Mock 学习助手", { exact: false }).waitFor({ state: "visible", timeout: 5000 });
+  assert.doesNotMatch(await selectionEditor.innerText(), /Mock 学习助手/, "Generating a candidate must not mutate the editor");
+  await page.screenshot({ path: path.join(outDir, "electron-selection-edit-candidate.png"), fullPage: false });
+  await selectionDialog.getByRole("button", { name: "应用修改", exact: true }).click();
+  await selectionDialog.waitFor({ state: "detached", timeout: 5000 });
+  await page.waitForFunction(
+    (blockId) => document.querySelector(`[data-testid='source-block'][data-block-id='${blockId}'] .cm-content`)?.textContent?.includes("Mock 学习助手"),
+    selectionTargetId,
+    { timeout: 5000 }
+  );
+  await selectionEditor.click();
+  await page.keyboard.press("Control+z");
+  await page.waitForFunction(
+    (blockId) => {
+      const text = document.querySelector(`[data-testid='source-block'][data-block-id='${blockId}'] .cm-content`)?.textContent ?? "";
+      return text.includes("泛函分析 第 3 讲") && !text.includes("Mock 学习助手");
+    },
+    selectionTargetId,
+    { timeout: 5000 }
+  );
+
+  console.log("[electron smoke] whole-block lock disables AI selection editing");
+  await selectionTarget.getByTestId("source-block-header").click();
+  await page.getByTestId("block-lock-button").click();
+  await page.waitForFunction(
+    async (blockId) => (await window.mathNotes.loadCurrentSession()).sourceDocument.markdownBlocks
+      .find((block) => block.blockId === blockId)?.locked === true,
+    selectionTargetId,
+    { timeout: 5000 }
+  );
+  await selectionTarget.getByTestId("source-block-header").click();
+  await selectionEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+End");
+  await selectionEditor.click({ button: "right", position: { x: 48, y: 10 } });
+  assert.equal(
+    await page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).isDisabled(),
+    true,
+    "A locked block must disable AI selection editing in the real context menu"
+  );
+  await page.keyboard.press("Escape");
+  await selectionTarget.getByTestId("source-block-header").click();
+  await page.getByTestId("block-lock-button").click();
+  await page.waitForFunction(
+    async (blockId) => (await window.mathNotes.loadCurrentSession()).sourceDocument.markdownBlocks
+      .find((block) => block.blockId === blockId)?.locked === false,
+    selectionTargetId,
+    { timeout: 5000 }
+  );
+
+  console.log("[electron smoke] stale proposal keeps its preview and reports an apply conflict");
+  await selectionEditor.click();
+  await page.keyboard.press("Control+Home");
+  await page.keyboard.press("Shift+End");
+  await selectionEditor.click({ button: "right", position: { x: 48, y: 10 } });
+  await page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).click();
+  await selectionDialog.getByPlaceholder("例如：修正语病，但保留公式和原意").fill("生成一个会发生版本冲突的候选");
+  await selectionDialog.getByRole("button", { name: "生成修改候选", exact: true }).click();
+  await selectionDialog.getByText("Mock 学习助手", { exact: false }).waitFor({ state: "visible", timeout: 5000 });
+  await page.evaluate(async (blockId) => {
+    const current = await window.mathNotes.loadCurrentSession();
+    const block = current.sourceDocument.markdownBlocks.find((candidate) => candidate.blockId === blockId);
+    if (!block) throw new Error(`Unable to find block ${blockId} for conflict injection`);
+    await window.mathNotes.saveMarkdownBlock({
+      notebookId: current.notebookId,
+      sessionId: current.sessionId,
+      blockId,
+      markdown: `${block.markdown}\n\n外部并发修改`
+    });
+  }, selectionTargetId);
+  await selectionDialog.getByRole("button", { name: "应用修改", exact: true }).click();
+  const conflictAlert = selectionDialog.getByRole("alert");
+  await conflictAlert.waitFor({ state: "visible", timeout: 5000 });
+  assert.match(await conflictAlert.innerText(), /应用冲突/);
+  assert.match(await selectionDialog.innerText(), /Mock 学习助手/, "A conflict must retain the candidate preview");
+  await selectionDialog.getByRole("button", { name: "取消", exact: true }).click();
+  await selectionDialog.waitFor({ state: "detached", timeout: 3000 });
 
   console.log("[electron smoke] assistant uses an independent native resizable window");
   const assistantWindowOpened = app.waitForEvent("window");

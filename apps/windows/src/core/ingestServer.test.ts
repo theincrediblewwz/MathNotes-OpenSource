@@ -702,10 +702,15 @@ describe("IngestServer", () => {
 
     await vi.waitFor(async () => {
       const session = await store.readSession("functional_analysis", "lecture");
-      expect(session.blocks.filter((block) => block.type === "markdown")).toHaveLength(2);
-    }, { timeout: 10_000 });
+      const markdownBlocks = session.blocks.filter((block) => block.type === "markdown");
+      expect(markdownBlocks).toHaveLength(2);
+      const markdown = await Promise.all(
+        markdownBlocks.map((block) => store.readMarkdownBlock("functional_analysis", "lecture", block.id))
+      );
+      expect(new Set(markdown)).toEqual(new Set(["provider-1", "provider-2"]));
+    }, { timeout: 30_000 });
     expect(providerIndex).toBe(2);
-  }, 15_000);
+  }, 45_000);
 
   function upload(bytes: Buffer): Promise<Response> {
     return fetch(`${url}/api/v1/uploads`, {
