@@ -88,12 +88,14 @@ for (const required of [
   "npm run test:macos:native-package",
   "npm run test:macos:native",
   "npm run test:macos:ui",
-  "npm run package:macos:native"
+  "npm run package:macos:native",
+  "npm run test:macos:app-launch"
 ]) {
   if (!macosCommands.includes(required)) throw new Error(`macOS package job is missing: ${required}`);
 }
 const macosUploadStep = macosPackage.jobs.package.steps.find(
-  (step) => step.uses === `actions/upload-artifact@${pinnedActions["actions/upload-artifact"]}`
+  (step) => step.uses === `actions/upload-artifact@${pinnedActions["actions/upload-artifact"]}` &&
+    step.with?.name === "MathNotes-macOS-native-arm64"
 );
 if (!macosUploadStep) {
   throw new Error("Native macOS package job must upload its release artifact");

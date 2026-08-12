@@ -39,6 +39,7 @@
     "test:macos:native-package": "node test_tool/macos_native_package_contract.mjs",
     "test:macos:native": "node test_tool/macos_native_contract.mjs",
     "test:macos:ui": "node test_tool/macos_ui_contract.mjs",
+    "test:macos:app-launch": "swift test_tool/macos_native_app_launch_smoke.swift output/macos-native/bundle/MathNotes.app output/playwright/macos-native-app.png",
     "test:macos:long-session": "npm run build:macos:sidecar && node test_tool/macos_long_session_smoke.mjs",
     "fixture:macos:phase1d": "node test_tool/create_macos_phase1d_fixture.mjs",
     "test:macos:content": "npm run build:macos:sidecar && node test_tool/macos_phase1d_content_smoke.mjs",
