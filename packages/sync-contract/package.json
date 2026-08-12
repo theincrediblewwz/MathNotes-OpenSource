@@ -17,7 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "uuid": "^11.1.0"
+    "uuid": "^14.0.1"
   },
   "devDependencies": {
     "@types/node": "^24.10.3",
