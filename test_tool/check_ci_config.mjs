@@ -32,6 +32,9 @@ for (const relativePath of workflowFiles) {
   }
   for (const [jobName, job] of Object.entries(workflow.jobs)) {
     for (const step of job?.steps ?? []) {
+      if (step.with && Object.prototype.hasOwnProperty.call(step.with, "cache")) {
+        throw new Error(`${relativePath} job ${jobName} must not enable Actions dependency caches`);
+      }
       if (typeof step.uses !== "string" || !step.uses.startsWith("actions/")) continue;
       const [action, revision] = step.uses.split("@");
       if (pinnedActions[action] !== revision) {
@@ -105,6 +108,19 @@ if (macosUploadStep.if !== "github.event_name == 'push' || inputs.upload_artifac
 }
 if (macosUploadStep.with?.["retention-days"] !== 1) {
   throw new Error("Native macOS package artifact must expire after one day");
+}
+const macosScreenshotUploadStep = macosPackage.jobs.package.steps.find(
+  (step) => step.uses === `actions/upload-artifact@${pinnedActions["actions/upload-artifact"]}` &&
+    step.with?.name === "MathNotes-macOS-native-ui-acceptance"
+);
+if (!macosScreenshotUploadStep) {
+  throw new Error("Native macOS package job must retain its final UI acceptance screenshot");
+}
+if (macosScreenshotUploadStep.if !== "github.event_name == 'push' || inputs.upload_artifact == true") {
+  throw new Error("Native macOS UI screenshot upload must require an explicit final-package request");
+}
+if (macosScreenshotUploadStep.with?.["retention-days"] !== 1) {
+  throw new Error("Native macOS UI screenshot artifact must expire after one day");
 }
 const uploadInput = macosPackage.on?.workflow_dispatch?.inputs?.upload_artifact;
 if (uploadInput?.type !== "boolean" || uploadInput.default !== false || uploadInput.required !== true) {
