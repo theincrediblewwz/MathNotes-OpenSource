@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-12T21:20:48.212Z",
+  "generatedAt": "2026-08-13T04:33:01.286Z",
   "fileCount": 661,
-  "snapshotSha256": "108b6daa70975818dcf89af618d2b265bbb4b839e67d4ddf1e0088627e7728dd",
+  "snapshotSha256": "c1785d335f3d8fc3250ef20d732aa84f4b3df5622b528f086371c7e494e13bba",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -23,8 +23,8 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "bytes": 2140,
-      "sha256": "f22f777be51567cb5b1e268f3e885c1c082db4518dac0654f643cddcea697a49"
+      "bytes": 2032,
+      "sha256": "18cf6b1a8ecbd7add89183e7b653a85e20a7ce9f9dd507852155363801cd140f"
     },
     {
       "path": ".github/workflows/dependency-review.yml",
@@ -33,8 +33,8 @@
     },
     {
       "path": ".github/workflows/package-macos-native.yml",
-      "bytes": 2293,
-      "sha256": "e440bca7d4074bfaba10385e346d33f7446f65586428d713dcbd448a1ad53b24"
+      "bytes": 2321,
+      "sha256": "e88544bcfe330f73d9623245831d1badcfe714f9f68d7d10286484bed14183b0"
     },
     {
       "path": ".gitignore",
@@ -1503,13 +1503,13 @@
     },
     {
       "path": "apps/windows/src/core/blockStore.test.ts",
-      "bytes": 31343,
-      "sha256": "00b65ad2be8e0612c96372506ce72cdc727a2879683a7a10b10d46a66e2a9ea1"
+      "bytes": 32573,
+      "sha256": "85388595bb18d3e85b0831c27233b0d63a53237a1ff80aa85a79b8079fb62b51"
     },
     {
       "path": "apps/windows/src/core/blockStore.ts",
-      "bytes": 20277,
-      "sha256": "4cf13e70f70e526f2e6f7b3ae5ac07a0e175b597252b5abbfb1cd0dc7439092b"
+      "bytes": 21887,
+      "sha256": "f1a4d098d52ab3819a6504f595c47ceb2c692f5e0f5832fa84ee952aa5af2261"
     },
     {
       "path": "apps/windows/src/core/blockWriter.test.ts",
@@ -1658,8 +1658,8 @@
     },
     {
       "path": "apps/windows/src/core/ingestServer.test.ts",
-      "bytes": 32389,
-      "sha256": "c184f5f4d8d719568e932adf0a3d7fcfb78db670cff3f86be74b8154fc471947"
+      "bytes": 32666,
+      "sha256": "fd65f4bee850a7c531bf7bfb928b5d31aaa7c70532abed2391ded72ea2b85495"
     },
     {
       "path": "apps/windows/src/core/ingestServer.ts",
@@ -2933,8 +2933,8 @@
     },
     {
       "path": "test_tool/check_ci_config.mjs",
-      "bytes": 6078,
-      "sha256": "b756d09859a1730770f702c97e15130abcdc70d1f923b8fbc48208a89ad281f0"
+      "bytes": 6989,
+      "sha256": "0048394cbb9d978c1fb29e4611c77a433c2e19a2fccddd16a503317cc4825aaf"
     },
     {
       "path": "test_tool/check_core_boundaries.mjs",
@@ -3008,8 +3008,8 @@
     },
     {
       "path": "test_tool/electron_app_smoke.mjs",
-      "bytes": 51958,
-      "sha256": "3b7d93aefe3b0a67edb90366024523d32fd92fecfda5e11f93f0aab1fa5de302"
+      "bytes": 51960,
+      "sha256": "604a2c4db8323cf964ab9b6ab818c5fce09b39e6013b2bb13fcd9d4a4b035a7e"
     },
     {
       "path": "test_tool/export_public_source.mjs",

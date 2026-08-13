@@ -18,12 +18,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: npm
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm run test:ci-config
@@ -45,7 +43,6 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
       - run: .\apps\android\gradlew.bat -p apps\android testDebugUnitTest assembleDebug --no-daemon
 
   cross-platform-e2e-contract:
@@ -57,7 +54,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: npm
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
