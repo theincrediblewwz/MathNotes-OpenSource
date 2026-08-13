@@ -9,6 +9,10 @@ import {
   type AppLocaleId,
   type ThemeId
 } from "../common/appearanceSettings";
+import {
+  DEFAULT_PREVIEW_FOLLOW_SHORTCUT,
+  normalizeKeyboardShortcut
+} from "../common/keyboardShortcuts";
 
 export type UserSettings = {
   notesRootDir: string;
@@ -23,6 +27,7 @@ export type UserSettings = {
   locale: AppLocaleId;
   showCodexAssistant: boolean;
   assistantOnlineEnabled?: boolean;
+  previewFollowShortcut?: string;
 };
 
 const legacyPreviewFontFamily = '"Inter", "Noto Sans SC", system-ui, sans-serif';
@@ -68,8 +73,13 @@ function normalizeSettings(settings: Partial<UserSettings>, fallbackNotesRootDir
     themeId: normalizeThemeId(settings.themeId ?? defaultThemeId),
     locale: normalizeLocaleId(settings.locale ?? defaultLocaleId),
     showCodexAssistant: settings.showCodexAssistant !== false,
-    assistantOnlineEnabled: settings.assistantOnlineEnabled !== false
+    assistantOnlineEnabled: settings.assistantOnlineEnabled !== false,
+    previewFollowShortcut: normalizePreviewFollowShortcut(settings.previewFollowShortcut)
   };
+}
+
+function normalizePreviewFollowShortcut(shortcut: string | undefined): string {
+  return normalizeKeyboardShortcut(shortcut ?? "") ?? DEFAULT_PREVIEW_FOLLOW_SHORTCUT;
 }
 
 function normalizePreviewFontFamily(fontFamily: string | undefined): string {

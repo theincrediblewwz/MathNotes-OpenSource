@@ -97,6 +97,93 @@ try {
   assert.equal(await page.evaluate(() => typeof window.mathNotes?.cancelAssistantTask), "function");
   assert.ok(await page.locator(".session-source-editor .cm-foldGutter").count(), "Source block editors should show Markdown fold gutters");
 
+  console.log("[electron smoke] configurable source-to-preview shortcut follows the active CodeMirror line");
+  await page.getByRole("button", { name: "笔记目录", exact: true }).click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await assertVisible(page, "[data-testid='settings-modal']");
+  const previewShortcutInput = page.getByTestId("preview-follow-shortcut-input");
+  await previewShortcutInput.scrollIntoViewIfNeeded();
+  await previewShortcutInput.focus();
+  await page.keyboard.press("F8");
+  assert.equal(await previewShortcutInput.inputValue(), "F8");
+  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await page.waitForFunction(async () => (await window.mathNotes.loadUserSettings()).previewFollowShortcut === "F8");
+  await page.getByRole("button", { name: "关闭设置", exact: true }).click();
+
+  const lastPreviewBlockId = await page.evaluate(async () => {
+    const markdown = Array.from({ length: 120 }, (_, index) => `## 导航测试 ${index + 1}\n\n第 ${index + 1} 行内容`).join("\n\n");
+    const document = await window.mathNotes.createMarkdownBlock({
+      notebookId: "functional_analysis",
+      sessionId: "lecture",
+      markdown,
+      sourceName: "preview-navigation-smoke.md"
+    });
+    return document.editableBlocks.at(-1)?.id ?? null;
+  });
+  assert.ok(lastPreviewBlockId, "Shortcut smoke requires a preview block linked to source");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector(`[data-testid='source-block'][data-block-id='${lastPreviewBlockId}'] .cm-content`, { timeout: 8000 });
+  const sourceForLastPreview = page.locator(`[data-testid='source-block'][data-block-id='${lastPreviewBlockId}'] .cm-content`);
+  await sourceForLastPreview.scrollIntoViewIfNeeded();
+  await sourceForLastPreview.focus();
+  await page.keyboard.press("Control+End");
+  await page.locator(".preview-scroll").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await page.keyboard.press("F8");
+  await page.waitForFunction(
+    (blockId) => document.querySelector(`[data-testid='render-block'][data-block-id='${blockId}'][data-preview-locating='true']`),
+    lastPreviewBlockId,
+    { timeout: 5000 }
+  );
+  const followedPreviewState = await page.locator(".preview-scroll").evaluate((element) => {
+    const target = element.querySelector("[data-preview-locating='true']");
+    if (!(target instanceof HTMLElement)) return null;
+    const scrollerRect = element.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    return {
+      scrollTop: element.scrollTop,
+      targetBottom: targetRect.bottom - scrollerRect.top,
+      targetTop: targetRect.top - scrollerRect.top,
+      viewportHeight: element.clientHeight
+    };
+  });
+  assert.ok(followedPreviewState, "Shortcut should expose a located preview target");
+  assert.ok(followedPreviewState.scrollTop > 0, `Shortcut should move the preview: ${JSON.stringify(followedPreviewState)}`);
+  assert.ok(
+    followedPreviewState.targetBottom > 0 && followedPreviewState.targetTop < followedPreviewState.viewportHeight,
+    `Shortcut target must be visible: ${JSON.stringify(followedPreviewState)}`
+  );
+
+  console.log("[electron smoke] top preview scrollbar owns the right gutter instead of moving the window");
+  await page.locator(".preview-scroll").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  const previewScrollbarGeometry = await page.locator(".preview-scroll").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      x: rect.right - 6,
+      y: rect.top + 18,
+      dragY: rect.top + Math.min(220, rect.height * 0.35)
+    };
+  });
+  const windowBoundsBeforeScrollbarDrag = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+  await page.mouse.move(previewScrollbarGeometry.x, previewScrollbarGeometry.y);
+  await page.waitForTimeout(80);
+  await page.mouse.down();
+  await page.mouse.move(previewScrollbarGeometry.x, previewScrollbarGeometry.dragY, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(120);
+  const previewScrollTopAfterThumbDrag = await page.locator(".preview-scroll").evaluate((element) => element.scrollTop);
+  const windowBoundsAfterScrollbarDrag = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+  assert.ok(
+    previewScrollTopAfterThumbDrag > 0,
+    `Top scrollbar thumb should move preview content: ${JSON.stringify({ previewScrollTopAfterThumbDrag, previewScrollbarGeometry })}`
+  );
+  assert.deepEqual(windowBoundsAfterScrollbarDrag, windowBoundsBeforeScrollbarDrag, "Dragging the top preview scrollbar must not move the window");
+
   console.log("[electron smoke] context menu inserts exactly after the right-clicked block");
   const sourceBlockIdsBeforeInsert = await page.locator("[data-testid='source-block']").evaluateAll((blocks) =>
     blocks.map((block) => block.getAttribute("data-block-id"))

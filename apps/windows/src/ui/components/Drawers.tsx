@@ -1,6 +1,6 @@
 import { Archive, Download, FileCheck2, FolderOpen, Plus, Settings, X } from "lucide-react";
 import QRCode from "qrcode";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { PROVIDER_CATALOG, type ProviderDescriptor } from "@mathnotes/shared";
 import type {
   ConnectionDiagnosticReport,
@@ -24,6 +24,7 @@ import type {
 } from "../../types/mathNotesApi";
 import { defaultAssistantFontFamily, defaultPreviewFontFamily, defaultSourceFontFamily } from "../../common/defaultUserSettings";
 import { defaultLocaleId, defaultThemeId, localeOptions, themeOptions } from "../../common/appearanceSettings";
+import { DEFAULT_PREVIEW_FOLLOW_SHORTCUT, normalizeKeyboardShortcutFromEvent } from "../../common/keyboardShortcuts";
 import { defaultMathPromptTemplate, type PromptTemplate } from "../../common/promptTemplates";
 import { createEmptyNotationProfileConfig, type NotationProfile, type NotationRule } from "../../common/notationProfiles";
 import { getRecognitionProviderCapability } from "../providerCapabilities";
@@ -637,9 +638,12 @@ export function UserSettingsForm({
       themeId: defaultThemeId,
       locale: defaultLocaleId,
       showCodexAssistant: true,
-      assistantOnlineEnabled: true
+      assistantOnlineEnabled: true,
+      previewFollowShortcut: DEFAULT_PREVIEW_FOLLOW_SHORTCUT
     }
   );
+  const [previewShortcutFeedback, setPreviewShortcutFeedback] = useState<string | null>(null);
+  const [previewShortcutIsInvalid, setPreviewShortcutIsInvalid] = useState(false);
 
   useEffect(() => {
     if (settings) {
@@ -652,6 +656,29 @@ export function UserSettingsForm({
     if (picked) {
       setDraft({ ...draft, [target]: picked });
     }
+  }
+
+  function recordPreviewFollowShortcut(event: ReactKeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Tab") {
+      return;
+    }
+    const normalized = normalizeKeyboardShortcutFromEvent(event);
+    if (normalized) {
+      event.preventDefault();
+      setDraft({ ...draft, previewFollowShortcut: normalized });
+      setPreviewShortcutFeedback(`已设置为 ${normalized}`);
+      setPreviewShortcutIsInvalid(false);
+      return;
+    }
+    event.preventDefault();
+    setPreviewShortcutFeedback("无效快捷键：请使用 F1-F12，或带 Ctrl/Alt/Shift/Meta 的组合键；不能只按修饰键、Escape 或裸字符。");
+    setPreviewShortcutIsInvalid(true);
+  }
+
+  function restorePreviewFollowShortcut(): void {
+    setDraft({ ...draft, previewFollowShortcut: DEFAULT_PREVIEW_FOLLOW_SHORTCUT });
+    setPreviewShortcutFeedback(`已恢复默认 ${DEFAULT_PREVIEW_FOLLOW_SHORTCUT}`);
+    setPreviewShortcutIsInvalid(false);
   }
 
   return (
@@ -748,6 +775,35 @@ export function UserSettingsForm({
             previewTestId="assistant-font-preview"
           />
         </div>
+      </section>
+      <section className="settings-section compact-settings-section shortcut-settings-section">
+        <div>
+          <h3>快捷键</h3>
+          <p>设置后按组合键即可让渲染区跟随当前编辑位置。</p>
+        </div>
+        <div className="shortcut-setting-row">
+          <label>
+            渲染区跟随编辑位置
+            <input
+              aria-invalid={previewShortcutIsInvalid || undefined}
+              aria-label="渲染区跟随编辑位置"
+              data-testid="preview-follow-shortcut-input"
+              onFocus={() => setPreviewShortcutFeedback(null)}
+              onKeyDown={recordPreviewFollowShortcut}
+              readOnly
+              value={draft.previewFollowShortcut ?? DEFAULT_PREVIEW_FOLLOW_SHORTCUT}
+            />
+            <small className="muted">按当前编辑块和光标行定位渲染区；录制时直接按新的组合键。</small>
+          </label>
+          <button className="drawer-secondary-action" onClick={restorePreviewFollowShortcut} type="button">
+            恢复默认
+          </button>
+        </div>
+        {previewShortcutFeedback ? (
+          <p className="muted shortcut-feedback" data-testid="preview-shortcut-feedback" role="status">
+            {previewShortcutFeedback}
+          </p>
+        ) : null}
       </section>
       <section className="settings-section">
         <div>
@@ -854,7 +910,12 @@ export function UserSettingsForm({
       </section>
       <div className="settings-footer">
         <p className="muted">修改笔记所在位置后，新读取和新建 Session 会使用该目录；旧目录不会自动搬迁。</p>
-        <button className="drawer-action" disabled={!hasNativeApi} onClick={() => onSave?.(draft)} type="button">
+        <button
+          className="drawer-action"
+          disabled={!hasNativeApi}
+          onClick={() => onSave?.({ ...draft, previewFollowShortcut: draft.previewFollowShortcut ?? DEFAULT_PREVIEW_FOLLOW_SHORTCUT })}
+          type="button"
+        >
           保存设置
         </button>
       </div>

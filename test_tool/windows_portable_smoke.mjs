@@ -118,6 +118,8 @@ async function removeWithRetry(target) {
 async function assertReleaseFiles(packagedRoot) {
   const required = [
     "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
     "SECURITY.md",
     "首次运行说明.txt",
     "windows-sbom.cdx.json",
@@ -127,6 +129,10 @@ async function assertReleaseFiles(packagedRoot) {
     path.join("resources", "MathNotesPWA", "sw.js")
   ];
   for (const relativePath of required) await access(path.join(packagedRoot, relativePath));
+  const notices = await readFile(path.join(packagedRoot, "THIRD_PARTY_NOTICES.md"), "utf8");
+  if (!notices.includes("## CodeMirror 6") || !notices.includes("MIT License") || !notices.includes("Marijn Haverbeke")) {
+    throw new Error("Portable package is missing the human-readable CodeMirror MIT notice");
+  }
   const locales = (await readdir(path.join(packagedRoot, "locales"))).sort();
   if (locales.join(",") !== "en-US.pak,zh-CN.pak") {
     throw new Error(`Portable package retained unexpected Chromium locales: ${locales.join(",")}`);

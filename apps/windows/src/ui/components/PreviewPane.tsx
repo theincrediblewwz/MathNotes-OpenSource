@@ -36,12 +36,48 @@ export type PreviewSourceLocationInput = {
 
 type PreviewPaneProps = {
   blocks: RenderBlock[];
+  focusRequest?: PreviewFocusRequest | null;
   forceStatic?: boolean;
   sessionDir?: string;
   onLocateSource: (location: PreviewSourceLocationInput) => void;
   onHover: (event: MouseEvent<HTMLElement>, block: RenderBlock, location: PreviewSourceLocationInput) => void;
   onLeave: () => void;
 };
+
+export type PreviewFocusRequest = PreviewSourceLocationInput & {
+  nonce: number;
+};
+
+export type PreviewFocusTarget = {
+  index: number;
+  ratio: number;
+};
+
+export function findPreviewFocusTarget(
+  blocks: readonly RenderBlock[],
+  request: PreviewSourceLocationInput
+): PreviewFocusTarget | null {
+  const requestedLine = request.lineInBlock ?? 1;
+  let best: { index: number; distance: number; startLine: number; segmentLines: number } | null = null;
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (block.sourceBlockId !== request.blockId && block.sourceId !== request.sourceId) continue;
+    const startLine = block.sourceBlockLine ?? block.sourceLine ?? 1;
+    const segmentLines = Math.max(1, String(block.markdown ?? "").split("\n").length);
+    const endLine = startLine + segmentLines - 1;
+    const distance = requestedLine < startLine
+      ? startLine - requestedLine
+      : requestedLine > endLine ? requestedLine - endLine : 0;
+    if (!best || distance < best.distance) best = { index, distance, startLine, segmentLines };
+  }
+
+  if (!best) return null;
+  return {
+    index: best.index,
+    ratio: Math.max(0, Math.min(1, (requestedLine - best.startLine) / Math.max(1, best.segmentLines - 1)))
+  };
+}
 
 export type PreviewLabVirtualLayout = {
   heights: number[];
@@ -149,7 +185,7 @@ markdownParser.renderer.rules.fence = (tokens, index, options, env, self) => {
   return rendered.replace("<pre", `<pre class="preview-code-block"${language}`);
 };
 
-export function PreviewPane({ blocks, forceStatic = false, sessionDir, onLocateSource, onHover, onLeave }: PreviewPaneProps) {
+export function PreviewPane({ blocks, focusRequest, forceStatic = false, sessionDir, onLocateSource, onHover, onLeave }: PreviewPaneProps) {
   const pointerGesture = useRef<{ pointerId: number; x: number; y: number; scrollInteraction: boolean } | null>(null);
   const previewRootRef = useRef<HTMLDivElement | null>(null);
   const previewArticleRef = useRef<HTMLElement | null>(null);
@@ -180,6 +216,47 @@ export function PreviewPane({ blocks, forceStatic = false, sessionDir, onLocateS
     start: 0,
     end: Math.min(blocks.length, previewLabSegmentSize * 2)
   }));
+  const focusTarget = useMemo(
+    () => focusRequest ? findPreviewFocusTarget(blocks, focusRequest) : null,
+    [blocks, focusRequest]
+  );
+
+  useEffect(() => {
+    const root = previewRootRef.current;
+    if (!root || !focusRequest || !focusTarget) return;
+    let frame: number | null = null;
+    let attempt = 0;
+    const alignMountedTarget = () => {
+      frame = null;
+      const element = root.querySelector<HTMLElement>(`[data-preview-index="${focusTarget.index}"]`);
+      if (!element) {
+        if (attempt < 4) {
+          attempt += 1;
+          frame = window.requestAnimationFrame(alignMountedTarget);
+        }
+        return;
+      }
+      const rootRect = root.getBoundingClientRect();
+      const targetRect = element.getBoundingClientRect();
+      const targetTop = root.scrollTop
+        + targetRect.top
+        - rootRect.top
+        + targetRect.height * focusTarget.ratio
+        - root.clientHeight * 0.38;
+      root.scrollTo({ top: Math.max(0, targetTop), behavior: "auto" });
+    };
+
+    if (!root.querySelector(`[data-preview-index="${focusTarget.index}"]`)) {
+      root.scrollTo({
+        top: Math.max(0, estimatedPreviewLayout.offsets[focusTarget.index] ?? 0),
+        behavior: "auto"
+      });
+    }
+    frame = window.requestAnimationFrame(alignMountedTarget);
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [estimatedPreviewLayout.offsets, focusRequest?.nonce, focusTarget]);
 
   useEffect(() => {
     previewLayoutRef.current = previewLayout;
@@ -348,7 +425,14 @@ export function PreviewPane({ blocks, forceStatic = false, sessionDir, onLocateS
   ) {
     return (
       <section
-        className={["render-block", block.className].filter(Boolean).join(" ")}
+        className={[
+          "render-block",
+          block.className,
+          focusTarget?.index === previewIndex ? "preview-locating" : undefined,
+          focusTarget?.index === previewIndex
+            ? (focusRequest!.nonce % 2 === 0 ? "preview-locating-even" : "preview-locating-odd")
+            : undefined
+        ].filter(Boolean).join(" ")}
         data-block-id={block.sourceBlockId ?? block.sourceId}
         data-display-block={block.sourceBlockId ?? block.sourceId}
         data-index={previewTanStackLab ? previewIndex : undefined}
@@ -356,6 +440,7 @@ export function PreviewPane({ blocks, forceStatic = false, sessionDir, onLocateS
         data-line-count={block.sourceBlockLineCount}
         data-line-in-block={block.sourceBlockLine}
         data-preview-index={previewIndex}
+        data-preview-locating={focusTarget?.index === previewIndex ? "true" : undefined}
         data-preview-measure-key={previewMeasuredWindowingLab ? block.id : undefined}
         data-source={block.sourceId}
         data-testid="render-block"

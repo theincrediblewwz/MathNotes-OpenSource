@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultAssistantFontFamily, defaultPreviewFontFamily } from "../common/defaultUserSettings";
+import { DEFAULT_PREVIEW_FOLLOW_SHORTCUT } from "../common/keyboardShortcuts";
 import { readUserSettings, writeUserSettings } from "./userSettingsStore";
 
 describe("userSettingsStore", () => {
@@ -32,7 +33,51 @@ describe("userSettingsStore", () => {
       assistantFontSize: 16,
       themeId: "default_light",
       locale: "zh-CN",
-      showCodexAssistant: true
+      showCodexAssistant: true,
+      previewFollowShortcut: DEFAULT_PREVIEW_FOLLOW_SHORTCUT
+    });
+  });
+
+  it("migrates missing or invalid preview-follow shortcuts to the default", async () => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(join(userDataDir, "settings"), { recursive: true });
+    await writeFile(
+      join(userDataDir, "settings", "app.json"),
+      JSON.stringify({ notesRootDir: "D:/Notes", previewFollowShortcut: "T" }),
+      "utf8"
+    );
+
+    await expect(readUserSettings({ userDataDir, fallbackNotesRootDir: "C:/notes" })).resolves.toMatchObject({
+      previewFollowShortcut: "Alt+T"
+    });
+  });
+
+  it("normalizes and persists the preview-follow shortcut", async () => {
+    await writeUserSettings({
+      userDataDir,
+      settings: {
+        notesRootDir: "D:/MyMathNotes",
+        defaultExportDir: "D:/Exports",
+        sourceFontFamily: "JetBrains Mono",
+        sourceFontSize: 15,
+        previewFontFamily: "LXGW WenKai",
+        previewFontSize: 18,
+        assistantFontFamily: "Microsoft YaHei UI",
+        assistantFontSize: 20,
+        themeId: "dark",
+        locale: "en-US",
+        showCodexAssistant: false,
+        previewFollowShortcut: "meta+shift+ctrl+alt+t"
+      }
+    });
+
+    await expect(
+      readUserSettings({
+        userDataDir,
+        fallbackNotesRootDir: "C:/notes"
+      })
+    ).resolves.toMatchObject({
+      previewFollowShortcut: "Ctrl+Alt+Shift+Meta+T"
     });
   });
 

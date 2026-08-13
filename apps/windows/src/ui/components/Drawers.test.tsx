@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MoreDrawer, NotebookDrawer, SettingsModal, UserSettingsForm } from "./Drawers";
 import { defaultAssistantFontFamily, defaultPreviewFontFamily } from "../../common/defaultUserSettings";
+import { DEFAULT_PREVIEW_FOLLOW_SHORTCUT } from "../../common/keyboardShortcuts";
 import { createEmptyNotationProfileConfig } from "../../common/notationProfiles";
 import { defaultMathPromptTemplate } from "../../common/promptTemplates";
 
@@ -16,7 +17,8 @@ const settings = {
   assistantFontSize: 16,
   themeId: "default_light" as const,
   locale: "zh-CN" as const,
-  showCodexAssistant: true
+  showCodexAssistant: true,
+  previewFollowShortcut: DEFAULT_PREVIEW_FOLLOW_SHORTCUT
 };
 
 describe("NotebookDrawer", () => {
@@ -227,6 +229,55 @@ describe("MoreDrawer", () => {
 });
 
 describe("UserSettingsForm", () => {
+  it("renders the compact preview-follow shortcut recorder with the default", () => {
+    render(<UserSettingsForm hasNativeApi settings={settings} />);
+
+    expect(screen.getByRole("heading", { name: "快捷键" })).toBeTruthy();
+    const input = screen.getByLabelText("渲染区跟随编辑位置") as HTMLInputElement;
+    expect(input.readOnly).toBe(true);
+    expect(input.value).toBe("Alt+T");
+    expect(screen.getByText(/按当前编辑块和光标行定位渲染区/)).toBeTruthy();
+  });
+
+  it("records a valid shortcut and saves the normalized draft", () => {
+    const onSave = vi.fn();
+
+    render(<UserSettingsForm hasNativeApi onSave={onSave} settings={settings} />);
+
+    const input = screen.getByLabelText("渲染区跟随编辑位置") as HTMLInputElement;
+    fireEvent.keyDown(input, { ctrlKey: true, key: "t", shiftKey: true });
+
+    expect(input.value).toBe("Ctrl+Shift+T");
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ previewFollowShortcut: "Ctrl+Shift+T" }));
+  });
+
+  it("rejects invalid shortcuts with accessible feedback and keeps the draft", () => {
+    render(<UserSettingsForm hasNativeApi settings={settings} />);
+
+    const input = screen.getByLabelText("渲染区跟随编辑位置") as HTMLInputElement;
+    fireEvent.keyDown(input, { key: "T" });
+    expect(input.value).toBe("Alt+T");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByTestId("preview-shortcut-feedback").textContent).toContain("无效快捷键");
+
+    fireEvent.keyDown(input, { altKey: true, key: "Alt" });
+    expect(input.value).toBe("Alt+T");
+    expect(screen.getByTestId("preview-shortcut-feedback").textContent).toContain("不能只按修饰键");
+  });
+
+  it("restores the default preview-follow shortcut", () => {
+    render(<UserSettingsForm hasNativeApi settings={settings} />);
+
+    const input = screen.getByLabelText("渲染区跟随编辑位置") as HTMLInputElement;
+    fireEvent.keyDown(input, { key: "F2" });
+    expect(input.value).toBe("F2");
+
+    fireEvent.click(screen.getByRole("button", { name: "恢复默认" }));
+    expect(input.value).toBe("Alt+T");
+    expect(screen.getByTestId("preview-shortcut-feedback").textContent).toContain("已恢复默认 Alt+T");
+  });
+
   it("creates a notes-only backup from settings", () => {
     const onCreateBackup = vi.fn();
 

@@ -235,6 +235,53 @@ describe("SessionSourceEditor", () => {
     expect(screen.queryByTestId("editor-context-menu")).toBeNull();
   });
 
+  it("reports the active block and caret line when CodeMirror gains focus", async () => {
+    Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () =>
+      ({ bottom: 0, height: 0, left: 0, right: 0, top: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    const onCaretLocationChange = vi.fn();
+    const document: SessionSourceDocument = {
+      text: ["--- source: user | block: 0042 ---", "第一行", "第二行", "第三行"].join("\n"),
+      markdownBlocks: [{
+        blockId: "0042",
+        sourceId: "src-0042",
+        path: "blocks/0042_user_note.md",
+        source: "user",
+        header: "user",
+        locked: false
+      }]
+    };
+    const { container } = render(
+      <SessionSourceEditor
+        document={document}
+        insertMarkdownRequest={null}
+        locatingRequest={null}
+        lockSelectionRequest={0}
+        unlockProtectedSpanRequest={0}
+        value={document.text}
+        onActiveBlockChange={vi.fn()}
+        onCaretLocationChange={onCaretLocationChange}
+        onChange={vi.fn()}
+        onDeleteBlockRequest={vi.fn()}
+        onProtectedSpanUnlockableChange={vi.fn()}
+        onProtectedSpanUnlocked={vi.fn()}
+        onSelectionLockableChange={vi.fn()}
+        onSelectionLocked={vi.fn()}
+        onSourceReferenceClick={vi.fn()}
+      />
+    );
+
+    await waitFor(() => expect(container.querySelector(".cm-content")).toBeTruthy());
+    fireEvent.focus(container.querySelector(".cm-content") as HTMLElement);
+    await waitFor(() => expect(onCaretLocationChange).toHaveBeenLastCalledWith({
+      blockId: "0042",
+      displayBlockId: "0042",
+      lineCount: 3,
+      lineInBlock: 1,
+      sourceId: "src-0042"
+    }));
+  });
+
   it("keeps small sessions and sessions with a very long block in normal document flow", () => {
     expect(getTanStackSourceWindowingFallbackReason(["one", "two"])).toBe("small-session");
     expect(getTanStackSourceWindowingEffectiveMode(["one", "two"])).toBe("off");
