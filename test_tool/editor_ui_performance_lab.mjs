@@ -22,6 +22,8 @@ const virtualInputReliabilityRepeats = Math.max(
 const requestedFixtureProfile = cliOptions.get("fixture-profile") ?? process.env.EDITOR_UI_FIXTURE_PROFILE;
 const fixtureProfile = requestedFixtureProfile === "mixed-media"
   ? "mixed-media"
+  : requestedFixtureProfile === "single-long"
+    ? "single-long"
   : requestedFixtureProfile === "heterogeneous"
     ? "heterogeneous"
     : "uniform";
@@ -33,6 +35,10 @@ const sourceOverscan = Math.max(
   Math.min(16, Number.parseInt(cliOptions.get("source-overscan") ?? process.env.EDITOR_UI_SOURCE_OVERSCAN ?? "8", 10) || 8)
 );
 const sourceScrollShell = (cliOptions.get("source-scroll-shell") ?? process.env.EDITOR_UI_SOURCE_SCROLL_SHELL) === "1";
+const sourceScrollDirectionMs = Math.max(
+  120,
+  Number.parseInt(cliOptions.get("scroll-direction-ms") ?? process.env.EDITOR_UI_SCROLL_DIRECTION_MS ?? "200", 10) || 200
+);
 const layoutAnchor = (cliOptions.get("layout-anchor") ?? process.env.EDITOR_UI_LAYOUT_ANCHOR) === "1";
 const productDefaults = (cliOptions.get("product-defaults") ?? process.env.EDITOR_UI_PRODUCT_DEFAULTS) === "1";
 const outputPath = path.resolve(
@@ -95,6 +101,7 @@ const report = {
     dynamicOverscanPx: 1200,
     sourceOverscan: productDefaults ? "product-default" : sourceOverscan,
     sourceScrollShell: productDefaults ? "product-default" : sourceScrollShell,
+    sourceScrollDirectionMs,
     productDefaults,
     fixtureProfile,
     virtualInputReliabilityRepeats,
@@ -110,7 +117,7 @@ const report = {
       stages: ["source-commit", "source-two-frame-paint", "preview-commit", "preview-two-frame-paint", "long-task"]
     },
     note: experiment === "scroll-blank"
-      ? "Synthetic notes root only. The regression retains real CodeMirror editors for every mounted TanStack item while dragging, including when an older profile has the retired source-scroll-shell setting persisted."
+      ? "Synthetic notes root only. The regression dispatches physical-speed CDP scrollbar input without awaiting the renderer between steps, samples blank CodeMirror gaps during the drag, and checks the safe normal-flow fallback used by very long blocks."
       : "Synthetic notes root only. All prototypes are disabled in normal product runs. The virtual source variant estimates the complete scroll range and hydrates the precise visible range from cached EditorState after scrolling settles. The combined measured variant calibrates preview block heights with one ResizeObserver, batches measurements per animation frame, and compensates scrollTop when heights above the visible anchor change."
   },
   results
@@ -600,7 +607,7 @@ async function measureSourceScrollbarBlankRegression({ blockCount, notesRoot, pa
   await page.waitForFunction(
     () => {
       const scroller = document.querySelector("[data-testid='session-source-editor']");
-      return scroller?.getAttribute("data-editor-windowing-lab") === "tanstack-virtual" &&
+      return scroller?.getAttribute("data-editor-windowing-requested") === "tanstack-virtual" &&
         document.querySelectorAll("[data-testid='source-block-editor'] .cm-editor").length > 0;
     },
     undefined,
@@ -611,6 +618,9 @@ async function measureSourceScrollbarBlankRegression({ blockCount, notesRoot, pa
   if (!box) throw new Error("Source scrollbar regression scroller is not visible");
   const scrollBefore = await scroller.evaluate((element) => ({
     clientHeight: element.clientHeight,
+    effectiveEditorMode: element.dataset.editorWindowingLab ?? null,
+    fallbackReason: element.dataset.editorWindowingFallback ?? null,
+    requestedEditorMode: element.dataset.editorWindowingRequested ?? null,
     scrollHeight: element.scrollHeight,
     scrollTop: element.scrollTop
   }));
@@ -618,42 +628,158 @@ async function measureSourceScrollbarBlankRegression({ blockCount, notesRoot, pa
     throw new Error("Source scrollbar regression fixture is not scrollable");
   }
 
-  let actualDragDistance = 0;
-  let bottomTouches = 0;
-  let topTouches = 0;
-  const edgeStates = [];
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => {
+    const source = document.querySelector("[data-testid='session-source-editor']");
+    if (!(source instanceof HTMLElement)) throw new Error("Source scroller missing");
+    const probe = {
+      active: true,
+      frames: [],
+      longTasks: [],
+      observer: null,
+      previousFrameAt: performance.now(),
+      scrolls: []
+    };
+    source.addEventListener("scroll", () => {
+      probe.scrolls.push({ atEpoch: performance.timeOrigin + performance.now(), scrollTop: source.scrollTop });
+    }, { passive: true });
+    if (typeof PerformanceObserver !== "undefined") {
+      probe.observer = new PerformanceObserver((list) => {
+        probe.longTasks.push(...list.getEntries().map((entry) => ({ at: entry.startTime, duration: entry.duration })));
+      });
+      probe.observer.observe({ entryTypes: ["longtask"] });
+    }
+    const intersectHeight = (rect, viewport) => Math.max(
+      0,
+      Math.min(rect.bottom, viewport.bottom) - Math.max(rect.top, viewport.top)
+    );
+    const frame = (now) => {
+      if (!probe.active) return;
+      const viewport = source.getBoundingClientRect();
+      const gaps = [...source.querySelectorAll(".cm-gap")]
+        .map((element) => intersectHeight(element.getBoundingClientRect(), viewport));
+      const visibleLines = [...source.querySelectorAll(".cm-line")]
+        .filter((element) => intersectHeight(element.getBoundingClientRect(), viewport) > 0).length;
+      probe.frames.push({
+        at: now,
+        clientHeight: source.clientHeight,
+        dt: now - probe.previousFrameAt,
+        maxGapPx: gaps.length ? Math.max(...gaps) : 0,
+        scrollTop: source.scrollTop,
+        visibleLines
+      });
+      probe.previousFrameAt = now;
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+    window.__mathNotesFastScrollbarProbe = probe;
+  });
+
   const thumbHeight = Math.max(24, (scrollBefore.clientHeight / scrollBefore.scrollHeight) * box.height);
   const topThumbCenter = box.y + thumbHeight / 2;
-  const topClampY = box.y - 24;
-  const bottomClampY = box.y + box.height + 24;
+  // Keep the pointer inside the native scrollbar track. Leaving the BrowserWindow
+  // can make Chromium release scrollbar capture, which measures the automation
+  // harness instead of the editor.
+  const topClampY = box.y + 2;
+  const bottomClampY = box.y + box.height - 2;
   const scrollbarX = box.x + box.width - 3;
-  const slowMove = async (fromY, toY) => {
-    for (let step = 1; step <= 120; step += 1) {
-      await page.mouse.move(scrollbarX, fromY + ((toY - fromY) * step) / 120);
-      await page.waitForTimeout(8);
+  const cdp = await page.context().newCDPSession(page);
+  const directionDurationMs = sourceScrollDirectionMs;
+  const dragCycles = 4;
+  const dragRepetitions = 3;
+  const endpointHoldMs = 24;
+  const stepsPerDirection = 24;
+  const endpointMarks = [];
+  const dispatch = (params) => cdp.send("Input.dispatchMouseEvent", {
+    ...params,
+    timestamp: Date.now() / 1000
+  });
+  const moveAtPhysicalSpeed = async (fromY, toY, kind, repetition, pendingDispatches) => {
+    const directionStartedAt = Date.now();
+    for (let step = 1; step <= stepsPerDirection; step += 1) {
+      const dueAt = directionStartedAt + (directionDurationMs * step) / stepsPerDirection;
+      const waitMs = Math.max(0, dueAt - Date.now());
+      if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+      const y = fromY + ((toY - fromY) * step) / stepsPerDirection;
+      pendingDispatches.push(dispatch({ type: "mouseMoved", x: scrollbarX, y, button: "left", buttons: 1 }));
     }
+    const endpointSentAtEpoch = Date.now();
+    pendingDispatches.push(dispatch({ type: "mouseMoved", x: scrollbarX, y: toY, button: "left", buttons: 1 }));
+    await new Promise((resolve) => setTimeout(resolve, endpointHoldMs));
+    endpointMarks.push({
+      kind,
+      repetition,
+      sentAtEpoch: endpointSentAtEpoch,
+      startedAtEpoch: directionStartedAt
+    });
   };
   await scroller.evaluate((element) => { element.scrollTop = 0; });
-  for (let cycle = 0; cycle < 4; cycle += 1) {
-    await page.mouse.move(scrollbarX, topThumbCenter);
-    await page.mouse.down();
-    await slowMove(topThumbCenter, bottomClampY);
-    await page.waitForTimeout(60);
-    const bottomState = await scroller.evaluate((element) => ({
-      bottomDistance: element.scrollHeight - element.clientHeight - element.scrollTop,
-      scrollTop: element.scrollTop
-    }));
-    actualDragDistance = Math.max(actualDragDistance, bottomState.scrollTop);
-    if (bottomState.bottomDistance <= 2) bottomTouches += 1;
-
-    await slowMove(bottomClampY, topClampY);
-    await page.waitForTimeout(60);
-    const topState = await scroller.evaluate((element) => element.scrollTop);
-    await page.mouse.up();
+  const dragStartedAt = Date.now();
+  for (let repetition = 0; repetition < dragRepetitions; repetition += 1) {
+    const pendingDispatches = [];
+    await scroller.evaluate((element) => { element.scrollTop = 0; });
+    await dispatch({ type: "mouseMoved", x: scrollbarX, y: topThumbCenter, button: "none", buttons: 0 });
+    await dispatch({ type: "mousePressed", x: scrollbarX, y: topThumbCenter, button: "left", buttons: 1, clickCount: 1 });
+    for (let cycle = 0; cycle < dragCycles; cycle += 1) {
+      await moveAtPhysicalSpeed(cycle === 0 ? topThumbCenter : topClampY, bottomClampY, "bottom", repetition, pendingDispatches);
+      await moveAtPhysicalSpeed(bottomClampY, topClampY, "top", repetition, pendingDispatches);
+    }
+    pendingDispatches.push(dispatch({ type: "mouseReleased", x: scrollbarX, y: topClampY, button: "left", buttons: 0, clickCount: 1 }));
+    await Promise.all(pendingDispatches);
     await page.waitForTimeout(80);
-    if (topState <= 2) topTouches += 1;
-    edgeStates.push({ bottomDistance: bottomState.bottomDistance, bottomScrollTop: bottomState.scrollTop, topScrollTop: topState });
   }
+  const dragDurationMs = Date.now() - dragStartedAt;
+  await page.waitForTimeout(420);
+  const fastProbe = await page.evaluate(() => {
+    const probe = window.__mathNotesFastScrollbarProbe;
+    probe.active = false;
+    probe.observer?.disconnect();
+    const frames = probe.frames.slice(2);
+    const frameIntervals = frames.map((frame) => frame.dt).sort((left, right) => left - right);
+    const quantile = (ratio) => frameIntervals[Math.min(frameIntervals.length - 1, Math.floor(frameIntervals.length * ratio))] ?? 0;
+    let consecutiveBad = 0;
+    let maxConsecutiveBadFrames = 0;
+    for (const frame of frames) {
+      if (frame.maxGapPx > frame.clientHeight * 0.25 && frame.visibleLines <= 1) {
+        consecutiveBad += 1;
+        maxConsecutiveBadFrames = Math.max(maxConsecutiveBadFrames, consecutiveBad);
+      } else {
+        consecutiveBad = 0;
+      }
+    }
+    return {
+      frameCount: frames.length,
+      frameMaxMs: frameIntervals.at(-1) ?? 0,
+      frameP95Ms: quantile(0.95),
+      longTasks: probe.longTasks,
+      maxConsecutiveBadFrames,
+      maxGapPx: Math.max(0, ...frames.map((frame) => frame.maxGapPx)),
+      minVisibleLines: Math.min(...frames.map((frame) => frame.visibleLines)),
+      scrolls: probe.scrolls
+    };
+  });
+  const maxScrollTop = scrollBefore.scrollHeight - scrollBefore.clientHeight;
+  const endpointLatencies = endpointMarks.map((mark, index) => {
+    const nextEndpointAt = endpointMarks[index + 1]?.sentAtEpoch ?? Number.POSITIVE_INFINITY;
+    const reached = fastProbe.scrolls.find((event) => event.atEpoch >= mark.startedAtEpoch && event.atEpoch < nextEndpointAt && (
+      mark.kind === "bottom" ? event.scrollTop >= maxScrollTop * 0.98 : event.scrollTop <= maxScrollTop * 0.02
+    ));
+    return { ...mark, latencyMs: reached ? Math.max(0, reached.atEpoch - mark.sentAtEpoch) : null };
+  });
+  const bottomTouches = endpointLatencies.filter((entry) => entry.kind === "bottom" && entry.latencyMs !== null).length;
+  const topTouches = endpointLatencies.filter((entry) => entry.kind === "top" && entry.latencyMs !== null).length;
+  const expectedTouches = dragCycles * dragRepetitions;
+  const reachedEndpointLatencies = endpointLatencies
+    .map((entry) => entry.latencyMs)
+    .filter((latency) => latency !== null)
+    .sort((left, right) => left - right);
+  const endpointLatencyP95Ms = reachedEndpointLatencies[
+    Math.min(reachedEndpointLatencies.length - 1, Math.floor(reachedEndpointLatencies.length * 0.95))
+  ] ?? Number.POSITIVE_INFINITY;
+  const endpointLatencyMaxMs = reachedEndpointLatencies.at(-1) ?? Number.POSITIVE_INFINITY;
+  const actualDragDistance = Math.max(0, ...fastProbe.scrolls.map((entry) => entry.scrollTop));
+  delete fastProbe.scrolls;
+
   await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight * 0.68; });
   await waitForIdleFrames(page, 20);
   const stableHeights = [];
@@ -696,8 +822,11 @@ async function measureSourceScrollbarBlankRegression({ blockCount, notesRoot, pa
   await page.screenshot({ path: screenshotPath, fullPage: false });
 
   if (actualDragDistance <= 0) throw new Error("Native source scrollbar drag did not move the scroller");
-  if (bottomTouches !== 4 || topTouches !== 4) {
-    throw new Error(`Slow scrollbar round trips did not touch both edges (bottom=${bottomTouches}/4 top=${topTouches}/4 states=${JSON.stringify(edgeStates)})`);
+  if (bottomTouches !== expectedTouches || topTouches !== expectedTouches) {
+    throw new Error(`Physical-speed scrollbar round trips did not touch both edges (bottom=${bottomTouches}/${expectedTouches} top=${topTouches}/${expectedTouches} endpoints=${JSON.stringify(endpointLatencies)})`);
+  }
+  if (endpointLatencyP95Ms > 50 || endpointLatencyMaxMs > 100) {
+    throw new Error(`Source scrollbar endpoint tracking exceeded the latency budget (p95=${round(endpointLatencyP95Ms)}ms max=${round(endpointLatencyMaxMs)}ms endpoints=${JSON.stringify(endpointLatencies)})`);
   }
   if (JSON.stringify(afterFiles) !== JSON.stringify(beforeFiles)) throw new Error("Source scrollbar changed persisted Markdown bytes");
   if (geometry.staticSourceCount !== 0) throw new Error(`Retired scrolling shell remounted ${geometry.staticSourceCount} static sources`);
@@ -708,6 +837,16 @@ async function measureSourceScrollbarBlankRegression({ blockCount, notesRoot, pa
   if (maxBlankTailPx > 12) throw new Error(`Visible source block blank tail reached ${maxBlankTailPx}px`);
   const heightDriftPx = Math.max(...stableHeights) - Math.min(...stableHeights);
   if (heightDriftPx > 2) throw new Error(`Source scroll height kept drifting after settle (${heightDriftPx}px)`);
+  if (fastProbe.maxConsecutiveBadFrames > 1) {
+    throw new Error(`Source editor exposed a blank viewport during physical-speed drag (${JSON.stringify(fastProbe)})`);
+  }
+  if (fastProbe.frameP95Ms > 34 || fastProbe.frameMaxMs > 100) {
+    throw new Error(`Source scrollbar did not track at interactive frame cadence (${JSON.stringify(fastProbe)})`);
+  }
+  const longTasksOver100Ms = fastProbe.longTasks.filter((entry) => entry.duration > 100);
+  if (longTasksOver100Ms.length > 0) {
+    throw new Error(`Source scrollbar drag produced long tasks over 100ms (${JSON.stringify(longTasksOver100Ms)})`);
+  }
   if (runtimeErrors.length > 0) throw new Error(`Electron runtime errors: ${runtimeErrors.join(" | ")}`);
 
   process.stdout.write(`[editor ui lab] ${blockCount}: source scrollbar blank regression passed\n`);
@@ -716,7 +855,16 @@ async function measureSourceScrollbarBlankRegression({ blockCount, notesRoot, pa
     sourceScrollbarBlankRegression: {
       actualDragDistance: round(actualDragDistance),
       bottomTouches,
-      edgeStates,
+      dragCycles,
+      dragDurationMs,
+      dragRepetitions,
+      endpointHoldMs,
+      endpointLatencyMaxMs: round(endpointLatencyMaxMs),
+      endpointLatencyP95Ms: round(endpointLatencyP95Ms),
+      effectiveEditorMode: scrollBefore.effectiveEditorMode,
+      endpointLatencies,
+      fallbackReason: scrollBefore.fallbackReason,
+      fastProbe,
       maxBlankTailPx: round(maxBlankTailPx),
       mountedEditorCount: geometry.mountedEditorCount,
       persistedMarkdownFiles: beforeFiles.length,
@@ -3104,6 +3252,15 @@ async function writeSessionFixture(rootDir, blockCount, profile) {
 }
 
 function buildMarkdownBlock(index, profile, protectedBlockId = null) {
+  if (profile === "single-long" && index === 1) {
+    const markdown = [];
+    for (let line = 1; line <= 776; line += 1) {
+      if (line % 7 === 0) markdown.push("");
+      else if (line % 19 === 0) markdown.push(`第 ${line} 行：$\\|T_${line}x\\| \\le C_${line}\\|x\\|$，用于复现单个超长识别块的滚动测量。`);
+      else markdown.push(`第 ${line} 行：保持长篇数学材料的原始顺序，并验证快速拖动时编辑区仍持续显示合成文本。`);
+    }
+    return { markdown: markdown.join("\n"), lock: null };
+  }
   const markdown = [
     `### 定理 ${index}：有界算子与紧性`,
     "",

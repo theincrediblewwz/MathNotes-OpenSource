@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-13T05:21:04.140Z",
+  "generatedAt": "2026-08-13T06:51:12.331Z",
   "fileCount": 662,
-  "snapshotSha256": "2d3dd4f702abfab6cb7596cdc26ee9dc20e4c14f44cdffbe7e5215f45d2c6961",
+  "snapshotSha256": "9f9ffe21f36b629bea84e79e2bc0852247ff08efec7cbe73a3fa4333cc1ef928",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -1333,8 +1333,8 @@
     },
     {
       "path": "apps/windows/package.json",
-      "bytes": 1867,
-      "sha256": "1f69a2553ef25ebe45fd36b9b47aacee12cc79696232f080b969c37aa3a7e604"
+      "bytes": 1902,
+      "sha256": "bf447e38230931494f1cdae3829d75455c5384f38c461954aa8589f015951937"
     },
     {
       "path": "apps/windows/src/App.test.tsx",
@@ -2133,23 +2133,23 @@
     },
     {
       "path": "apps/windows/src/ui/components/SessionSourceEditor.test.tsx",
-      "bytes": 24331,
-      "sha256": "38b4f1810ceeea0c16c644c66503c8f58cd2071820659fe076da6655b3dbbaf5"
+      "bytes": 25296,
+      "sha256": "cedebb9dcb485d445723627bb9242f19be0d9aa0ee783b11c21f04588dd2a0b5"
     },
     {
       "path": "apps/windows/src/ui/components/SessionSourceEditor.tsx",
-      "bytes": 70499,
-      "sha256": "f7ccf688f05acd5f83cd03f4544b4d62f96b635e713894b0a2349b51b83bf102"
+      "bytes": 72281,
+      "sha256": "4ea12f507900c330958eaa42eca5d742fd891e13ccfd55b95eac88fb6492dad0"
     },
     {
       "path": "apps/windows/src/ui/components/SourceTanStackLab.test.tsx",
-      "bytes": 2545,
-      "sha256": "b490b7e3041a94c09a1dca5c0124da4063eadc2ed8fd6087577efd27cbab6924"
+      "bytes": 2817,
+      "sha256": "f31dac0e71641bea8077e3800d61e574222765f6ec6ea909e4787d34686ed55b"
     },
     {
       "path": "apps/windows/src/ui/components/SourceTanStackLab.tsx",
-      "bytes": 4268,
-      "sha256": "481ea273b60ed9ab4c8ebfb9dbf308b99d8b716ae6f7671abc95ac718e2f1d3b"
+      "bytes": 4261,
+      "sha256": "697d5377b5c87770594d10a945439169a910f53f1def978163a38194387e8a57"
     },
     {
       "path": "apps/windows/src/ui/components/sessionSourceEditorModel.test.ts",
@@ -2333,13 +2333,13 @@
     },
     {
       "path": "package-lock.json",
-      "bytes": 354932,
-      "sha256": "f546ff664639e6445ee05ca3b00de206eb722d218cd9fba3ed7e206b5546613c"
+      "bytes": 354975,
+      "sha256": "efe35fef34a3de44e9bbf41aa6577c5bb2073b86609763e35538875311903d40"
     },
     {
       "path": "package.json",
-      "bytes": 8069,
-      "sha256": "5bcb28a9d95ee4a9e9ff7843e2aca4a0d1d265c490ca21182d4cd022beef0f4e"
+      "bytes": 8494,
+      "sha256": "35c59f95ac9a6e8b4a9cc7f8a125d1c6b038918b45d46ff8a6e65a863faad6c8"
     },
     {
       "path": "packages/core-server/package.json",
@@ -2998,8 +2998,8 @@
     },
     {
       "path": "test_tool/editor_ui_performance_lab.mjs",
-      "bytes": 143768,
-      "sha256": "7bb96b6d41a3e7d6c8724df7732bb44dc92ecd96d7a242cbe1eb10f17deaf54a"
+      "bytes": 152015,
+      "sha256": "88f97c2dffd82fe250630336edb9b5c289b9d81b14ffd25ebb683951fca1994d"
     },
     {
       "path": "test_tool/electron_actual_state_probe.mjs",

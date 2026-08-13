@@ -1,11 +1,11 @@
 import { render, waitFor } from "@testing-library/react";
-import { createRef } from "react";
+import { createRef, type CSSProperties } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { SourceTanStackLab } from "./SourceTanStackLab";
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: () => ({
-    getVirtualItems: () => [{ index: 0, start: 0 }],
+    getVirtualItems: () => [{ index: 0, start: 37 }],
     getTotalSize: () => 100,
     itemSizeCache: new Map(),
     measureElement: () => undefined,
@@ -73,5 +73,12 @@ describe("SourceTanStackLab preview locate handshake", () => {
       </div>
     );
     expect(renderItem).toHaveBeenCalledWith(block, 0, expect.any(Function), expect.any(Object));
+    const style = (renderItem.mock.calls as unknown as Array<[unknown, number, unknown, CSSProperties]>)[0]?.[3];
+    expect(style).toMatchObject({
+      position: "absolute",
+      top: 0,
+      transform: "translateY(37px)",
+      width: "100%"
+    });
   });
 });

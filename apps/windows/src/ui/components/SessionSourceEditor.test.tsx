@@ -7,6 +7,8 @@ import {
   buildPerformanceLabVirtualLayout,
   expandPerformanceLabVirtualRange,
   findPerformanceLabVirtualRange,
+  getTanStackSourceWindowingEffectiveMode,
+  getTanStackSourceWindowingFallbackReason,
   groupAssistantRemarksByBlockId,
   findEditorCaretTargetAtPoint,
   SessionSourceEditor,
@@ -231,6 +233,19 @@ describe("SessionSourceEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新识别这个块" }));
     expect(onRerecognizeBlockRequest).toHaveBeenCalledWith("0001");
     expect(screen.queryByTestId("editor-context-menu")).toBeNull();
+  });
+
+  it("keeps small sessions and sessions with a very long block in normal document flow", () => {
+    expect(getTanStackSourceWindowingFallbackReason(["one", "two"])).toBe("small-session");
+    expect(getTanStackSourceWindowingEffectiveMode(["one", "two"])).toBe("off");
+
+    const ordinaryBlocks = Array.from({ length: 13 }, (_, index) => `block ${index + 1}\nsecond line`);
+    expect(getTanStackSourceWindowingFallbackReason(ordinaryBlocks)).toBeNull();
+    expect(getTanStackSourceWindowingEffectiveMode(ordinaryBlocks)).toBe("tanstack-virtual");
+
+    const longBlock = Array.from({ length: 85 }, (_, index) => `line ${index + 1}`).join("\n");
+    expect(getTanStackSourceWindowingFallbackReason([...ordinaryBlocks.slice(0, 12), longBlock])).toBe("long-block");
+    expect(getTanStackSourceWindowingEffectiveMode([...ordinaryBlocks.slice(0, 12), longBlock])).toBe("off");
   });
 
   it("sends the exact UTF-16 selection to the AI edit callback from the editor context menu", async () => {
