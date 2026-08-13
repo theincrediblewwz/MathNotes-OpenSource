@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { packager } from "@electron/packager";
 import { createPackage, listPackage } from "@electron/asar";
+import { assertWindowsExecutableBrand, brandWindowsExecutable } from "./windows_executable_brand.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const windowsRoot = path.join(projectRoot, "apps", "windows");
@@ -97,12 +98,22 @@ try {
   await rename(path.join(fallbackRoot, "electron.exe"), path.join(fallbackRoot, "MathNotes.exe"));
   await rm(path.join(fallbackRoot, "resources", "default_app.asar"), { force: true });
   await createPackage(stageRoot, path.join(fallbackRoot, "resources", "app.asar"));
+  await brandWindowsExecutable(path.join(fallbackRoot, "MathNotes.exe"), {
+    iconPath: path.join(windowsRoot, "assets", "mathnotes.ico"),
+    version
+  });
   packagedPaths = [fallbackRoot];
-  console.warn(`PACKAGER_OFFLINE_FALLBACK=${error instanceof Error ? error.message : String(error)}`);
+  console.warn(`PACKAGER_OFFLINE_RESOURCE_EDIT_FALLBACK=${error instanceof Error ? error.message : String(error)}`);
 }
 
 if (packagedPaths.length !== 1) throw new Error(`Expected one packaged app, received ${packagedPaths.length}`);
 const packagedRoot = packagedPaths[0];
+const packagedExecutable = path.join(packagedRoot, "MathNotes.exe");
+const executableBrand = await assertWindowsExecutableBrand(packagedExecutable, {
+  iconPath: path.join(windowsRoot, "assets", "mathnotes.ico"),
+  version
+});
+console.log(`WINDOWS_EXE_BRAND_OK product=${executableBrand.productName} version=${executableBrand.version} icons=${executableBrand.iconCount} sha256=${executableBrand.executableSha256}`);
 const packagedLocalesRoot = path.join(packagedRoot, "locales");
 const retainedLocales = new Set(["en-US.pak", "zh-CN.pak"]);
 for (const localeFile of await readdir(packagedLocalesRoot)) {

@@ -181,7 +181,6 @@ const performanceLabOverscanPx = 1200;
 const performanceLabVirtualSegmentSize = 12;
 const performanceLabStorageKey = "mathnotes:editor-windowing-lab";
 const performanceLabSourceOverscanStorageKey = "mathnotes:source-overscan-lab";
-const performanceLabSourceScrollShellStorageKey = "mathnotes:source-scroll-shell-lab";
 const performanceLabVirtualHeaderHeight = 39;
 const performanceLabVirtualLineHeight = 24;
 
@@ -200,10 +199,6 @@ export function getEditorWindowingPerformanceLabMode(): EditorWindowingLabMode {
 function getSourceOverscanPerformanceLabValue() {
   const storedValue = Number.parseInt(window.localStorage?.getItem(performanceLabSourceOverscanStorageKey) ?? "", 10);
   return Number.isFinite(storedValue) ? Math.max(1, Math.min(16, storedValue)) : 2;
-}
-
-function getSourceScrollShellPerformanceLabValue() {
-  return window.localStorage?.getItem(performanceLabSourceScrollShellStorageKey) === "on";
 }
 
 export function buildPerformanceLabVirtualLayout(markdowns: readonly string[]): VirtualBlockLayout {
@@ -940,12 +935,11 @@ export function SessionSourceEditor({
     block: SessionSourceMarkdownBlock,
     blockIndex: number,
     measureElement?: RefCallback<HTMLElement>,
-    virtualStyle?: CSSProperties,
-    tanStackScrolling = false
+    virtualStyle?: CSSProperties
   ) => {
     const mountEditor =
       editorWindowingLabMode === "off" ||
-      (tanStackSourceWindowingLab && !tanStackScrolling) ||
+      tanStackSourceWindowingLab ||
       (editorWindowingLabMode === "finite" && blockIndex < performanceLabEditorViewLimit) ||
       (dynamicEditorWindowingLab && (
         dynamicVisibleBlockIds.has(block.blockId) ||
@@ -1040,7 +1034,6 @@ export function SessionSourceEditor({
             overscan={getSourceOverscanPerformanceLabValue()}
             renderItem={renderSourceBlock}
             scrollElementRef={editorScrollerRef}
-            staticWhileScrolling={getSourceScrollShellPerformanceLabValue()}
           />
         </Suspense>
       ) : (

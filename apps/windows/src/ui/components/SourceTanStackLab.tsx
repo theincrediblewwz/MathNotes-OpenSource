@@ -12,12 +12,10 @@ type SourceTanStackLabProps = {
     block: SessionSourceMarkdownBlock,
     index: number,
     measureElement: RefCallback<HTMLElement>,
-    style: CSSProperties,
-    scrolling: boolean
+    style: CSSProperties
   ) => ReactNode;
   scrollElementRef: RefObject<HTMLDivElement | null>;
   overscan?: number;
-  staticWhileScrolling?: boolean;
 };
 
 export function SourceTanStackLab({
@@ -28,8 +26,7 @@ export function SourceTanStackLab({
   onLocateMounted,
   renderItem,
   scrollElementRef,
-  overscan = 8,
-  staticWhileScrolling = false
+  overscan = 8
 }: SourceTanStackLabProps) {
   const lastLocateRequestRef = useRef("");
   const notifiedLocateRequestRef = useRef("");
@@ -108,7 +105,7 @@ export function SourceTanStackLab({
           top: 0,
           transform: `translateY(${virtualItem.start}px)`,
           width: "100%"
-        }, staticWhileScrolling && virtualizer.isScrolling);
+        });
       })}
     </div>
   );

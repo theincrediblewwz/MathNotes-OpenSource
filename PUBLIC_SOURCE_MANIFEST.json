@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-13T04:33:01.286Z",
-  "fileCount": 661,
-  "snapshotSha256": "c1785d335f3d8fc3250ef20d732aa84f4b3df5622b528f086371c7e494e13bba",
+  "generatedAt": "2026-08-13T05:21:04.140Z",
+  "fileCount": 662,
+  "snapshotSha256": "2d3dd4f702abfab6cb7596cdc26ee9dc20e4c14f44cdffbe7e5215f45d2c6961",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -2138,18 +2138,18 @@
     },
     {
       "path": "apps/windows/src/ui/components/SessionSourceEditor.tsx",
-      "bytes": 70881,
-      "sha256": "872d7e4e54ec2270d29c26d987cea4c9b3b6da5c4db8075a8217576c6f5e8ca6"
+      "bytes": 70499,
+      "sha256": "f7ccf688f05acd5f83cd03f4544b4d62f96b635e713894b0a2349b51b83bf102"
     },
     {
       "path": "apps/windows/src/ui/components/SourceTanStackLab.test.tsx",
-      "bytes": 1717,
-      "sha256": "67c1c2e57ce00f3593bbd45f2bea7589d3b449850d721eaaff0e904903a08fd0"
+      "bytes": 2545,
+      "sha256": "b490b7e3041a94c09a1dca5c0124da4063eadc2ed8fd6087577efd27cbab6924"
     },
     {
       "path": "apps/windows/src/ui/components/SourceTanStackLab.tsx",
-      "bytes": 4425,
-      "sha256": "a4478b9b670f9670727060013d17b77660793c70e5b01b46ec12f7afa6e3cb7b"
+      "bytes": 4268,
+      "sha256": "481ea273b60ed9ab4c8ebfb9dbf308b99d8b716ae6f7671abc95ac718e2f1d3b"
     },
     {
       "path": "apps/windows/src/ui/components/sessionSourceEditorModel.test.ts",
@@ -2333,13 +2333,13 @@
     },
     {
       "path": "package-lock.json",
-      "bytes": 354906,
-      "sha256": "c8108b232dc478b401107d6d6ce947fb88b52785480baee5ecb4de849b2df33a"
+      "bytes": 354932,
+      "sha256": "f546ff664639e6445ee05ca3b00de206eb722d218cd9fba3ed7e206b5546613c"
     },
     {
       "path": "package.json",
-      "bytes": 7815,
-      "sha256": "b8dc732a56613ee5b3d0141b5d72206fcfee459997784485fe27ea7298ddc579"
+      "bytes": 8069,
+      "sha256": "5bcb28a9d95ee4a9e9ff7843e2aca4a0d1d265c490ca21182d4cd022beef0f4e"
     },
     {
       "path": "packages/core-server/package.json",
@@ -2923,8 +2923,8 @@
     },
     {
       "path": "test_tool/brand_assets_smoke.mjs",
-      "bytes": 3904,
-      "sha256": "9ae8a81b56006aee34129b07b696534b5a6bdfaf46b937095f5f146254808380"
+      "bytes": 4203,
+      "sha256": "9029a8e6f2560187ad92914ed7ea5de1f1846d2fd16e739484b8efecc1f5d8fe"
     },
     {
       "path": "test_tool/build_macos_sidecar.mjs",
@@ -2998,8 +2998,8 @@
     },
     {
       "path": "test_tool/editor_ui_performance_lab.mjs",
-      "bytes": 135400,
-      "sha256": "1770bc26f8cc7eabd42614703d76a055d4703b806c6f4e7c3081931f78abd45f"
+      "bytes": 143768,
+      "sha256": "7bb96b6d41a3e7d6c8724df7732bb44dc92ecd96d7a242cbe1eb10f17deaf54a"
     },
     {
       "path": "test_tool/electron_actual_state_probe.mjs",
@@ -3188,8 +3188,8 @@
     },
     {
       "path": "test_tool/package_windows_portable.mjs",
-      "bytes": 8240,
-      "sha256": "62857d62c562841db943125d6765bad7e2e3fdacceaf840d9a8626c8349bdd35"
+      "bytes": 8921,
+      "sha256": "7fd2bd0fb27eacae7dcbd88fba8ffa525c5089bef70b3d10e5028a642bffcdbf"
     },
     {
       "path": "test_tool/prepare_recognition_image_ab.ts",
@@ -3300,6 +3300,11 @@
       "path": "test_tool/windows_exe_icon_smoke.ps1",
       "bytes": 2055,
       "sha256": "2c5905713a653908cab415cfbcaed3d76560044be6158aed259e194cad010df1"
+    },
+    {
+      "path": "test_tool/windows_executable_brand.mjs",
+      "bytes": 5531,
+      "sha256": "944877f088f894b8d97f6d510fe980f3da379bff77f26a43e3adfb2fe1ab1559"
     },
     {
       "path": "test_tool/windows_portable_smoke.mjs",
