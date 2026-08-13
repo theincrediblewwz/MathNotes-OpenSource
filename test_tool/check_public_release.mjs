@@ -37,6 +37,14 @@ for (const relativePath of requiredDocs) {
   if (!await exists(path.join(projectRoot, relativePath))) add("ERROR", "MISSING_RELEASE_DOCUMENT", relativePath);
 }
 
+const thirdPartyNoticesPath = path.join(projectRoot, "THIRD_PARTY_NOTICES.md");
+if (await exists(thirdPartyNoticesPath)) {
+  const thirdPartyNotices = await readFile(thirdPartyNoticesPath, "utf8");
+  if (!thirdPartyNotices.includes("## CodeMirror 6") || !thirdPartyNotices.includes("MIT License") || !thirdPartyNotices.includes("Marijn Haverbeke")) {
+    add("ERROR", "CODEMIRROR_NOTICE_REQUIRED", "Human-readable CodeMirror MIT copyright and permission notice");
+  }
+}
+
 const rootPackage = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
 const windowsPackage = JSON.parse(await readFile(path.join(projectRoot, "apps/windows/package.json"), "utf8"));
 const pwaPackage = JSON.parse(await readFile(path.join(projectRoot, "apps/pwa/package.json"), "utf8"));

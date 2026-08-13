@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-13T07:09:25.850Z",
-  "fileCount": 662,
-  "snapshotSha256": "0b83a8e782c8c7757047f97ef8a431156bbafbac2acf5645685fbe4d152d5e53",
+  "generatedAt": "2026-08-13T08:12:39.837Z",
+  "fileCount": 664,
+  "snapshotSha256": "91379442a1a51053f1beaab1a797ce3dbedc58fd2e8071f1be0a06a8744e2d34",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -68,8 +68,8 @@
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
-      "bytes": 1066,
-      "sha256": "0c502f155defd42d1be0d3dd5e863b8b3a124c3fb1e334b807b7ba2aab16e053"
+      "bytes": 2613,
+      "sha256": "f119557385ba20c22a43badf8ed565249fdcb08023d230cecab9e6ff006b0b0d"
     },
     {
       "path": "apps/android/app/build.gradle.kts",
@@ -1338,13 +1338,13 @@
     },
     {
       "path": "apps/windows/src/App.test.tsx",
-      "bytes": 12368,
-      "sha256": "23aa6bcb1fa1670854623ad485e1d9b37e58ef49f3774435a6dcfed90dfb3102"
+      "bytes": 13435,
+      "sha256": "defa29462d6f98364e362811d5839e5637c16fb171898cbb590dbb9947dfa510"
     },
     {
       "path": "apps/windows/src/App.tsx",
-      "bytes": 151781,
-      "sha256": "6b3c472b9bf873c74cd32c65ed99c84f542702861d840814c07322fb188f5c61"
+      "bytes": 153719,
+      "sha256": "009c1489897f1b8610c7d1997b55e6c2b8decfaa7c5137dd467fbc2d64f6c269"
     },
     {
       "path": "apps/windows/src/buildChunking.test.ts",
@@ -1370,6 +1370,16 @@
       "path": "apps/windows/src/common/defaultUserSettings.ts",
       "bytes": 324,
       "sha256": "ab88e4328755187af8169ac777085c1835237ad21c36f5a0bdaaf5e0b98c1302"
+    },
+    {
+      "path": "apps/windows/src/common/keyboardShortcuts.test.ts",
+      "bytes": 3146,
+      "sha256": "501fce24aca0dc5f717e9f59f6ad3b5dabef99d17985a40d4412c6089dfb7100"
+    },
+    {
+      "path": "apps/windows/src/common/keyboardShortcuts.ts",
+      "bytes": 3730,
+      "sha256": "1f8dcba031ed3234ac4043a11ceaa3d119949abc04326d255b7a435b389dacd6"
     },
     {
       "path": "apps/windows/src/common/lockSpan.test.ts",
@@ -1988,13 +1998,13 @@
     },
     {
       "path": "apps/windows/src/core/userSettingsStore.test.ts",
-      "bytes": 3791,
-      "sha256": "c5f35c4e01e2ca7ba9d2126a94e853ba2f3d47ce282f99cbaae4ae44ba45f47e"
+      "bytes": 5301,
+      "sha256": "10dd7041bcedf90f7f2fbfdff50e3cda298ee0abd1fad300f2bd93cf85c78908"
     },
     {
       "path": "apps/windows/src/core/userSettingsStore.ts",
-      "bytes": 3699,
-      "sha256": "6572174822ce8b7a86ec2f6b7aa721b57b5d2228d351960c379a1dc9b23f3640"
+      "bytes": 4088,
+      "sha256": "4586054df19f21bffe06339cde8f06e4efa96fb6d36762e8f2f99b6ee38b54db"
     },
     {
       "path": "apps/windows/src/core/workspaceContextStore.test.ts",
@@ -2013,8 +2023,8 @@
     },
     {
       "path": "apps/windows/src/styles.css",
-      "bytes": 100005,
-      "sha256": "fa6da7cd177db7676fb376725ef3dba15f890b003f2b4dfa32bf4ac60fe785a6"
+      "bytes": 100724,
+      "sha256": "05399935e5491dc55d30f22b22d6829e292c6420be48b6e3fc854bedf9d04ebc"
     },
     {
       "path": "apps/windows/src/types/global.d.ts",
@@ -2053,13 +2063,13 @@
     },
     {
       "path": "apps/windows/src/ui/components/Drawers.test.tsx",
-      "bytes": 28631,
-      "sha256": "8422105450629a9c1122402e07044e3893861e763dfe4cfed70078d8670245be"
+      "bytes": 31093,
+      "sha256": "509e532f589fbc0f9ae57859b5c7fd152874a7a86fa8554abd30ac2450610af6"
     },
     {
       "path": "apps/windows/src/ui/components/Drawers.tsx",
-      "bytes": 70851,
-      "sha256": "73032ea02eb54d6d5813e40ef3cff8bc2b14e833a78975f70f81ce6cff14b9c2"
+      "bytes": 73642,
+      "sha256": "fbaa62734b1cf2c8b5dc209f201112d21b3519d465e84f39b609337041a35f60"
     },
     {
       "path": "apps/windows/src/ui/components/FloatingButton.tsx",
@@ -2108,13 +2118,13 @@
     },
     {
       "path": "apps/windows/src/ui/components/PreviewPane.test.tsx",
-      "bytes": 21065,
-      "sha256": "c2140493dd4868af44d613b9e46b033789962ebea212d1180297e521f86911c7"
+      "bytes": 21994,
+      "sha256": "7735e9850e0be808b2c2df93ad741fd47e8989a3872076f7a670f452c696e9d6"
     },
     {
       "path": "apps/windows/src/ui/components/PreviewPane.tsx",
-      "bytes": 27790,
-      "sha256": "a6ced6d49046dc5550f4ed92735ab17faf4b767a3fee054f41122f673d7cab9c"
+      "bytes": 30941,
+      "sha256": "6882a9ffd07326eff35f519969fef6d77692913f8a9dad4d7ef9f87dea19fe76"
     },
     {
       "path": "apps/windows/src/ui/components/PreviewTanStackLab.tsx",
@@ -2133,13 +2143,13 @@
     },
     {
       "path": "apps/windows/src/ui/components/SessionSourceEditor.test.tsx",
-      "bytes": 25296,
-      "sha256": "cedebb9dcb485d445723627bb9242f19be0d9aa0ee783b11c21f04588dd2a0b5"
+      "bytes": 27049,
+      "sha256": "54b9e33f1de7e7d8af0008f346361125b1816a3318b8cb9248d708740e8608f2"
     },
     {
       "path": "apps/windows/src/ui/components/SessionSourceEditor.tsx",
-      "bytes": 72334,
-      "sha256": "56a6593b2eba0181d29140ab1d2542f43bb052fb92b64d089a86e1e3ded1f1f2"
+      "bytes": 73184,
+      "sha256": "d2b04c90e03d84011ed165915fad3be92172486aec98f9d1451be73d073f8ec8"
     },
     {
       "path": "apps/windows/src/ui/components/SourceTanStackLab.test.tsx",
@@ -2948,8 +2958,8 @@
     },
     {
       "path": "test_tool/check_public_release.mjs",
-      "bytes": 6992,
-      "sha256": "de2dc711211434ffda85171ed81beddba86710c42d92e4c274ce1aa57f812a18"
+      "bytes": 7460,
+      "sha256": "5a4ad4d13c7d9751e7c60902df525045756432a59efe1ce9c905dfd003cf1331"
     },
     {
       "path": "test_tool/codex_app_server_probe.mjs",
@@ -3008,8 +3018,8 @@
     },
     {
       "path": "test_tool/electron_app_smoke.mjs",
-      "bytes": 52403,
-      "sha256": "7d30a27a98bb4d7ed50004d37d9d3ba3d92d6c47b8b6c3e3c9c50e2743523c5e"
+      "bytes": 57216,
+      "sha256": "eff7934795143a8b60b1c867b640127faea80b5cd480355dd3d98b47df19b52a"
     },
     {
       "path": "test_tool/export_public_source.mjs",
@@ -3188,8 +3198,8 @@
     },
     {
       "path": "test_tool/package_windows_portable.mjs",
-      "bytes": 8921,
-      "sha256": "7fd2bd0fb27eacae7dcbd88fba8ffa525c5089bef70b3d10e5028a642bffcdbf"
+      "bytes": 9198,
+      "sha256": "a325a872207daaf95a9554e1337eb8efa22c1722b6c4b6b77eb644ffe6840dac"
     },
     {
       "path": "test_tool/prepare_recognition_image_ab.ts",
@@ -3308,8 +3318,8 @@
     },
     {
       "path": "test_tool/windows_portable_smoke.mjs",
-      "bytes": 5917,
-      "sha256": "800322912aad783f3db97db06eb034eaabb4ebc43e42afa0b5dadf0e8a434e47"
+      "bytes": 6273,
+      "sha256": "772326a84a18b2a6a7151e611a96249062d35fecdae27b1429649c76845df5eb"
     },
     {
       "path": "tsconfig.base.json",

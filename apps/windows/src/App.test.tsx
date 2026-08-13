@@ -6,6 +6,8 @@ import {
   enqueueToastMessage,
   exceedsWindowDragThreshold,
   formatByteCount,
+  isOrdinaryShortcutInput,
+  isPreviewScrollbarGutterPoint,
   RecognitionRefreshPending,
   recognitionTaskToastTitle,
   resolvePdfImportTarget,
@@ -123,6 +125,28 @@ describe("window drag gesture arbitration", () => {
     const start = { x: 100, y: 40 };
     expect(exceedsWindowDragThreshold(start, { x: 103, y: 44 })).toBe(false);
     expect(exceedsWindowDragThreshold(start, { x: 106, y: 40 })).toBe(true);
+  });
+
+  it("reserves the rightmost preview gutter for the native scrollbar", () => {
+    expect(isPreviewScrollbarGutterPoint(1265, 1280)).toBe(false);
+    expect(isPreviewScrollbarGutterPoint(1266, 1280)).toBe(true);
+    expect(isPreviewScrollbarGutterPoint(1279, 1280)).toBe(true);
+  });
+
+  it("blocks ordinary form fields but allows the configured shortcut inside CodeMirror", () => {
+    const input = document.createElement("input");
+    expect(isOrdinaryShortcutInput(input)).toBe(true);
+
+    const ordinaryEditable = document.createElement("div");
+    ordinaryEditable.setAttribute("contenteditable", "true");
+    expect(isOrdinaryShortcutInput(ordinaryEditable)).toBe(true);
+
+    const codeMirror = document.createElement("div");
+    codeMirror.className = "cm-editor";
+    const codeMirrorContent = document.createElement("div");
+    codeMirrorContent.setAttribute("contenteditable", "true");
+    codeMirror.append(codeMirrorContent);
+    expect(isOrdinaryShortcutInput(codeMirrorContent)).toBe(false);
   });
 });
 

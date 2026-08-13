@@ -3,8 +3,8 @@ import { startTransition, type FormEvent, type MouseEvent, type PointerEvent, us
 import { FloatingButton } from "./ui/components/FloatingButton";
 import { MoreDrawer, NotebookDrawer, SettingsModal } from "./ui/components/Drawers";
 import { ExportPopover, type ExportOptions, SearchPopover } from "./ui/components/Popovers";
-import { PreviewPane, type PreviewSourceLocationInput } from "./ui/components/PreviewPane";
-import { SessionSourceEditor, type SourceDocumentProjectionChange } from "./ui/components/SessionSourceEditor";
+import { PreviewPane, type PreviewFocusRequest, type PreviewSourceLocationInput } from "./ui/components/PreviewPane";
+import { SessionSourceEditor, type SourceCaretLocation, type SourceDocumentProjectionChange } from "./ui/components/SessionSourceEditor";
 import { ImageAnnotationEditor, type ImageAnnotationConfirmInput, type ImageAnnotationDraft } from "./ui/components/ImageAnnotationEditor";
 import { PdfImportDialog, type PdfImportConfirmInput, type PdfImportDraft } from "./ui/components/PdfImportDialog";
 import { PdfDocumentPreview } from "./ui/components/PdfDocumentPreview";
@@ -35,6 +35,7 @@ import type { RecognitionTaskSummary } from "./core/uploadTaskLog";
 import { defaultMathPromptTemplate } from "./common/promptTemplates";
 import { createEmptyNotationProfileConfig } from "./common/notationProfiles";
 import { defaultAssistantFontFamily, defaultPreviewFontFamily, defaultSourceFontFamily } from "./common/defaultUserSettings";
+import { DEFAULT_PREVIEW_FOLLOW_SHORTCUT, matchesKeyboardShortcut } from "./common/keyboardShortcuts";
 import { defaultLocaleId, defaultThemeId } from "./common/appearanceSettings";
 import { getRecognitionProviderCapability } from "./core/providerCapabilities";
 import { renderPdfPagesForRecognition } from "./ui/pdfRecognitionRenderer";
@@ -65,6 +66,10 @@ export function exceedsWindowDragThreshold(
   threshold = 6
 ) {
   return Math.hypot(current.x - start.x, current.y - start.y) >= threshold;
+}
+
+export function isPreviewScrollbarGutterPoint(clientX: number, viewportWidth: number, gutterWidth = 14) {
+  return clientX >= Math.max(0, viewportWidth - gutterWidth);
 }
 import {
   renderBlocks as sampleRenderBlocks,
@@ -200,6 +205,8 @@ export function App() {
   });
   const [codexRuntimeProgressVisible, setCodexRuntimeProgressVisible] = useState(false);
   const [locatingRequest, setLocatingRequest] = useState<LocateSourceRequest | null>(null);
+  const [activeSourceLocation, setActiveSourceLocation] = useState<SourceCaretLocation | null>(null);
+  const [previewFocusRequest, setPreviewFocusRequest] = useState<PreviewFocusRequest | null>(null);
   const [toastQueue, setToastQueue] = useState<string[]>([]);
   const toast = toastQueue[0] ?? "";
   const [sessionTitlePrompt, setSessionTitlePrompt] = useState<SessionTitlePromptRequest | null>(null);
@@ -257,6 +264,7 @@ export function App() {
   const pendingBackgroundRefreshRef = useRef(false);
   const locatingClearTimerRef = useRef<number | null>(null);
   const locatingNonceRef = useRef(0);
+  const previewFocusNonceRef = useRef(0);
 
   const clearRuntimeEvents = useCallback(() => {
     clearRecognitionRuntimeEvents();
@@ -583,7 +591,8 @@ export function App() {
         themeId: defaultThemeId,
         locale: defaultLocaleId,
         showCodexAssistant: true,
-        assistantOnlineEnabled: true
+        assistantOnlineEnabled: true,
+        previewFollowShortcut: DEFAULT_PREVIEW_FOLLOW_SHORTCUT
       });
       setPromptConfig({
         activeTemplateId: defaultMathPromptTemplate.id,
@@ -681,6 +690,16 @@ export function App() {
     }
   }, [currentSession.notebookId, currentSession.sessionId]);
 
+  const followPreviewToActiveSource = useCallback(() => {
+    if (!activeSourceLocation) {
+      setToastQueue(["先把光标放到要定位的 Markdown 块里"]);
+      return;
+    }
+    const nonce = ++previewFocusNonceRef.current;
+    setPreviewFocusRequest({ ...activeSourceLocation, nonce });
+    setToastQueue([`渲染区已定位到 block ${activeSourceLocation.displayBlockId} 第 ${activeSourceLocation.lineInBlock} 行`]);
+  }, [activeSourceLocation]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -702,11 +721,20 @@ export function App() {
         event.preventDefault();
         setOpenLayer("search");
       }
+      if (
+        !event.repeat
+        && !settingsOpen
+        && !isOrdinaryShortcutInput(event.target)
+        && matchesKeyboardShortcut(userSettings?.previewFollowShortcut ?? DEFAULT_PREVIEW_FOLLOW_SHORTCUT, event)
+      ) {
+        event.preventDefault();
+        followPreviewToActiveSource();
+      }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [saveSourceDocument, undoAction]);
+  }, [followPreviewToActiveSource, saveSourceDocument, settingsOpen, undoAction, userSettings?.previewFollowShortcut]);
 
   useEffect(() => {
     void loadCurrentSession();
@@ -2355,6 +2383,7 @@ export function App() {
 
   function beginManualWindowDrag(event: PointerEvent<HTMLElement>) {
     if (event.button !== 0 || event.clientY > 40 || !window.mathNotes || openLayer) return;
+    if (isPreviewScrollbarGutterPoint(event.clientX, window.innerWidth)) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest("button, a, input, textarea, select, [role='button']")) return;
     manualWindowDragCandidateRef.current = {
@@ -2649,6 +2678,7 @@ export function App() {
               locatingRequest={locatingRequest}
               lockSelectionRequest={lockSelectionRequest}
               onActiveBlockChange={setActiveSourceBlock}
+              onCaretLocationChange={setActiveSourceLocation}
               onAssistantRemarkOpen={(remarkId) => {
                 setSelectedAssistantRemarkId(remarkId);
                 setAssistantWorkspaceOpen(true);
@@ -2760,6 +2790,7 @@ export function App() {
           <RenderCommitProbe id="preview-pane">
             <PreviewPane
               blocks={visiblePreviewBlocks}
+              focusRequest={previewFocusRequest}
               key={`preview-${currentSession.notebookId}-${currentSession.sessionId}`}
               sessionDir={sessionDir}
               onHover={handleHover}
@@ -3819,6 +3850,12 @@ function windowControlLabel(action: "minimize" | "toggleMaximize" | "close"): st
 
 function isInsideCodeMirror(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest(".cm-editor"));
+}
+
+export function isOrdinaryShortcutInput(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest("input, textarea, select")) return true;
+  return Boolean(target.closest("[contenteditable='true']") && !target.closest(".cm-editor"));
 }
 
 function sourceLocationFromBlock(block: SessionSourceMarkdownBlock): PreviewSourceLocationInput {

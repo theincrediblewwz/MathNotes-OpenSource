@@ -4,6 +4,7 @@ import type { RenderBlock } from "../sampleSession";
 import {
   buildPreviewLabVirtualLayout,
   calculatePreviewLabScrollAnchorAdjustment,
+  findPreviewFocusTarget,
   findPreviewLabVirtualRange,
   PreviewPane,
   renderMarkdownPreview
@@ -16,6 +17,28 @@ describe("PreviewPane", () => {
 
   afterEach(() => {
     window.localStorage.removeItem("mathnotes:preview-windowing-lab");
+  });
+
+  it("maps a source caret line to the nearest split preview segment", () => {
+    const blocks = [
+      { id: "p-1", sourceId: "src-1", sourceBlockId: "0001", sourceLine: 2, sourceBlockLine: 1, markdown: "one\ntwo\nthree" },
+      { id: "p-2", sourceId: "src-1", sourceBlockId: "0001", sourceLine: 8, sourceBlockLine: 7, markdown: "seven\neight\nnine" },
+      { id: "p-3", sourceId: "src-1", sourceBlockId: "0001", sourceLine: 14, sourceBlockLine: 13, markdown: "thirteen\nfourteen\nfifteen" }
+    ] satisfies RenderBlock[];
+
+    expect(findPreviewFocusTarget(blocks, {
+      blockId: "0001",
+      displayBlockId: "0001",
+      lineCount: 15,
+      lineInBlock: 14,
+      sourceId: "src-1"
+    })).toEqual({ index: 2, ratio: 0.5 });
+    expect(findPreviewFocusTarget(blocks, {
+      blockId: "9999",
+      displayBlockId: "9999",
+      lineInBlock: 1,
+      sourceId: "missing"
+    })).toBeNull();
   });
 
   it("builds a stable segmented range for the preview windowing lab", () => {

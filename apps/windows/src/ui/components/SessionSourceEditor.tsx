@@ -81,6 +81,7 @@ type SessionSourceEditorProps = {
   unlockProtectedSpanRequest: number;
   onChange: (value: string, projection?: SourceDocumentProjectionChange) => void;
   onActiveBlockChange: (block: SessionSourceMarkdownBlock | null) => void;
+  onCaretLocationChange?: (location: SourceCaretLocation) => void;
   onProtectedSpanUnlockableChange: (unlockable: boolean) => void;
   onProtectedSpanUnlocked: () => void;
   onSelectionLockableChange: (lockable: boolean) => void;
@@ -100,6 +101,14 @@ type SessionSourceEditorProps = {
   assistantRemarks?: AssistantRemark[];
   onAssistantRemarkOpen?: (remarkId: string) => void;
   assistantOpen?: boolean;
+};
+
+export type SourceCaretLocation = {
+  blockId: string;
+  sourceId: string;
+  displayBlockId: string;
+  lineInBlock: number;
+  lineCount: number;
 };
 
 export type SourceDocumentProjectionChange = {
@@ -339,6 +348,7 @@ export function SessionSourceEditor({
   unlockProtectedSpanRequest,
   onChange,
   onActiveBlockChange,
+  onCaretLocationChange,
   onProtectedSpanUnlockableChange,
   onProtectedSpanUnlocked,
   onSelectionLockableChange,
@@ -365,6 +375,7 @@ export function SessionSourceEditor({
   const documentRef = useRef(document);
   const onChangeRef = useRef(onChange);
   const onActiveBlockChangeRef = useRef(onActiveBlockChange);
+  const onCaretLocationChangeRef = useRef(onCaretLocationChange);
   const onProtectedSpanUnlockableChangeRef = useRef(onProtectedSpanUnlockableChange);
   const onProtectedSpanUnlockedRef = useRef(onProtectedSpanUnlocked);
   const onSelectionLockableChangeRef = useRef(onSelectionLockableChange);
@@ -630,6 +641,10 @@ export function SessionSourceEditor({
   }, [onActiveBlockChange]);
 
   useEffect(() => {
+    onCaretLocationChangeRef.current = onCaretLocationChange;
+  }, [onCaretLocationChange]);
+
+  useEffect(() => {
     onProtectedSpanUnlockableChangeRef.current = onProtectedSpanUnlockableChange;
   }, [onProtectedSpanUnlockableChange]);
 
@@ -666,6 +681,7 @@ export function SessionSourceEditor({
         if (!block) return;
         activeBlockIdRef.current = target.blockId;
         onActiveBlockChangeRef.current(block);
+        notifyCaretLocation(block, target.view);
         onSelectionLockableChangeRef.current(!target.view.state.selection.main.empty);
         onProtectedSpanUnlockableChangeRef.current(Boolean(findUnlockableProtectedSpan(target.view.state)));
       }
@@ -883,8 +899,19 @@ export function SessionSourceEditor({
     activeBlockIdRef.current = block.blockId;
     if (statefulEditorWindowingLab) setActiveWindowBlockId(block.blockId);
     onActiveBlockChangeRef.current(block);
+    notifyCaretLocation(block, view);
     onSelectionLockableChangeRef.current(!view.state.selection.main.empty);
     onProtectedSpanUnlockableChangeRef.current(Boolean(findUnlockableProtectedSpan(view.state)));
+  }
+
+  function notifyCaretLocation(block: SessionSourceMarkdownBlock, view: EditorView) {
+    onCaretLocationChangeRef.current?.({
+      blockId: block.blockId,
+      sourceId: block.sourceId,
+      displayBlockId: block.blockId,
+      lineInBlock: view.state.doc.lineAt(view.state.selection.main.head).number,
+      lineCount: view.state.doc.lines
+    });
   }
 
   function handleViewReady(blockId: string, view: EditorView | null) {
