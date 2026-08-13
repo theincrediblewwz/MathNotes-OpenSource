@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-08-13T06:51:12.331Z",
+  "generatedAt": "2026-08-13T07:09:25.850Z",
   "fileCount": 662,
-  "snapshotSha256": "9f9ffe21f36b629bea84e79e2bc0852247ff08efec7cbe73a3fa4333cc1ef928",
+  "snapshotSha256": "0b83a8e782c8c7757047f97ef8a431156bbafbac2acf5645685fbe4d152d5e53",
   "files": [
     {
       "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -2138,8 +2138,8 @@
     },
     {
       "path": "apps/windows/src/ui/components/SessionSourceEditor.tsx",
-      "bytes": 72281,
-      "sha256": "4ea12f507900c330958eaa42eca5d742fd891e13ccfd55b95eac88fb6492dad0"
+      "bytes": 72334,
+      "sha256": "56a6593b2eba0181d29140ab1d2542f43bb052fb92b64d089a86e1e3ded1f1f2"
     },
     {
       "path": "apps/windows/src/ui/components/SourceTanStackLab.test.tsx",
@@ -3008,8 +3008,8 @@
     },
     {
       "path": "test_tool/electron_app_smoke.mjs",
-      "bytes": 51960,
-      "sha256": "604a2c4db8323cf964ab9b6ab818c5fce09b39e6013b2bb13fcd9d4a4b035a7e"
+      "bytes": 52403,
+      "sha256": "7d30a27a98bb4d7ed50004d37d9d3ba3d92d6c47b8b6c3e3c9c50e2743523c5e"
     },
     {
       "path": "test_tool/export_public_source.mjs",

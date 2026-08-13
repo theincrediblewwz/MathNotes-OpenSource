@@ -1249,6 +1249,7 @@ function SourceBlockSection({
           ].filter(Boolean).join(" ")}
           data-testid="source-block"
           data-block-id={block.blockId}
+          data-locked={block.locked ? "true" : "false"}
           data-locating-nonce={locatingNonce || undefined}
           data-source={block.sourceId}
           data-index={virtualIndex}

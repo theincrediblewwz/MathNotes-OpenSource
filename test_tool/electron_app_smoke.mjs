@@ -175,6 +175,11 @@ try {
     selectionTargetId,
     { timeout: 5000 }
   );
+  await page.waitForFunction(
+    (blockId) => document.querySelector(`[data-testid='source-block'][data-block-id='${blockId}']`)?.getAttribute("data-locked") === "true",
+    selectionTargetId,
+    { timeout: 5000 }
+  );
   await selectionTarget.getByTestId("source-block-header").click();
   await selectionEditor.click();
   await page.keyboard.press("Control+Home");
@@ -191,6 +196,11 @@ try {
   await page.waitForFunction(
     async (blockId) => (await window.mathNotes.loadCurrentSession()).sourceDocument.markdownBlocks
       .find((block) => block.blockId === blockId)?.locked === false,
+    selectionTargetId,
+    { timeout: 5000 }
+  );
+  await page.waitForFunction(
+    (blockId) => document.querySelector(`[data-testid='source-block'][data-block-id='${blockId}']`)?.getAttribute("data-locked") === "false",
     selectionTargetId,
     { timeout: 5000 }
   );
