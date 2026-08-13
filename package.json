@@ -77,6 +77,7 @@
     "test:editor-performance": "node test_tool/editor_performance_smoke.mjs",
     "test:editor-performance:lab": "node test_tool/editor_performance_lab.mjs",
     "test:editor-performance:ui-lab": "node test_tool/editor_ui_performance_lab.mjs",
+    "test:windows-scroll-blank": "node test_tool/editor_ui_performance_lab.mjs --experiment=scroll-blank --shapes=80 --fixture-profile=heterogeneous --product-defaults=1 --output=output/performance/windows-scroll-blank-hotfix.json",
     "test:prototype": "node test_tool/prototype_smoke.mjs http://127.0.0.1:4173/",
     "test:windows-smoke": "node test_tool/windows_app_smoke.mjs http://127.0.0.1:5173/",
     "test:electron-smoke": "node test_tool/electron_app_smoke.mjs",
@@ -103,6 +104,7 @@
     "@electron/packager": "^20.3.0",
     "@napi-rs/canvas": "^1.0.2",
     "playwright": "^1.61.1",
+    "resedit": "^2.0.3",
     "yaml": "^2.9.0"
   },
   "overrides": {

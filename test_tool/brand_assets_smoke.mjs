@@ -28,6 +28,12 @@ if (!windowsMain.includes('../assets/mathnotes.ico')) {
 if (!windowsPackager.includes('assets", "mathnotes.ico"')) {
   throw new Error("Windows packager does not embed the MathNotes icon");
 }
+if (!windowsPackager.includes("assertWindowsExecutableBrand")) {
+  throw new Error("Windows packager does not verify the final executable resources");
+}
+if (windowsPackager.includes("PACKAGER_OFFLINE_FALLBACK=")) {
+  throw new Error("Windows packager still contains the unbranded offline fallback");
+}
 
 const playIcon = await readFile(path.join(projectRoot, "apps", "android", "marketing", "play-icon-512.png"));
 if (playIcon.toString("ascii", 1, 4) !== "PNG") throw new Error("Play icon is not a PNG");

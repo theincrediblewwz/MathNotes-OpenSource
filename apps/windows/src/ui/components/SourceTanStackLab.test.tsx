@@ -8,7 +8,6 @@ vi.mock("@tanstack/react-virtual", () => ({
     getVirtualItems: () => [{ index: 0, start: 0 }],
     getTotalSize: () => 100,
     itemSizeCache: new Map(),
-    isScrolling: false,
     measureElement: () => undefined,
     scrollToIndex: vi.fn(),
     shouldAdjustScrollPositionOnItemSizeChange: undefined
@@ -47,5 +46,32 @@ describe("SourceTanStackLab preview locate handshake", () => {
 
     await waitFor(() => expect(onLocateMounted).toHaveBeenCalledWith(7));
     expect(onLocateMounted).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the real editor mounted while the user drags the parent scrollbar", () => {
+    const scrollElementRef = createRef<HTMLDivElement>();
+    const renderItem = vi.fn(() => <div key="0001" />);
+    const block = {
+      blockId: "0001",
+      sourceId: "src-0001",
+      path: "blocks/0001.md",
+      source: "user" as const,
+      header: "user",
+      locked: false
+    };
+    const { rerender } = render(<div ref={scrollElementRef} />);
+    rerender(
+      <div ref={scrollElementRef}>
+        <SourceTanStackLab
+          blocks={[block]}
+          estimateSize={() => 100}
+          locatingIndex={-1}
+          locatingNonce={0}
+          renderItem={renderItem}
+          scrollElementRef={scrollElementRef}
+        />
+      </div>
+    );
+    expect(renderItem).toHaveBeenCalledWith(block, 0, expect.any(Function), expect.any(Object));
   });
 });

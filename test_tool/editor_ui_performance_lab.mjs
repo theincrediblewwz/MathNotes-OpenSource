@@ -63,7 +63,12 @@ const report = {
   method: {
     scrollFrames: 180,
     experiment,
-    variants: experiment === "interaction" ? [
+    variants: experiment === "scroll-blank" ? [
+      "native-source-scrollbar-drag",
+      "persisted-source-shell-setting",
+      "visible-block-tail-geometry",
+      "persisted-markdown-byte-identity"
+    ] : experiment === "interaction" ? [
       "manual-window-drag-burst",
       "actual-window-drag-burst",
       "task-center-closed-burst",
@@ -104,7 +109,9 @@ const report = {
       status: runPipelineProbes ? "enabled" : "deferred",
       stages: ["source-commit", "source-two-frame-paint", "preview-commit", "preview-two-frame-paint", "long-task"]
     },
-    note: "Synthetic notes root only. All prototypes are disabled in normal product runs. The virtual source variant estimates the complete scroll range, switches a three-segment static shell only at 12-block boundaries, then hydrates the precise visible range from cached EditorState in two-editor animation-frame chunks after scrolling settles. The combined measured variant calibrates preview block heights with one ResizeObserver, batches measurements per animation frame, and compensates scrollTop when heights above the visible anchor change."
+    note: experiment === "scroll-blank"
+      ? "Synthetic notes root only. The regression retains real CodeMirror editors for every mounted TanStack item while dragging, including when an older profile has the retired source-scroll-shell setting persisted."
+      : "Synthetic notes root only. All prototypes are disabled in normal product runs. The virtual source variant estimates the complete scroll range and hydrates the precise visible range from cached EditorState after scrolling settles. The combined measured variant calibrates preview block heights with one ResizeObserver, batches measurements per animation frame, and compensates scrollTop when heights above the visible anchor change."
   },
   results
 };
@@ -169,6 +176,13 @@ async function measureShape(blockCount) {
         app,
         blockCount,
         launchStartedAt,
+        notesRoot,
+        page
+      });
+    }
+    if (experiment === "scroll-blank") {
+      return await measureSourceScrollbarBlankRegression({
+        blockCount,
         notesRoot,
         page
       });
@@ -567,6 +581,163 @@ async function measureShape(blockCount) {
     await app?.close().catch(() => undefined);
     await rm(notesRoot, { recursive: true, force: true });
   }
+}
+
+async function measureSourceScrollbarBlankRegression({ blockCount, notesRoot, page }) {
+  const runtimeErrors = [];
+  page.on("pageerror", (error) => runtimeErrors.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(`console: ${message.text()}`);
+  });
+  const beforeFiles = await snapshotFixtureMarkdown(notesRoot);
+  await page.evaluate(() => {
+    localStorage.setItem("mathnotes:editor-windowing-lab", "tanstack-virtual");
+    // Exercise profiles that persisted the retired scrolling shell setting.
+    localStorage.setItem("mathnotes:source-scroll-shell-lab", "on");
+  });
+  await page.reload();
+  await page.bringToFront();
+  await page.waitForFunction(
+    () => {
+      const scroller = document.querySelector("[data-testid='session-source-editor']");
+      return scroller?.getAttribute("data-editor-windowing-lab") === "tanstack-virtual" &&
+        document.querySelectorAll("[data-testid='source-block-editor'] .cm-editor").length > 0;
+    },
+    undefined,
+    { timeout: 30000 }
+  );
+  const scroller = page.getByTestId("session-source-editor");
+  const box = await scroller.boundingBox();
+  if (!box) throw new Error("Source scrollbar regression scroller is not visible");
+  const scrollBefore = await scroller.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    scrollTop: element.scrollTop
+  }));
+  if (scrollBefore.scrollHeight <= scrollBefore.clientHeight) {
+    throw new Error("Source scrollbar regression fixture is not scrollable");
+  }
+
+  let actualDragDistance = 0;
+  let bottomTouches = 0;
+  let topTouches = 0;
+  const edgeStates = [];
+  const thumbHeight = Math.max(24, (scrollBefore.clientHeight / scrollBefore.scrollHeight) * box.height);
+  const topThumbCenter = box.y + thumbHeight / 2;
+  const topClampY = box.y - 24;
+  const bottomClampY = box.y + box.height + 24;
+  const scrollbarX = box.x + box.width - 3;
+  const slowMove = async (fromY, toY) => {
+    for (let step = 1; step <= 120; step += 1) {
+      await page.mouse.move(scrollbarX, fromY + ((toY - fromY) * step) / 120);
+      await page.waitForTimeout(8);
+    }
+  };
+  await scroller.evaluate((element) => { element.scrollTop = 0; });
+  for (let cycle = 0; cycle < 4; cycle += 1) {
+    await page.mouse.move(scrollbarX, topThumbCenter);
+    await page.mouse.down();
+    await slowMove(topThumbCenter, bottomClampY);
+    await page.waitForTimeout(60);
+    const bottomState = await scroller.evaluate((element) => ({
+      bottomDistance: element.scrollHeight - element.clientHeight - element.scrollTop,
+      scrollTop: element.scrollTop
+    }));
+    actualDragDistance = Math.max(actualDragDistance, bottomState.scrollTop);
+    if (bottomState.bottomDistance <= 2) bottomTouches += 1;
+
+    await slowMove(bottomClampY, topClampY);
+    await page.waitForTimeout(60);
+    const topState = await scroller.evaluate((element) => element.scrollTop);
+    await page.mouse.up();
+    await page.waitForTimeout(80);
+    if (topState <= 2) topTouches += 1;
+    edgeStates.push({ bottomDistance: bottomState.bottomDistance, bottomScrollTop: bottomState.scrollTop, topScrollTop: topState });
+  }
+  await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight * 0.68; });
+  await waitForIdleFrames(page, 20);
+  const stableHeights = [];
+  for (let index = 0; index < 4; index += 1) {
+    stableHeights.push(await scroller.evaluate((element) => element.scrollHeight));
+    await waitForIdleFrames(page, 4);
+  }
+  const geometry = await page.evaluate(() => {
+    const scrollerElement = document.querySelector("[data-testid='session-source-editor']");
+    if (!(scrollerElement instanceof HTMLElement)) throw new Error("Source scroller disappeared");
+    const scrollerRect = scrollerElement.getBoundingClientRect();
+    const visible = [...scrollerElement.querySelectorAll("[data-testid='source-block']")]
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.bottom > scrollerRect.top && rect.top < scrollerRect.bottom;
+      })
+      .map((element) => {
+        const section = element;
+        const body = section.lastElementChild;
+        const sectionRect = section.getBoundingClientRect();
+        const bodyRect = body?.getBoundingClientRect();
+        return {
+          blockId: section.getAttribute("data-block-id"),
+          blankTailPx: bodyRect ? Math.max(0, sectionRect.bottom - bodyRect.bottom) : Number.POSITIVE_INFINITY,
+          editorCount: section.querySelectorAll(".cm-editor").length,
+          staticCount: section.querySelectorAll("[data-testid='performance-static-source']").length
+        };
+      });
+    return {
+      visible,
+      staticSourceCount: scrollerElement.querySelectorAll("[data-testid='performance-static-source']").length,
+      mountedEditorCount: scrollerElement.querySelectorAll(".cm-editor").length,
+      scrollHeight: scrollerElement.scrollHeight,
+      virtualTotalHeight: Number(scrollerElement.dataset.sourceTanstackTotalHeight ?? 0)
+    };
+  });
+  const afterFiles = await snapshotFixtureMarkdown(notesRoot);
+  const screenshotPath = path.join(projectRoot, "output", "playwright", "windows-scroll-blank-hotfix.png");
+  await mkdir(path.dirname(screenshotPath), { recursive: true });
+  await page.screenshot({ path: screenshotPath, fullPage: false });
+
+  if (actualDragDistance <= 0) throw new Error("Native source scrollbar drag did not move the scroller");
+  if (bottomTouches !== 4 || topTouches !== 4) {
+    throw new Error(`Slow scrollbar round trips did not touch both edges (bottom=${bottomTouches}/4 top=${topTouches}/4 states=${JSON.stringify(edgeStates)})`);
+  }
+  if (JSON.stringify(afterFiles) !== JSON.stringify(beforeFiles)) throw new Error("Source scrollbar changed persisted Markdown bytes");
+  if (geometry.staticSourceCount !== 0) throw new Error(`Retired scrolling shell remounted ${geometry.staticSourceCount} static sources`);
+  if (geometry.visible.length === 0 || geometry.visible.some((item) => item.editorCount !== 1 || item.staticCount !== 0)) {
+    throw new Error("Visible source blocks did not retain exactly one real editor");
+  }
+  const maxBlankTailPx = Math.max(...geometry.visible.map((item) => item.blankTailPx));
+  if (maxBlankTailPx > 12) throw new Error(`Visible source block blank tail reached ${maxBlankTailPx}px`);
+  const heightDriftPx = Math.max(...stableHeights) - Math.min(...stableHeights);
+  if (heightDriftPx > 2) throw new Error(`Source scroll height kept drifting after settle (${heightDriftPx}px)`);
+  if (runtimeErrors.length > 0) throw new Error(`Electron runtime errors: ${runtimeErrors.join(" | ")}`);
+
+  process.stdout.write(`[editor ui lab] ${blockCount}: source scrollbar blank regression passed\n`);
+  return {
+    blockCount,
+    sourceScrollbarBlankRegression: {
+      actualDragDistance: round(actualDragDistance),
+      bottomTouches,
+      edgeStates,
+      maxBlankTailPx: round(maxBlankTailPx),
+      mountedEditorCount: geometry.mountedEditorCount,
+      persistedMarkdownFiles: beforeFiles.length,
+      scrollHeightDriftPx: round(heightDriftPx),
+      screenshotPath,
+      staticSourceCount: geometry.staticSourceCount,
+      topTouches,
+      virtualTotalHeight: round(geometry.virtualTotalHeight)
+    }
+  };
+}
+
+async function snapshotFixtureMarkdown(notesRoot) {
+  const sessionPath = path.join(notesRoot, "notebooks", "functional_analysis", "sessions", "lecture", "session.json");
+  const session = JSON.parse(await readFile(sessionPath, "utf8"));
+  const sessionDir = path.dirname(sessionPath);
+  const result = [];
+  for (const block of session.blocks.filter((candidate) => candidate.type === "markdown")) {
+    result.push({ id: block.id, sha256: sha256Hex(await readFile(path.join(sessionDir, block.path), "utf8")) });
+  }
+  return result;
 }
 
 async function measureRecognitionPreviewStreamExperiment({ app, blockCount, launchStartedAt, notesRoot, page }) {
