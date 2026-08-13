@@ -179,6 +179,7 @@ type EditorStateSnapshot = {
 const performanceLabEditorViewLimit = 12;
 const performanceLabOverscanPx = 1200;
 const performanceLabVirtualSegmentSize = 12;
+const performanceLabLongSourceBlockLineLimit = 85;
 const performanceLabStorageKey = "mathnotes:editor-windowing-lab";
 const performanceLabSourceOverscanStorageKey = "mathnotes:source-overscan-lab";
 const performanceLabVirtualHeaderHeight = 39;
@@ -215,6 +216,34 @@ export function buildPerformanceLabVirtualLayout(markdowns: readonly string[]): 
     totalSize += size;
   }
   return { offsets, sizes, totalSize };
+}
+
+export function getTanStackSourceWindowingFallbackReason(
+  markdowns: readonly string[]
+): "small-session" | "long-block" | null {
+  // A session with at most twelve blocks gains little from a second layer of
+  // virtualization because CodeMirror already virtualizes the lines inside
+  // each block. Keeping these editors in normal document flow also avoids
+  // competing viewport calculations during native scrollbar drags.
+  if (markdowns.length <= performanceLabEditorViewLimit) return "small-session";
+
+  for (const markdown of markdowns) {
+    let lineCount = 1;
+    for (let index = 0; index < markdown.length; index += 1) {
+      if (markdown.charCodeAt(index) !== 10) continue;
+      lineCount += 1;
+      if (lineCount >= performanceLabLongSourceBlockLineLimit) return "long-block";
+    }
+  }
+  return null;
+}
+
+export function getTanStackSourceWindowingEffectiveMode(
+  markdowns: readonly string[]
+): "off" | "tanstack-virtual" {
+  const fallbackReason = getTanStackSourceWindowingFallbackReason(markdowns);
+  if (fallbackReason) return "off";
+  return "tanstack-virtual";
 }
 
 export function findPerformanceLabVirtualRange({
@@ -325,11 +354,7 @@ export function SessionSourceEditor({
   onRerecognizeBlockRequest,
   onTransferBlocksRequest
 }: SessionSourceEditorProps) {
-  const editorWindowingLabMode = getEditorWindowingPerformanceLabMode();
-  const dynamicEditorWindowingLab = editorWindowingLabMode === "dynamic";
-  const virtualBlockWindowingLab = editorWindowingLabMode === "virtual";
-  const tanStackSourceWindowingLab = editorWindowingLabMode === "tanstack-virtual";
-  const statefulEditorWindowingLab = dynamicEditorWindowingLab || virtualBlockWindowingLab || tanStackSourceWindowingLab;
+  const requestedEditorWindowingLabMode = getEditorWindowingPerformanceLabMode();
   const editorScrollerRef = useRef<HTMLDivElement>(null);
   const blockElementsRef = useRef(new Map<string, HTMLElement>());
   const editorViewsRef = useRef(new Map<string, EditorView>());
@@ -393,9 +418,25 @@ export function SessionSourceEditor({
     [document.markdownBlocks]
   );
   const remarksByBlockId = useMemo(() => groupAssistantRemarksByBlockId(assistantRemarks), [assistantRemarks]);
-  const virtualBlockLayout = useMemo(
-    () => buildPerformanceLabVirtualLayout(document.markdownBlocks.map((block) => markdownByBlockId[block.blockId] ?? "")),
+  const sourceMarkdowns = useMemo(
+    () => document.markdownBlocks.map((block) => markdownByBlockId[block.blockId] ?? ""),
     [document.markdownBlocks, markdownBlockIds, markdownByBlockId]
+  );
+  const tanStackFallbackReason = requestedEditorWindowingLabMode === "tanstack-virtual"
+    ? getTanStackSourceWindowingFallbackReason(sourceMarkdowns)
+    : null;
+  const editorWindowingLabMode: EditorWindowingLabMode = requestedEditorWindowingLabMode === "tanstack-virtual"
+    ? getTanStackSourceWindowingEffectiveMode(sourceMarkdowns)
+    : requestedEditorWindowingLabMode;
+  const dynamicEditorWindowingLab = editorWindowingLabMode === "dynamic";
+  const virtualBlockWindowingLab = editorWindowingLabMode === "virtual";
+  const tanStackSourceWindowingLab = editorWindowingLabMode === "tanstack-virtual";
+  const statefulEditorWindowingLab = dynamicEditorWindowingLab ||
+    virtualBlockWindowingLab ||
+    requestedEditorWindowingLabMode === "tanstack-virtual";
+  const virtualBlockLayout = useMemo(
+    () => buildPerformanceLabVirtualLayout(sourceMarkdowns),
+    [sourceMarkdowns]
   );
 
   useEffect(() => {
@@ -1005,6 +1046,8 @@ export function SessionSourceEditor({
     <div
       className="session-source-editor source-block-shell"
       data-editor-windowing-lab={editorWindowingLabMode}
+      data-editor-windowing-requested={requestedEditorWindowingLabMode}
+      data-editor-windowing-fallback={tanStackFallbackReason ?? undefined}
       data-testid="session-source-editor"
       ref={editorScrollerRef}
     >
@@ -1206,6 +1249,7 @@ function SourceBlockSection({
           ].filter(Boolean).join(" ")}
           data-testid="source-block"
           data-block-id={block.blockId}
+          data-locked={block.locked ? "true" : "false"}
           data-locating-nonce={locatingNonce || undefined}
           data-source={block.sourceId}
           data-index={virtualIndex}
