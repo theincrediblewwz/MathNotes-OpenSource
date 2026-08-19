@@ -35,8 +35,8 @@
   "dependencies": {
     "@mathnotes/shared": "file:../shared",
     "busboy": "^1.6.0",
-    "katex": "^0.17.0",
-    "markdown-it": "^14.2.0"
+    "katex": "^0.18.4",
+    "markdown-it": "^15.0.0"
   },
   "devDependencies": {
     "@types/busboy": "^1.5.4",
