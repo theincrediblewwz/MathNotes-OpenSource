@@ -104,9 +104,9 @@
   "type": "commonjs",
   "devDependencies": {
     "@electron/packager": "^20.3.0",
-    "@napi-rs/canvas": "^1.0.2",
-    "playwright": "^1.61.1",
-    "resedit": "^2.0.3",
+    "@napi-rs/canvas": "^1.0.6",
+    "playwright": "^1.62.1",
+    "resedit": "^3.0.2",
     "yaml": "^2.9.0"
   },
   "overrides": {
