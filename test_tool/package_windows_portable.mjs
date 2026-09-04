@@ -132,7 +132,7 @@ await access(path.join(pwaRoot, "sw.js"));
 await cp(pwaRoot, packagedPwaRoot, { recursive: true });
 await access(path.join(packagedPwaRoot, "index.html"));
 await access(path.join(packagedPwaRoot, "sw.js"));
-await writeFile(path.join(packagedRoot, "首次运行说明.txt"), [
+const firstRunInstructions = [
   "MathNotes Windows 便携版",
   "",
   "1. 解压整个目录后运行 MathNotes.exe，不要只复制 exe。",
@@ -141,7 +141,8 @@ await writeFile(path.join(packagedRoot, "首次运行说明.txt"), [
   "4. 如需在 WSL 中调用 Codex，请先在自己的 WSL 发行版中安装并登录 Codex；默认命令为 codex。",
   "5. MathNotes 自有源码许可证见 LICENSE；CodeMirror 等组件的许可见 THIRD_PARTY_NOTICES.md。构建方法和已知限制见 README.md 与 SECURITY.md。",
   ""
-].join("\r\n"), "utf8");
+].join("\r\n");
+await writeFile(path.join(packagedRoot, "README-FIRST.txt"), firstRunInstructions, "utf8");
 await copyFile(path.join(projectRoot, "README.md"), path.join(packagedRoot, "README.md"));
 await copyFile(path.join(projectRoot, "LICENSE"), path.join(packagedRoot, "LICENSE"));
 await copyFile(path.join(projectRoot, "THIRD_PARTY_NOTICES.md"), path.join(packagedRoot, "THIRD_PARTY_NOTICES.md"));

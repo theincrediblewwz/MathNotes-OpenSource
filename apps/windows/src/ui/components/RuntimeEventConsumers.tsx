@@ -1,6 +1,6 @@
 import { type ComponentProps, useMemo } from "react";
 import { useRecognitionRuntimeEvents } from "../runtimeEventStore";
-import { DetachedAssistantWorkspace } from "./AssistantWorkspace";
+import { AssistantWorkspace } from "./AssistantWorkspace";
 import { TaskPopover } from "./Popovers";
 
 type TaskPopoverWithEventsProps = Omit<ComponentProps<typeof TaskPopover>, "events">;
@@ -10,7 +10,7 @@ export function TaskPopoverWithEvents(props: TaskPopoverWithEventsProps) {
   return <TaskPopover {...props} events={events} />;
 }
 
-type AssistantWorkspaceWithRuntimeProps = Omit<ComponentProps<typeof DetachedAssistantWorkspace>, "liveText"> & {
+type AssistantWorkspaceWithRuntimeProps = Omit<ComponentProps<typeof AssistantWorkspace>, "liveText"> & {
   runtimeTaskId: string | null;
 };
 
@@ -25,5 +25,5 @@ export function AssistantWorkspaceWithRuntime({ runtimeTaskId, ...props }: Assis
     return streamed || taskEvents.at(-1)?.message || "";
   }, [events, runtimeTaskId]);
 
-  return <DetachedAssistantWorkspace {...props} liveText={liveText} />;
+  return <AssistantWorkspace {...props} liveText={liveText} />;
 }

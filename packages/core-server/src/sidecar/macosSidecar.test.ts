@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionRecord } from "@mathnotes/shared";
 import { RuntimeProviderRegistry } from "../provider/runtimeProviderRegistry";
@@ -59,6 +59,77 @@ describe("macOS sidecar", () => {
     await expect(requestHealth(endpoint)).rejects.toThrow();
   });
 
+  it("wires user-controlled protected spans through the authenticated local sidecar", async () => {
+    rootDir = await mkdtemp(join(tmpdir(), "mathnotes-macos-sidecar-span-lock-"));
+    const notesRootDir = join(rootDir, "notes");
+    const sessionDir = await writeEmptySessionFixture(notesRootDir);
+    const token = "u".repeat(48);
+    const running = await startMacosSidecar({
+      token,
+      userDataDir: join(rootDir, "user-data"),
+      notesRootDir,
+      tempDir: join(rootDir, "temp"),
+      appVersion: "test",
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    });
+    const endpoint = `http://${running.ready.host}:${running.ready.port}`;
+    const query = "notebookId=analysis&sessionId=lecture&blockId=0001";
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    try {
+      const before = await fetch(`${endpoint}/local/v1/session/block?${query}`, { headers });
+      const beforeBlock = await before.json() as {
+        content: { markdown: string; baseRevision: string };
+      };
+      const selectedText = "第三讲";
+      const from = beforeBlock.content.markdown.indexOf(selectedText);
+      const protectedResponse = await fetch(`${endpoint}/local/v1/session/block/span/protect?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          baseRevision: beforeBlock.content.baseRevision,
+          from,
+          to: from + selectedText.length,
+          selectedText
+        })
+      });
+      expect(protectedResponse.status).toBe(200);
+      const protectedBody = await protectedResponse.json() as {
+        protected: boolean;
+        spanId: string;
+        block: { content: { markdown: string; baseRevision: string; protectedSpanCount: number } };
+      };
+      expect(protectedBody).toMatchObject({ protected: true, spanId: expect.stringMatching(/^lock_[0-9a-f-]{36}$/) });
+      expect(protectedBody.block.content.protectedSpanCount).toBe(1);
+      expect(await readFile(join(sessionDir, "blocks", "0001_user.md"), "utf8")).toContain("<!-- lock:start");
+      const protectedSession = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+      expect(protectedSession.locks).toEqual([
+        expect.objectContaining({ id: protectedBody.spanId, kind: "span", createdBy: "user", aiEditable: false })
+      ]);
+
+      const unlockFrom = protectedBody.block.content.markdown.indexOf(selectedText);
+      const unlockedResponse = await fetch(`${endpoint}/local/v1/session/block/span/unlock?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          baseRevision: protectedBody.block.content.baseRevision,
+          from: unlockFrom,
+          to: unlockFrom + selectedText.length,
+          selectedText
+        })
+      });
+      expect(unlockedResponse.status).toBe(200);
+      await expect(unlockedResponse.json()).resolves.toMatchObject({
+        protected: false,
+        spanId: protectedBody.spanId,
+        block: { content: { markdown: "# 第三讲\n", protectedSpanCount: 0 } }
+      });
+      const unlockedSession = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+      expect(unlockedSession.locks).toEqual([]);
+    } finally {
+      await running.stop();
+    }
+  });
+
   it("wires one authenticated image recognition turn through the running sidecar", async () => {
     rootDir = await mkdtemp(join(tmpdir(), "mathnotes-macos-sidecar-recognition-"));
     const notesRootDir = join(rootDir, "notes");
@@ -104,6 +175,159 @@ describe("macOS sidecar", () => {
       await running.stop();
     }
 
+  });
+
+  it("commits an edited PNG with its original and sidecar through the trusted Mac route", async () => {
+    rootDir = await mkdtemp(join(tmpdir(), "mathnotes-macos-sidecar-image-edit-"));
+    const notesRootDir = join(rootDir, "notes");
+    const sessionDir = await writeEmptySessionFixture(notesRootDir);
+    const token = "e".repeat(48);
+    const running = await startMacosSidecar({
+      token,
+      userDataDir: join(rootDir, "user-data"),
+      notesRootDir,
+      tempDir: join(rootDir, "temp"),
+      appVersion: "test",
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    });
+    const endpoint = `http://${running.ready.host}:${running.ready.port}`;
+    const query = "notebookId=analysis&sessionId=lecture";
+    const headers = { Authorization: `Bearer ${token}` };
+    try {
+      const before = await fetch(`${endpoint}/local/v1/session/manifest?${query}`, { headers });
+      const revision = ((await before.json()) as { revision: string }).revision;
+      const source = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+      const output = Buffer.from(tinyPng());
+      const form = new FormData();
+      form.set("fileName", "课堂黑板.jpg");
+      form.set("baseRevision", revision);
+      form.set("metadata", JSON.stringify({
+        operations: [{ type: "rotate", quarterTurns: 1 }],
+        annotations: [{
+          id: "arrow-1", type: "arrow",
+          start: { x: 0.2, y: 0.2 }, end: { x: 0.8, y: 0.7 },
+          color: "#187857", width: 0.006
+        }]
+      }));
+      form.set("source", new Blob([Uint8Array.from(source)]), "source.jpg");
+      form.set("output", new Blob([Uint8Array.from(output)], { type: "image/png" }), "edited.png");
+      const response = await fetch(`${endpoint}/local/v1/session/image/edit?${query}`, {
+        method: "POST", headers, body: form
+      });
+      expect(response.status).toBe(200);
+      const edited = await response.json() as {
+        blockId: string;
+        sourceAssetPath: string;
+        assetPath: string;
+        metadataPath: string;
+        sourceSha256: string;
+      };
+      expect(edited.blockId).toBe("0002");
+      expect(await readFile(join(sessionDir, edited.sourceAssetPath))).toEqual(source);
+      expect(await readFile(join(sessionDir, edited.assetPath))).toEqual(output);
+      await expect(readFile(join(sessionDir, edited.metadataPath), "utf8")).resolves.toContain(
+        `"sourceSha256": "${edited.sourceSha256}"`
+      );
+      const stored = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+      expect(stored.blocks[1]).toMatchObject({
+        id: "0002",
+        type: "image",
+        path: edited.assetPath,
+        fromAssets: [edited.sourceAssetPath]
+      });
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("imports a PDF with its native page count and completes a selected-page batch through the sidecar", async () => {
+    rootDir = await mkdtemp(join(tmpdir(), "mathnotes-macos-sidecar-pdf-batch-"));
+    const notesRootDir = join(rootDir, "notes");
+    const sessionDir = await writeEmptySessionFixture(notesRootDir);
+    const token = "b".repeat(48);
+    const running = await startMacosSidecar({
+      token,
+      userDataDir: join(rootDir, "user-data"),
+      notesRootDir,
+      tempDir: join(rootDir, "temp"),
+      appVersion: "test",
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      providerFactory: {
+        async createRecognitionProvider() {
+          return {
+            name: "pdf-sidecar-fixture",
+            async transcribe(input) {
+              const page = input.imagePaths[0].match(/page-(\d+)/)?.[1] ?? "unknown";
+              return { markdown: `## PDF 第 ${page} 页\n` };
+            }
+          };
+        },
+        async createAssistantProvider() { throw new Error("not used"); }
+      }
+    });
+    const endpoint = `http://${running.ready.host}:${running.ready.port}`;
+    const query = "notebookId=analysis&sessionId=lecture";
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    try {
+      const manifestResponse = await fetch(`${endpoint}/local/v1/session/manifest?${query}`, { headers });
+      const before = await manifestResponse.json() as { revision: string };
+      const pdf = Buffer.from("%PDF-1.7\n1 0 obj<</Type /Catalog>>endobj\n%%EOF", "latin1");
+      const importedResponse = await fetch(
+        `${endpoint}/local/v1/session/pdf?${query}&fileName=paper.pdf&baseRevision=${before.revision}&pageCount=2`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/pdf" }, body: pdf }
+      );
+      expect(importedResponse.status).toBe(200);
+      const imported = await importedResponse.json() as {
+        blockId: string;
+        assetPath: string;
+        pageCount: number;
+        manifest: { revision: string };
+      };
+      expect(imported).toMatchObject({ blockId: "0002", pageCount: 2 });
+
+      const pages: Array<{ pageNumber: number; assetPath: string }> = [];
+      for (const pageNumber of [1, 2]) {
+        const stagedResponse = await fetch(
+          `${endpoint}/local/v1/session/pdf-recognition/page?${query}&pdfBlockId=${imported.blockId}&pageNumber=${pageNumber}&baseRevision=${imported.manifest.revision}`,
+          { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/png" }, body: Buffer.from(tinyPng()) }
+        );
+        expect(stagedResponse.status).toBe(201);
+        const staged = await stagedResponse.json() as { page: { pageNumber: number; assetPath: string } };
+        pages.push(staged.page);
+      }
+
+      const startedResponse = await fetch(`${endpoint}/local/v1/session/pdf-recognition/start?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          pdfBlockId: imported.blockId,
+          pdfAssetPath: imported.assetPath,
+          pageCount: imported.pageCount,
+          concurrency: 2,
+          baseRevision: imported.manifest.revision,
+          pages
+        })
+      });
+      expect(startedResponse.status).toBe(202);
+      const started = await startedResponse.json() as { batch: { batchId: string } };
+      const completed = await waitForPdfBatch(endpoint, token, query, started.batch.batchId);
+      expect(completed).toMatchObject({ status: "completed", selectedPages: [1, 2], succeeded: 2, failed: 0 });
+
+      const stored = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+      expect(stored.blocks.map((block) => block.id)).toEqual(["0001", "0002", "0003", "0004"]);
+      expect(stored.blocks.slice(2).map((block) => ({
+        page: block.sourcePageNumber,
+        source: block.fromAssets,
+        image: block.sourcePageImagePath
+      }))).toEqual([
+        expect.objectContaining({ page: 1, source: [imported.assetPath], image: expect.stringContaining("page-0001") }),
+        expect.objectContaining({ page: 2, source: [imported.assetPath], image: expect.stringContaining("page-0002") })
+      ]);
+      await expect(readFile(join(sessionDir, "blocks", "0003_ai_transcript.md"), "utf8"))
+        .resolves.toContain("PDF 第 0001 页");
+    } finally {
+      await running.stop();
+    }
   });
 
   it("hosts the portable companion API and accepts a paired image upload", async () => {
@@ -274,6 +498,34 @@ describe("macOS sidecar", () => {
       });
     } finally {
       await restarted.stop();
+    }
+  });
+
+  it("falls back to an available companion port when the requested port is occupied", async () => {
+    rootDir = await mkdtemp(join(tmpdir(), "mathnotes-macos-companion-port-fallback-"));
+    const occupied = createServer();
+    await new Promise<void>((resolve) => occupied.listen(0, "0.0.0.0", resolve));
+    const address = occupied.address();
+    if (!address || typeof address === "string") throw new Error("missing occupied port");
+    let running: Awaited<ReturnType<typeof startMacosSidecar>> | undefined;
+    try {
+      running = await startMacosSidecar({
+        token: "l".repeat(48),
+        userDataDir: join(rootDir, "user-data"),
+        notesRootDir: join(rootDir, "notes"),
+        tempDir: join(rootDir, "temp"),
+        appVersion: "test",
+        companionHost: { token: "c".repeat(48), port: address.port },
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+      });
+      expect(running.ready.companionHost?.port).toEqual(expect.any(Number));
+      expect(running.ready.companionHost?.port).not.toBe(address.port);
+      expect(running.ready.companionHost?.port).toBeGreaterThan(0);
+    } finally {
+      await running?.stop();
+      await new Promise<void>((resolve, reject) => {
+        occupied.close((error) => error ? reject(error) : resolve());
+      });
     }
   });
 
@@ -511,6 +763,99 @@ describe("macOS sidecar", () => {
       await running.stop();
     }
   });
+
+  it("deletes and restores one block through a revision-bound Mac-only undo receipt", async () => {
+    rootDir = await mkdtemp(join(tmpdir(), "mathnotes-macos-undo-"));
+    const token = "u".repeat(48);
+    const notesRootDir = join(rootDir, "notes");
+    await writeEmptySessionFixture(notesRootDir);
+    const running = await startMacosSidecar({
+      token,
+      userDataDir: join(rootDir, "user-data"),
+      notesRootDir,
+      tempDir: join(rootDir, "temp"),
+      appVersion: "mac-test",
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    });
+    const endpoint = `http://${running.ready.host}:${running.ready.port}`;
+    const query = "notebookId=analysis&sessionId=lecture";
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    try {
+      const initial = await fetch(`${endpoint}/local/v1/session/manifest?${query}`, { headers });
+      const initialManifest = await initial.json() as { revision: string };
+      const deleted = await fetch(`${endpoint}/local/v1/session/blocks/delete?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ blockIds: ["0001"], baseRevision: initialManifest.revision })
+      });
+      expect(deleted.status).toBe(200);
+      const deletedPayload = await deleted.json() as {
+        manifest: { revision: string; blocks: unknown[] };
+        undo: { deletionId: string; deletedBlockIds: string[] };
+      };
+      expect(deletedPayload.manifest.blocks).toEqual([]);
+      expect(deletedPayload.undo.deletedBlockIds).toEqual(["0001"]);
+
+      const restored = await fetch(`${endpoint}/local/v1/session/blocks/restore?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          deletionId: deletedPayload.undo.deletionId,
+          baseRevision: deletedPayload.manifest.revision
+        })
+      });
+      expect(restored.status).toBe(200);
+      await expect(restored.json()).resolves.toMatchObject({
+        restored: true,
+        manifest: { blocks: [{ id: "0001" }] }
+      });
+      await expect(readFile(join(notesRootDir, "notebooks/analysis/sessions/lecture/blocks/0001_user.md"), "utf8"))
+        .resolves.toBe("# 第三讲\n");
+    } finally {
+      await running.stop();
+    }
+  });
+
+  it("creates a secrets-free notes backup through the Mac-only sidecar route", async () => {
+    rootDir = await mkdtemp(join(tmpdir(), "mathnotes-macos-backup-"));
+    const token = "f".repeat(48);
+    const notesRootDir = join(rootDir, "notes");
+    const sessionDir = join(notesRootDir, "notebooks", "analysis", "sessions", "lecture");
+    const destinationParentDir = join(rootDir, "backups");
+    await mkdir(join(sessionDir, "blocks"), { recursive: true });
+    await mkdir(join(notesRootDir, "settings"), { recursive: true });
+    await writeFile(join(sessionDir, "session.json"), "{\"id\":\"lecture\"}\n", "utf8");
+    await writeFile(join(sessionDir, "blocks", "0001.md"), "# 第三讲\n", "utf8");
+    await writeFile(join(notesRootDir, "settings", "provider.json"), "secret", "utf8");
+
+    const running = await startMacosSidecar({
+      token,
+      userDataDir: join(rootDir, "user-data"),
+      notesRootDir,
+      tempDir: join(rootDir, "temp"),
+      appVersion: "mac-test",
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    });
+    const endpoint = `http://${running.ready.host}:${running.ready.port}`;
+    try {
+      const response = await fetch(`${endpoint}/local/v1/notes/backup`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ destinationParentDir })
+      });
+      expect(response.status).toBe(201);
+      const payload = await response.json() as {
+        backup: { backupDir: string; manifestPath: string; fileCount: number }
+      };
+      expect(payload.backup.fileCount).toBe(2);
+      await expect(readFile(join(payload.backup.backupDir, "settings", "provider.json"), "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(payload.backup.manifestPath, "utf8"))
+        .resolves.toContain('"containsProviderSecrets": false');
+    } finally {
+      await running.stop();
+    }
+  });
 });
 
 async function writeRecognitionFixture(notesRootDir: string): Promise<string> {
@@ -570,6 +915,21 @@ async function waitForRecognition(endpoint: string, token: string, query: string
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`recognition task ${taskId} did not finish`);
+}
+
+async function waitForPdfBatch(endpoint: string, token: string, query: string, batchId: string) {
+  let last: unknown;
+  for (let index = 0; index < 600; index += 1) {
+    const response = await fetch(
+      `${endpoint}/local/v1/session/pdf-recognition?${query}&batchId=${encodeURIComponent(batchId)}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const payload = await response.json() as { batch: { status: string } };
+    last = payload.batch;
+    if (["completed", "cancelled"].includes(payload.batch.status)) return payload.batch;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`PDF recognition batch ${batchId} did not finish: ${JSON.stringify(last)}`);
 }
 
 function requestHealth(endpoint: string, token?: string): Promise<{ status: number; body: string }> {

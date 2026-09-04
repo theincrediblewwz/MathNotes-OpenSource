@@ -7,6 +7,7 @@ import {
   readReadonlySessionAsset,
   readReadonlySessionBlock,
   readReadonlySessionManifest,
+  readReadonlySessionPreview,
   renderReadonlyMarkdownPreview,
   renderStandaloneMarkdownPreview,
   SessionReadError
@@ -106,6 +107,27 @@ describe("readonly session content", () => {
     if (stored.content.kind !== "markdown") throw new Error("expected markdown");
     expect(stored.content.markdown).toContain("## 定理");
     expect(stored.content.markdown).not.toContain("即时公式");
+  });
+
+  it("returns a bounded rendered session preview without disk paths or executable HTML", async () => {
+    const preview = await readReadonlySessionPreview({
+      rootDir: root,
+      notebookId: "analysis",
+      sessionId: "lecture",
+      maximumMarkdownCharacters: 1_000
+    });
+    expect(preview).toMatchObject({
+      version: 1,
+      notebookId: "analysis",
+      sessionId: "lecture",
+      title: "泛函分析 第 3 讲",
+      truncated: false
+    });
+    expect(preview.html).toContain("session-preview-block");
+    expect(preview.html).toContain("<math");
+    expect(preview.html).toContain("data:image/png;base64,");
+    expect(preview.html).not.toContain(sessionDir);
+    expect(preview.html).not.toContain("<script>alert('no')</script>");
   });
 
   it("renders temporary Markdown without resolving external relative assets", async () => {

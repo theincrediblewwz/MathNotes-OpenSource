@@ -17,7 +17,7 @@ class MathNotesSystemBarAppearanceTest {
     @Test
     fun lightThemesUseTheirCanvasColorAndDarkSystemIcons() {
         val expectedColors = mapOf(
-            MathNotesThemeId.DEFAULT_LIGHT to 0xFFFBFAF7.toInt(),
+            MathNotesThemeId.DEFAULT_LIGHT to 0xFFFBF9F7.toInt(),
             MathNotesThemeId.READING to 0xFFF7F6F2.toInt(),
             MathNotesThemeId.HIGH_CONTRAST to 0xFFFFFFFF.toInt()
         )
@@ -38,7 +38,7 @@ class MathNotesSystemBarAppearanceTest {
         }
 
         val restored = systemBarAppearanceFor(MathNotesThemeId.DEFAULT_LIGHT)
-        assertEquals(0xFFFBFAF7.toInt(), restored.backgroundArgb)
+        assertEquals(0xFFFBF9F7.toInt(), restored.backgroundArgb)
         assertTrue(restored.useDarkIcons)
     }
 }

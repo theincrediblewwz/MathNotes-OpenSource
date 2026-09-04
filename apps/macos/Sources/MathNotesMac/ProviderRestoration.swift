@@ -1,10 +1,10 @@
 import Foundation
 
-enum ProviderRestorationError: Equatable, Sendable {
+enum ProviderRestorationError: LocalizedError, Equatable, Sendable {
     case missingCredential
     case rejected(sanitizedMessage: String)
 
-    var errorDescription: String {
+    var errorDescription: String? {
         switch self {
         case .missingCredential: "已保存的 API 密钥无法读取，请在 AI 服务设置中重新保存。"
         case let .rejected(sanitizedMessage): sanitizedMessage

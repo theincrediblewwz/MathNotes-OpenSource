@@ -10,7 +10,8 @@ describe("buildAssistantPrompt", () => {
     });
 
     expect(prompt).toContain("独立学习助手");
-    expect(prompt).toContain("原笔记是只读证据");
+    expect(prompt).toContain("如果用户要求修改，请给出可直接采用的具体候选");
+    expect(prompt).toContain("锁定检查和版本复核");
     expect(prompt).toContain("用户问题：这里为什么需要有界性？");
     expect(prompt).toContain("[不确定：一致收敛?]");
     expect(prompt).not.toContain("忠实转写为 Markdown");

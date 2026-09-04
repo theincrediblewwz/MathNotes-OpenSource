@@ -45,7 +45,7 @@ const applicationJavaScript = (
       .map((file) => readFile(path.join(stageRoot, file.path), "utf8"))
   )
 ).join("\n");
-assert(applicationJavaScript.includes("2026.07.29.13"), "PWA package build marker is stale");
+assert(applicationJavaScript.includes("2026.09.01.1"), "PWA package build marker is stale");
 assert(applicationJavaScript.includes(".katex-html"), "PWA package is missing KaTeX HTML styles");
 assert(
   (applicationJavaScript.match(/data:font\/woff2/g) ?? []).length >= 20,

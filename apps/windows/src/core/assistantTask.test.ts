@@ -33,10 +33,10 @@ describe("runAssistantTask", () => {
       markdownByBlockId
     });
 
-    expect(context).toContain("42. stable ID=0042");
-    expect(context).toContain("## 第 42 块 · stable ID 0042");
+    expect(context).toContain("42. source=user");
+    expect(context).toContain("## 第 42 块");
     expect(context).toContain("第 42 块的精确内容：一致有界原理");
-    expect(context).toContain("重排后序号变化，stable ID 不变");
+    expect(context).not.toContain("stable ID");
   });
 
   it("stores an independent remark without changing or unlocking source content", async () => {
@@ -94,6 +94,56 @@ describe("runAssistantTask", () => {
     const index = JSON.parse(await readFile(path.join(assistantDir, "index.json"), "utf8"));
     expect(index).toMatchObject({ version: 1, remarks: [{ id: result.remarkId }] });
     expect(await readFile(path.join(assistantDir, index.remarks[0].file), "utf8")).toContain("这里说明");
+  });
+
+  it("grounds answers in a precisely identified related note through a read-only gateway", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "mathnotes-assistant-related-"));
+    roots.push(rootDir);
+    const store = new BlockStore(rootDir);
+    await store.createSession({ notebookId: "current", sessionId: "question", title: "当前问题", now: "2026-08-30T00:00:00.000Z" });
+    await store.appendMarkdownBlock({
+      notebookId: "current", sessionId: "question", source: "user", markdown: "我正在复习泛函分析。", now: "2026-08-30T00:00:01.000Z"
+    });
+    await store.createSession({ notebookId: "analysis", sessionId: "principle", title: "一致有界原理", now: "2026-08-29T00:00:00.000Z" });
+    const relatedBlock = await store.appendMarkdownBlock({
+      notebookId: "analysis", sessionId: "principle", source: "user",
+      markdown: "一致有界原理：逐点有界的连续线性算子族一致有界。", now: "2026-08-29T00:00:01.000Z"
+    });
+    await store.setMarkdownBlockLock({
+      notebookId: "analysis", sessionId: "principle", blockId: relatedBlock.id, locked: true, now: "2026-08-29T00:00:02.000Z"
+    });
+    await writeFile(path.join(rootDir, "notebooks", "analysis", "notebook.json"), JSON.stringify({
+      id: "analysis", title: "泛函分析", createdAt: "2026-08-29T00:00:00.000Z", updatedAt: "2026-08-29T00:00:02.000Z"
+    }));
+
+    const result = await runAssistantTask({
+      store,
+      provider: {
+        name: "grounded-assistant",
+        async assist(input) {
+          expect(input.markdownContext).toContain("Notebook：泛函分析 / Session：一致有界原理");
+          expect(input.markdownContext).not.toContain("[R1]");
+          expect(input.markdownContext).not.toContain(`block=${relatedBlock.id}`);
+          expect(input.markdownContext).toContain("权限：只读；内容已锁定");
+          return { markdown: "回答引用了相关笔记。" };
+        }
+      },
+      input: {
+        taskId: "assistant_related",
+        notebookId: "current",
+        sessionId: "question",
+        scope: "session",
+        mode: "explain",
+        question: "一致有界原理是什么？"
+      }
+    });
+
+    expect(result.relatedSources).toEqual([expect.objectContaining({
+      refId: "R1", notebookTitle: "泛函分析", sessionTitle: "一致有界原理", blockId: relatedBlock.id, locked: true
+    })]);
+    const [remark] = await new AssistantRemarkStore(store).list("current", "question");
+    expect(remark.relatedSources).toEqual(result.relatedSources);
+    expect((await store.readSession("analysis", "principle")).blocks[0].status).toBe("locked");
   });
 
   it("does not persist a remark when the user cancels", async () => {

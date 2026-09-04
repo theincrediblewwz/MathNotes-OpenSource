@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantProvider, RecognitionProvider, SessionRecord } from "@mathnotes/shared";
 import { SessionRecognitionService } from "../session/sessionRecognitionService";
+import type { SessionPdfRecognitionBatchService } from "../session/sessionPdfRecognitionBatchService";
 import { SessionAssistantService } from "../session/sessionAssistantService";
 import { SessionEditError, SessionEditService } from "../session/sessionEditService";
 import { SessionSelectionEditService } from "../session/sessionSelectionEditService";
@@ -503,6 +504,90 @@ describe("LocalShellServer", () => {
     }
   });
 
+  it("protects and unlocks an exact selection only through trusted local routes", async () => {
+    const token = "p".repeat(48);
+    const baseRevision = "b".repeat(64);
+    const nextRevision = "c".repeat(64);
+    const calls: unknown[] = [];
+    const block = {
+      version: 1 as const,
+      notebookId: "analysis",
+      sessionId: "lecture",
+      block: {
+        id: "0001", order: 0, type: "markdown" as const, source: "user" as const, status: "draft" as const,
+        sourceName: "0001.md", renderInNote: true, editable: true, updatedAt: "2026-08-30T13:00:00.000Z"
+      },
+      content: {
+        kind: "markdown" as const,
+        html: "<p>固定内容</p>",
+        markdown: "固定内容",
+        baseRevision: nextRevision,
+        blockLocked: false,
+        protectedSpanCount: 1
+      }
+    };
+    const server = new LocalShellServer({
+      port: 0,
+      token,
+      protectSessionBlockSpan: async (input) => {
+        calls.push(["protect", input]);
+        return { version: 1, protected: true, spanId: "lock-test", block };
+      },
+      unlockSessionBlockSpan: async (input) => {
+        calls.push(["unlock", input]);
+        return {
+          version: 1,
+          protected: false,
+          spanId: "lock-test",
+          block: { ...block, content: { ...block.content, protectedSpanCount: 0 } }
+        };
+      }
+    });
+    const started = await server.start();
+    const query = "notebookId=analysis&sessionId=lecture&blockId=0001";
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const body = JSON.stringify({ baseRevision, from: 0, to: 4, selectedText: "固定内容" });
+    try {
+      expect((await fetch(`${started.url}/local/v1/session/block/span/protect?${query}`, {
+        method: "POST", body
+      })).status).toBe(401);
+      const protectedResponse = await fetch(`${started.url}/local/v1/session/block/span/protect?${query}`, {
+        method: "POST", headers, body
+      });
+      expect(protectedResponse.status).toBe(200);
+      await expect(protectedResponse.json()).resolves.toMatchObject({ protected: true, spanId: "lock-test" });
+
+      const unlockedResponse = await fetch(`${started.url}/local/v1/session/block/span/unlock?${query}`, {
+        method: "POST", headers, body
+      });
+      expect(unlockedResponse.status).toBe(200);
+      await expect(unlockedResponse.json()).resolves.toMatchObject({ protected: false, spanId: "lock-test" });
+      expect(calls).toEqual([
+        ["protect", {
+          notebookId: "analysis", sessionId: "lecture", blockId: "0001", baseRevision,
+          selection: { from: 0, to: 4, selectedText: "固定内容" }
+        }],
+        ["unlock", {
+          notebookId: "analysis", sessionId: "lecture", blockId: "0001", baseRevision,
+          selection: { from: 0, to: 4, selectedText: "固定内容" }
+        }]
+      ]);
+
+      const invalid = await fetch(`${started.url}/local/v1/session/block/span/protect?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ baseRevision, from: 0, to: 0, selectedText: "" })
+      });
+      expect(invalid.status).toBe(400);
+      await expect(invalid.json()).resolves.toEqual({ error: "invalid_protected_span_body" });
+      expect((await fetch(`${started.url}/api/v1/session/block/span/unlock?${query}`, {
+        method: "POST", headers, body
+      })).status).toBe(404);
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("lists, reads and resolves durable Markdown conflicts through authenticated routes", async () => {
     const token = "f".repeat(48);
     const revision = "c".repeat(64);
@@ -620,15 +705,101 @@ describe("LocalShellServer", () => {
     }
   });
 
+  it("imports an edited image through one authenticated bounded multipart commit", async () => {
+    const token = "m".repeat(48);
+    const revision = "b".repeat(64);
+    const calls: Array<{
+      fileName: string;
+      sourceBytes: Buffer;
+      outputPngBytes: Buffer;
+      baseRevision: string;
+      operations: unknown[];
+    }> = [];
+    const server = new LocalShellServer({
+      port: 0,
+      token,
+      importSessionEditedImage: async (input) => {
+        calls.push(input);
+        return {
+          version: 1,
+          imported: true,
+          edited: true,
+          blockId: "0002",
+          sourceAssetPath: "assets/photos/source.jpg",
+          assetPath: "assets/embedded/edited.png",
+          metadataPath: "assets/embedded/edited.annotation.json",
+          sourceSha256: "c".repeat(64),
+          outputSha256: "d".repeat(64),
+          manifest: {
+            version: 1,
+            notebookId: input.notebookId,
+            sessionId: input.sessionId,
+            title: "第三讲",
+            status: "draft",
+            updatedAt: "2026-08-30T00:00:00.000Z",
+            revision: "e".repeat(64),
+            blocks: []
+          }
+        };
+      }
+    });
+    const started = await server.start();
+    const url = `${started.url}/local/v1/session/image/edit?notebookId=analysis&sessionId=lecture`;
+    const source = Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]);
+    const output = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5]);
+    const form = () => {
+      const body = new FormData();
+      body.set("fileName", "课堂黑板.jpg");
+      body.set("baseRevision", revision);
+      body.set("metadata", JSON.stringify({ operations: [{ type: "rotate", quarterTurns: 1 }], annotations: [] }));
+      body.set("source", new Blob([source]), "source.jpg");
+      body.set("output", new Blob([output]), "edited.png");
+      return body;
+    };
+    try {
+      const unauthorized = await fetch(url, { method: "POST", body: form() });
+      expect(unauthorized.status).toBe(401);
+
+      const imported = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form()
+      });
+      expect(imported.status).toBe(200);
+      await expect(imported.json()).resolves.toMatchObject({ imported: true, edited: true, blockId: "0002" });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ fileName: "课堂黑板.jpg", baseRevision: revision });
+      expect(calls[0]?.sourceBytes).toEqual(source);
+      expect(calls[0]?.outputPngBytes).toEqual(output);
+      expect(calls[0]?.operations).toEqual([{ type: "rotate", quarterTurns: 1 }]);
+
+      const invalid = form();
+      invalid.set("metadata", "{bad json");
+      const invalidResponse = await fetch(url, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` }, body: invalid
+      });
+      expect(invalidResponse.status).toBe(400);
+      await expect(invalidResponse.json()).resolves.toEqual({ error: "invalid_image_edit_metadata" });
+      expect(calls).toHaveLength(1);
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("imports one bounded PDF through an authenticated binary POST", async () => {
     const token = "p".repeat(48);
     const revision = "f".repeat(64);
-    const calls: Array<{ fileName: string; bytes: Buffer; baseRevision: string }> = [];
+    const calls: Array<{ fileName: string; bytes: Buffer; baseRevision: string; pageCountHint?: number }> = [];
     const server = new LocalShellServer({
       port: 0,
       token,
       importSessionPdf: async (input) => {
-        calls.push({ fileName: input.fileName, bytes: input.bytes, baseRevision: input.baseRevision });
+        calls.push({
+          fileName: input.fileName,
+          bytes: input.bytes,
+          baseRevision: input.baseRevision,
+          pageCountHint: input.pageCountHint
+        });
         return {
           version: 1,
           imported: true,
@@ -649,7 +820,7 @@ describe("LocalShellServer", () => {
       }
     });
     const started = await server.start();
-    const query = `notebookId=analysis&sessionId=lecture&fileName=lecture.pdf&baseRevision=${revision}`;
+    const query = `notebookId=analysis&sessionId=lecture&fileName=lecture.pdf&baseRevision=${revision}&pageCount=17`;
     const url = `${started.url}/local/v1/session/pdf?${query}`;
     const bytes = Buffer.from("%PDF-1.7\n%%EOF", "latin1");
     try {
@@ -665,8 +836,94 @@ describe("LocalShellServer", () => {
         pageCount: 1
       });
       expect(calls).toHaveLength(1);
-      expect(calls[0]).toMatchObject({ fileName: "lecture.pdf", baseRevision: revision });
+      expect(calls[0]).toMatchObject({ fileName: "lecture.pdf", baseRevision: revision, pageCountHint: 17 });
       expect(calls[0]?.bytes).toEqual(bytes);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("stages and controls a PDF recognition batch only through authenticated local routes", async () => {
+    const token = "b".repeat(48);
+    const revision = "a".repeat(64);
+    const calls: Array<{ action: string; input: unknown }> = [];
+    const batch = {
+      version: 1 as const,
+      batchId: "pdf_0002_fixture",
+      notebookId: "analysis",
+      sessionId: "lecture",
+      pdfBlockId: "0002",
+      pageCount: 3,
+      selectedPages: [1, 2],
+      taskIds: ["task-1", "task-2"],
+      status: "running" as const,
+      concurrency: 2,
+      running: 2,
+      pending: 0,
+      succeeded: 0,
+      failed: 0,
+      cancelled: 0,
+      createdAt: "2026-08-30T00:00:00.000Z",
+      updatedAt: "2026-08-30T00:00:00.000Z"
+    };
+    const service = {
+      async stagePage(input: unknown) {
+        calls.push({ action: "stage", input });
+        return { version: 1, pageNumber: 1, assetPath: "assets/pdf-pages/0002/page-0001.png", byteLength: 9, sha256: "f".repeat(64) };
+      },
+      async start(input: unknown) { calls.push({ action: "start", input }); return batch; },
+      async list(input: unknown) { calls.push({ action: "list", input }); return [batch]; },
+      async get(input: unknown) { calls.push({ action: "get", input }); return batch; },
+      async pause(input: unknown) { calls.push({ action: "pause", input }); return { ...batch, status: "pausing" as const }; },
+      async resume(input: unknown) { calls.push({ action: "resume", input }); return batch; },
+      async cancel(input: unknown) { calls.push({ action: "cancel", input }); return { ...batch, status: "cancelled" as const }; }
+    } as unknown as SessionPdfRecognitionBatchService;
+    const server = new LocalShellServer({ port: 0, token, sessionPdfRecognition: service });
+    const started = await server.start();
+    const query = `notebookId=analysis&sessionId=lecture`;
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    try {
+      const pageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+      const staged = await fetch(
+        `${started.url}/local/v1/session/pdf-recognition/page?${query}&pdfBlockId=0002&pageNumber=1&baseRevision=${revision}`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/png" }, body: pageBytes }
+      );
+      expect(staged.status).toBe(201);
+      await expect(staged.json()).resolves.toMatchObject({ page: { pageNumber: 1 } });
+
+      const startedBatch = await fetch(`${started.url}/local/v1/session/pdf-recognition/start?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          pdfBlockId: "0002",
+          pdfAssetPath: "assets/pdfs/lecture.pdf",
+          pageCount: 3,
+          concurrency: 2,
+          baseRevision: revision,
+          pages: [{ pageNumber: 1, assetPath: "assets/pdf-pages/0002/page-0001.png" }]
+        })
+      });
+      expect(startedBatch.status).toBe(202);
+      await expect(startedBatch.json()).resolves.toMatchObject({ batch: { batchId: batch.batchId } });
+
+      const listed = await fetch(`${started.url}/local/v1/session/pdf-recognition?${query}`, { headers });
+      await expect(listed.json()).resolves.toMatchObject({ batches: [{ batchId: batch.batchId }] });
+      const readOne = await fetch(
+        `${started.url}/local/v1/session/pdf-recognition?${query}&batchId=${batch.batchId}`,
+        { headers }
+      );
+      await expect(readOne.json()).resolves.toMatchObject({ batch: { batchId: batch.batchId } });
+      for (const action of ["pause", "resume", "cancel"] as const) {
+        const controlled = await fetch(
+          `${started.url}/local/v1/session/pdf-recognition/${action}?${query}&batchId=${batch.batchId}`,
+          { method: "POST", headers }
+        );
+        expect(controlled.status).toBe(200);
+      }
+      expect(calls.map((call) => call.action)).toEqual([
+        "stage", "start", "list", "get", "pause", "resume", "cancel"
+      ]);
+      expect(calls[0]?.input).toMatchObject({ pageNumber: 1, baseRevision: revision, bytes: pageBytes });
     } finally {
       await server.stop();
     }
@@ -855,6 +1112,18 @@ describe("LocalShellServer", () => {
       },
       deleteSessionBlocks: async (input) => {
         calls.push(["delete", input]);
+        return {
+          manifest,
+          undo: {
+            version: 1,
+            deletionId: "00000000-0000-0000-0000-000000000001",
+            deletedBlockIds: input.blockIds,
+            deletedAt: "2026-07-28T12:00:00.000Z"
+          }
+        };
+      },
+      restoreSessionBlocks: async (input) => {
+        calls.push(["restore", input]);
         return manifest;
       },
       previewSessionMarkdown: async (input) => {
@@ -892,9 +1161,29 @@ describe("LocalShellServer", () => {
       const deleted = await fetch(`${started.url}/local/v1/session/blocks/delete?${query}`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ blockIds: ["0002"] })
+        body: JSON.stringify({ blockIds: ["0002"], baseRevision: "a".repeat(64) })
       });
-      await expect(deleted.json()).resolves.toEqual({ version: 1, deleted: true, manifest });
+      await expect(deleted.json()).resolves.toEqual({
+        version: 1,
+        deleted: true,
+        manifest,
+        undo: {
+          version: 1,
+          deletionId: "00000000-0000-0000-0000-000000000001",
+          deletedBlockIds: ["0002"],
+          deletedAt: "2026-07-28T12:00:00.000Z"
+        }
+      });
+
+      const restored = await fetch(`${started.url}/local/v1/session/blocks/restore?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          deletionId: "00000000-0000-0000-0000-000000000001",
+          baseRevision: "a".repeat(64)
+        })
+      });
+      await expect(restored.json()).resolves.toEqual({ version: 1, restored: true, manifest });
 
       const previewed = await fetch(`${started.url}/local/v1/session/markdown/preview?${query}`, {
         method: "POST",
@@ -939,7 +1228,11 @@ describe("LocalShellServer", () => {
           notebookId: "analysis", sessionId: "lecture", blockIds: ["0002", "0003"], direction: "up"
         }],
         ["delete", {
-          notebookId: "analysis", sessionId: "lecture", blockIds: ["0002"]
+          notebookId: "analysis", sessionId: "lecture", blockIds: ["0002"], baseRevision: "a".repeat(64)
+        }],
+        ["restore", {
+          notebookId: "analysis", sessionId: "lecture",
+          deletionId: "00000000-0000-0000-0000-000000000001", baseRevision: "a".repeat(64)
         }],
         ["preview", {
           notebookId: "analysis", sessionId: "lecture", blockId: "0002", markdown: "draft"
@@ -1179,22 +1472,22 @@ describe("LocalShellServer", () => {
       const applied = await fetch(`${started.url}/local/v1/session/selection-edit/apply?${query}`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ proposalId: proposal.id })
+        body: JSON.stringify({ proposalId: proposal.id, replacementMarkdown: "用户确认后的候选" })
       });
       expect(applied.status).toBe(200);
       await expect(applied.json()).resolves.toMatchObject({
         applied: true,
         proposal: { id: proposal.id, status: "applied" }
       });
-      expect(await readFile(blockPath, "utf8")).toBe("原句重复；精简句");
+      expect(await readFile(blockPath, "utf8")).toBe("原句重复；用户确认后的候选");
 
       const secondMarkdown = await readFile(blockPath, "utf8");
-      const secondFrom = secondMarkdown.lastIndexOf("精简句");
+      const secondFrom = secondMarkdown.lastIndexOf("用户确认后的候选");
       const second = await fetch(`${started.url}/local/v1/session/selection-edit?${query}`, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          blockId: "0001", from: secondFrom, to: secondFrom + 3, selectedText: "精简句", instruction: "再改"
+          blockId: "0001", from: secondFrom, to: secondFrom + 8, selectedText: "用户确认后的候选", instruction: "再改"
         })
       });
       expect(second.status).toBe(200);
@@ -1216,6 +1509,67 @@ describe("LocalShellServer", () => {
       expect(reapplied.status).toBe(409);
       await expect(reapplied.json()).resolves.toEqual({ error: "proposal_not_pending" });
       expect(await readFile(blockPath, "utf8")).toBe(secondMarkdown);
+    } finally {
+      await server.stop();
+      await fixture.cleanup();
+    }
+  });
+
+  it("forwards unlocked selection-edit retries without weakening lock or revision checks", async () => {
+    const fixture = await selectionEditFixture();
+    const token = "u".repeat(48);
+    const server = new LocalShellServer({ port: 0, token, sessionSelectionEdit: fixture.service });
+    const started = await server.start();
+    const query = "notebookId=analysis&sessionId=lecture";
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const blockPath = join(fixture.sessionDir, "blocks", "0001.md");
+    const editor = new SessionEditService(fixture.root);
+    try {
+      const proposed = await fetch(`${started.url}/local/v1/session/selection-edit?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          blockId: "0001", from: 0, to: 4, selectedText: "原句重复", instruction: "修改"
+        })
+      });
+      expect(proposed.status).toBe(200);
+      const proposal = (await proposed.json()) as { id: string };
+
+      await editor.setMarkdownBlockLock({
+        notebookId: "analysis", sessionId: "lecture", blockId: "0001", locked: true
+      });
+      const locked = await fetch(`${started.url}/local/v1/session/selection-edit/apply?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ proposalId: proposal.id, replacementMarkdown: "用户确认的修改" })
+      });
+      expect(locked.status).toBe(423);
+      await expect(locked.json()).resolves.toEqual({ error: "block_locked" });
+      expect(await readFile(blockPath, "utf8")).toBe("原句重复；原句重复");
+
+      await editor.setMarkdownBlockLock({
+        notebookId: "analysis", sessionId: "lecture", blockId: "0001", locked: false
+      });
+      const retried = await fetch(`${started.url}/local/v1/session/selection-edit/apply?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          proposalId: proposal.id,
+          replacementMarkdown: "用户确认的修改",
+          retryAfterUnlock: true
+        })
+      });
+      expect(retried.status).toBe(200);
+      await expect(retried.json()).resolves.toMatchObject({
+        applied: true,
+        proposal: {
+          id: proposal.id,
+          status: "applied",
+          replacementMarkdown: "用户确认的修改",
+          retriedAfterUnlockAt: expect.any(String)
+        }
+      });
+      expect(await readFile(blockPath, "utf8")).toBe("用户确认的修改；原句重复");
     } finally {
       await server.stop();
       await fixture.cleanup();
@@ -1245,6 +1599,28 @@ describe("LocalShellServer", () => {
       });
       expect(invalidProposalId.status).toBe(400);
       await expect(invalidProposalId.json()).resolves.toEqual({ error: "invalid_selection_edit_body" });
+
+      const oversizedReplacement = await fetch(`${started.url}/local/v1/session/selection-edit/apply?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          proposalId: "selection_00000000-0000-0000-0000-000000000000",
+          replacementMarkdown: "x".repeat(12_001)
+        })
+      });
+      expect(oversizedReplacement.status).toBe(400);
+      await expect(oversizedReplacement.json()).resolves.toEqual({ error: "invalid_selection_edit_body" });
+
+      const invalidRetryFlag = await fetch(`${started.url}/local/v1/session/selection-edit/apply?${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          proposalId: "selection_00000000-0000-0000-0000-000000000000",
+          retryAfterUnlock: "yes"
+        })
+      });
+      expect(invalidRetryFlag.status).toBe(400);
+      await expect(invalidRetryFlag.json()).resolves.toEqual({ error: "invalid_selection_edit_body" });
 
       const stale = await fetch(`${started.url}/local/v1/session/selection-edit?${query}`, {
         method: "POST",
@@ -1287,6 +1663,54 @@ describe("LocalShellServer", () => {
         expect(response.status).toBe(503);
         await expect(response.json()).resolves.toEqual({ error: "assistant_unavailable" });
       }
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("keeps notes backup behind the trusted local token and validates its destination", async () => {
+    const token = "f".repeat(48);
+    const calls: string[] = [];
+    const server = new LocalShellServer({
+      port: 0,
+      token,
+      createNotesBackup: async ({ destinationParentDir }) => {
+        calls.push(destinationParentDir);
+        return {
+          backupDir: `${destinationParentDir}/MathNotes-backup-test`,
+          manifestPath: `${destinationParentDir}/MathNotes-backup-test/backup-manifest.json`,
+          fileCount: 2,
+          totalBytes: 42
+        };
+      }
+    });
+    const started = await server.start();
+    try {
+      expect((await fetch(`${started.url}/local/v1/notes/backup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ destinationParentDir: "/private/backups" })
+      })).status).toBe(401);
+
+      const invalid = await fetch(`${started.url}/local/v1/notes/backup`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ destinationParentDir: "" })
+      });
+      expect(invalid.status).toBe(400);
+      await expect(invalid.json()).resolves.toEqual({ error: "invalid_backup_body" });
+
+      const created = await fetch(`${started.url}/local/v1/notes/backup`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ destinationParentDir: "/private/backups" })
+      });
+      expect(created.status).toBe(201);
+      await expect(created.json()).resolves.toMatchObject({
+        version: 1,
+        backup: { fileCount: 2, totalBytes: 42 }
+      });
+      expect(calls).toEqual(["/private/backups"]);
     } finally {
       await server.stop();
     }
@@ -1396,6 +1820,7 @@ async function selectionEditFixture() {
   };
   return {
     service: new SessionSelectionEditService(root, async () => provider, new SessionEditService(root)),
+    root,
     sessionDir,
     cleanup: () => rm(root, { recursive: true, force: true })
   };

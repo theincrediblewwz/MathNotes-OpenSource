@@ -167,6 +167,48 @@ describe("SessionRecognitionService", () => {
     expect(JSON.stringify(completed)).not.toContain("credential-store-internal-detail");
   });
 
+  it("stops writing as soon as a user protects any span in the active transcript", async () => {
+    let releaseProvider!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseProvider = resolve; });
+    const provider: RecognitionProvider = {
+      name: "lock-aware-provider",
+      async transcribe() {
+        await gate;
+        return { markdown: "## 不得覆盖锁定内容\n" };
+      },
+      async transcribeWithEvents(input) {
+        input.onEvent({ type: "stdout", text: "## 锁定前草稿\n" });
+        await gate;
+        return { markdown: "## 不得覆盖锁定内容\n" };
+      }
+    };
+    const service = new SessionRecognitionService(root, async () => provider);
+    const started = await service.start({ notebookId: "analysis", sessionId: "lecture", imageBlockId: "0002" });
+    const transcriptPath = join(sessionDir, "blocks", `${started.transcriptBlockId}_ai_transcript.md`);
+    await waitForFileText(transcriptPath, "## 锁定前草稿\n");
+
+    const protectedSession = await readSession();
+    protectedSession.locks.push({
+      id: `lock_span_${started.transcriptBlockId}`,
+      blockId: started.transcriptBlockId,
+      kind: "span",
+      contentHash: "1".repeat(64),
+      createdAt: "2026-07-24T01:00:00.000Z",
+      createdBy: "user",
+      aiEditable: false
+    });
+    await writeFile(join(sessionDir, "session.json"), `${JSON.stringify(protectedSession, null, 2)}\n`);
+    releaseProvider();
+
+    const failed = await waitForTerminal(service, started.id);
+    expect(failed).toMatchObject({ status: "failed", error: "内容已锁定，识别没有继续写入。" });
+    expect(await readFile(transcriptPath, "utf8")).toBe("## 锁定前草稿\n");
+    await expect(service.retry({ notebookId: "analysis", sessionId: "lecture", taskId: started.id }))
+      .rejects.toMatchObject({ code: "block_locked", statusCode: 423, taskId: started.id });
+    expect((await service.get({ notebookId: "analysis", sessionId: "lecture", taskId: started.id })).status)
+      .toBe("failed");
+  });
+
   it("re-runs the same transcription block and restores reviewed text when the new attempt fails", async () => {
     let providerCall = 0;
     const cancelledProvider = deferredProvider("cancelled-rerun");
@@ -198,7 +240,7 @@ describe("SessionRecognitionService", () => {
     lockedSession.locks = [{
       id: `lock_block_${started.transcriptBlockId}`,
       blockId: started.transcriptBlockId,
-      kind: "block",
+      kind: "span",
       contentHash: "0".repeat(64),
       createdAt: "2026-07-24T01:00:00.000Z",
       createdBy: "user",
@@ -304,6 +346,14 @@ describe("SessionRecognitionService", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     throw new Error(`task ${taskId} did not reach ${status}: ${JSON.stringify(lastTask)}`);
+  }
+
+  async function waitForFileText(path: string, expected: string): Promise<void> {
+    for (let index = 0; index < 600; index += 1) {
+      if (await readFile(path, "utf8").catch(() => undefined) === expected) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`file ${path} did not contain the expected text`);
   }
 
   async function readSession(): Promise<SessionRecord> {

@@ -12,6 +12,16 @@ export type AssistantRemarkFocus = {
   to?: number;
 };
 
+export type AssistantRemarkRelatedSource = {
+  refId: string;
+  notebookId: string;
+  notebookTitle: string;
+  sessionId: string;
+  sessionTitle: string;
+  blockId: string;
+  locked: boolean;
+};
+
 export type AssistantRemark = {
   id: string;
   mode: AssistantMode;
@@ -20,6 +30,7 @@ export type AssistantRemark = {
   markdown: string;
   providerName: string;
   sourceBlockIds: string[];
+  relatedSources?: AssistantRemarkRelatedSource[];
   createdAt: string;
   updatedAt: string;
 };

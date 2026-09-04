@@ -26,7 +26,8 @@ try {
   await writeFile(embeddedImagePath, Buffer.from("electron smoke embedded image"));
   await writeFile(importPdfPath, createMinimalPdf());
   app = await electron.launch({
-    args: [path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    args: ["--no-stdio-init", path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    chromiumSandbox: false,
     cwd: projectRoot,
     env: {
       ...process.env,
@@ -41,7 +42,7 @@ try {
   try {
     await page.waitForSelector("[data-testid='session-source-editor'] .cm-editor", { timeout: 30_000 });
   } catch (error) {
-    await page.screenshot({ path: path.join(outDir, "electron-app-smoke-failure.png"), fullPage: false });
+    await page.screenshot({ path: path.join(outDir, "electron-app-smoke-failure.png"), fullPage: false }).catch(() => undefined);
     const bodyText = await page.locator("body").innerText().catch(() => "");
     throw new Error(`Electron app did not render. url=${page.url()} body=${bodyText.slice(0, 500)}`, { cause: error });
   }
@@ -99,14 +100,14 @@ try {
 
   console.log("[electron smoke] configurable source-to-preview shortcut follows the active CodeMirror line");
   await page.getByRole("button", { name: "笔记目录", exact: true }).click();
-  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByTestId("notebook-drawer").getByRole("button", { name: "设置", exact: true }).click();
   await assertVisible(page, "[data-testid='settings-modal']");
   const previewShortcutInput = page.getByTestId("preview-follow-shortcut-input");
   await previewShortcutInput.scrollIntoViewIfNeeded();
   await previewShortcutInput.focus();
   await page.keyboard.press("F8");
   assert.equal(await previewShortcutInput.inputValue(), "F8");
-  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await page.getByRole("button", { name: "保存全部设置", exact: true }).click();
   await page.waitForFunction(async () => (await window.mathNotes.loadUserSettings()).previewFollowShortcut === "F8");
   await page.getByRole("button", { name: "关闭设置", exact: true }).click();
 
@@ -134,6 +135,14 @@ try {
   await page.waitForFunction(
     (blockId) => document.querySelector(`[data-testid='render-block'][data-block-id='${blockId}'][data-preview-locating='true']`),
     lastPreviewBlockId,
+    { timeout: 5000 }
+  );
+  await page.waitForFunction(
+    () => {
+      const preview = document.querySelector(".preview-scroll");
+      return preview instanceof HTMLElement && preview.scrollTop > 0;
+    },
+    undefined,
     { timeout: 5000 }
   );
   const followedPreviewState = await page.locator(".preview-scroll").evaluate((element) => {
@@ -226,22 +235,24 @@ try {
   assert.match(selectedHeading, /^## 泛函分析 第 3 讲$/, "The real editor must expose the exact selected heading");
   await selectionEditor.click({ button: "right", position: { x: 48, y: 10 } });
   await page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).click();
-  const selectionDialog = page.getByRole("dialog", { name: "AI 修改选中文字" });
-  await selectionDialog.waitFor({ state: "visible", timeout: 3000 });
-  assert.match(await selectionDialog.innerText(), /原选区[\s\S]*## 泛函分析 第 3 讲/);
-  assert.match(await selectionDialog.innerText(), /此时不会修改笔记/);
-  await selectionDialog.getByPlaceholder("例如：修正语病，但保留公式和原意").fill("把标题改得更清楚，保留数学含义");
-  await selectionDialog.getByRole("button", { name: "生成修改候选", exact: true }).click();
-  await selectionDialog.getByText("Mock 学习助手", { exact: false }).waitFor({ state: "visible", timeout: 5000 });
+  const selectionWorkspace = page.getByTestId("assistant-workspace");
+  await selectionWorkspace.waitFor({ state: "visible", timeout: 3000 });
+  assert.match(await selectionWorkspace.innerText(), /原文[\s\S]*泛函分析 第 3 讲/);
+  assert.match(await selectionWorkspace.innerText(), /仅修改未锁定内容/);
+  await selectionWorkspace.getByRole("textbox", { name: "告诉 AI 怎样修改" }).fill("把标题改得更清楚，保留数学含义");
+  await selectionWorkspace.getByRole("button", { name: "生成修改", exact: true }).click();
+  await selectionWorkspace.getByText("Mock 学习助手", { exact: false }).waitFor({ state: "visible", timeout: 5000 });
   assert.doesNotMatch(await selectionEditor.innerText(), /Mock 学习助手/, "Generating a candidate must not mutate the editor");
   await page.screenshot({ path: path.join(outDir, "electron-selection-edit-candidate.png"), fullPage: false });
-  await selectionDialog.getByRole("button", { name: "应用修改", exact: true }).click();
-  await selectionDialog.waitFor({ state: "detached", timeout: 5000 });
+  await selectionWorkspace.getByRole("button", { name: "应用修改", exact: true }).click();
+  await selectionWorkspace.locator(".assistant-edit-card").first().waitFor({ state: "detached", timeout: 5000 });
   await page.waitForFunction(
     (blockId) => document.querySelector(`[data-testid='source-block'][data-block-id='${blockId}'] .cm-content`)?.textContent?.includes("Mock 学习助手"),
     selectionTargetId,
     { timeout: 5000 }
   );
+  await selectionWorkspace.getByRole("button", { name: "关闭与笔记对话", exact: true }).click();
+  await selectionWorkspace.waitFor({ state: "detached", timeout: 3000 });
   await selectionEditor.click();
   await page.keyboard.press("Control+z");
   await page.waitForFunction(
@@ -298,9 +309,10 @@ try {
   await page.keyboard.press("Shift+End");
   await selectionEditor.click({ button: "right", position: { x: 48, y: 10 } });
   await page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).click();
-  await selectionDialog.getByPlaceholder("例如：修正语病，但保留公式和原意").fill("生成一个会发生版本冲突的候选");
-  await selectionDialog.getByRole("button", { name: "生成修改候选", exact: true }).click();
-  await selectionDialog.getByText("Mock 学习助手", { exact: false }).waitFor({ state: "visible", timeout: 5000 });
+  await selectionWorkspace.waitFor({ state: "visible", timeout: 3000 });
+  await selectionWorkspace.getByRole("textbox", { name: "告诉 AI 怎样修改" }).fill("生成一个会发生版本冲突的候选");
+  await selectionWorkspace.getByRole("button", { name: "生成修改", exact: true }).click();
+  await selectionWorkspace.getByText("Mock 学习助手", { exact: false }).waitFor({ state: "visible", timeout: 5000 });
   await page.evaluate(async (blockId) => {
     const current = await window.mathNotes.loadCurrentSession();
     const block = current.sourceDocument.markdownBlocks.find((candidate) => candidate.blockId === blockId);
@@ -312,36 +324,56 @@ try {
       markdown: `${block.markdown}\n\n外部并发修改`
     });
   }, selectionTargetId);
-  await selectionDialog.getByRole("button", { name: "应用修改", exact: true }).click();
-  const conflictAlert = selectionDialog.getByRole("alert");
+  await selectionWorkspace.getByRole("button", { name: "应用修改", exact: true }).click();
+  const conflictAlert = selectionWorkspace.getByRole("alert");
   await conflictAlert.waitFor({ state: "visible", timeout: 5000 });
   assert.match(await conflictAlert.innerText(), /应用冲突/);
-  assert.match(await selectionDialog.innerText(), /Mock 学习助手/, "A conflict must retain the candidate preview");
-  await selectionDialog.getByRole("button", { name: "取消", exact: true }).click();
-  await selectionDialog.waitFor({ state: "detached", timeout: 3000 });
+  assert.match(await selectionWorkspace.innerText(), /Mock 学习助手/, "A conflict must retain the candidate preview");
+  await selectionWorkspace.getByRole("button", { name: "取消", exact: true }).click();
+  await selectionWorkspace.locator(".assistant-edit-card").first().waitFor({ state: "detached", timeout: 3000 });
+  await selectionWorkspace.getByRole("button", { name: "关闭与笔记对话", exact: true }).click();
+  await selectionWorkspace.waitFor({ state: "detached", timeout: 3000 });
 
-  console.log("[electron smoke] assistant uses an independent native resizable window");
-  const assistantWindowOpened = app.waitForEvent("window");
+  console.log("[electron smoke] assistant stays in the main window and supports anchored resizing");
   await page.getByRole("button", { name: "AI 学习助手", exact: true }).click();
-  const assistantPage = await assistantWindowOpened;
-  await assistantPage.waitForSelector("[data-testid='assistant-workspace']", { timeout: 5000 });
-  const detachedBounds = await app.evaluate(({ BrowserWindow }) => {
-    const windows = BrowserWindow.getAllWindows();
-    const main = windows.sort((a, b) => b.getBounds().width * b.getBounds().height - a.getBounds().width * a.getBounds().height)[0];
-    const assistant = windows.find((candidate) => candidate.getTitle().includes("学习助手"));
-    if (!assistant) throw new Error("assistant BrowserWindow missing");
-    const mainBounds = main.getBounds();
-    assistant.setBounds({ x: mainBounds.x + mainBounds.width + 24, y: mainBounds.y + 40, width: 560, height: 720 });
-    return { main: mainBounds, assistant: assistant.getBounds(), resizable: assistant.isResizable() };
-  });
-  assert.equal(detachedBounds.resizable, true, "Assistant window must use native resizing");
-  assert.ok(
-    detachedBounds.assistant.x >= detachedBounds.main.x + detachedBounds.main.width,
-    `Assistant window must be movable outside the main window: ${JSON.stringify(detachedBounds)}`
+  await selectionWorkspace.waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
+    1,
+    "Assistant must not create a developer-style auxiliary native window"
   );
-  const assistantClosed = assistantPage.waitForEvent("close");
-  await assistantPage.getByRole("button", { name: "关闭 AI 学习助手", exact: true }).click();
-  await assistantClosed;
+  const assistantBoundsBeforeResize = await selectionWorkspace.boundingBox();
+  const westResizeHandle = await selectionWorkspace.getByTestId("assistant-resize-w").boundingBox();
+  assert.ok(assistantBoundsBeforeResize && westResizeHandle);
+  await page.mouse.move(westResizeHandle.x + westResizeHandle.width / 2, westResizeHandle.y + westResizeHandle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(westResizeHandle.x - 70, westResizeHandle.y + westResizeHandle.height / 2, { steps: 7 });
+  await page.mouse.up();
+  const assistantBoundsAfterResize = await selectionWorkspace.boundingBox();
+  assert.ok(assistantBoundsAfterResize);
+  assert.ok(assistantBoundsAfterResize.width - assistantBoundsBeforeResize.width > 55, "West edge should widen the assistant");
+  assert.ok(
+    Math.abs(
+      assistantBoundsAfterResize.x + assistantBoundsAfterResize.width
+      - (assistantBoundsBeforeResize.x + assistantBoundsBeforeResize.width)
+    ) <= 2,
+    "Dragging one assistant edge must keep the opposite edge anchored"
+  );
+  const assistantHeader = await selectionWorkspace.locator(".assistant-workspace-header").boundingBox();
+  assert.ok(assistantHeader);
+  await page.mouse.move(assistantHeader.x + assistantHeader.width * 0.45, assistantHeader.y + assistantHeader.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(assistantHeader.x + assistantHeader.width * 0.45 - 36, assistantHeader.y + assistantHeader.height / 2 + 24, { steps: 6 });
+  await page.mouse.up();
+  const assistantBoundsAfterDrag = await selectionWorkspace.boundingBox();
+  assert.ok(assistantBoundsAfterDrag);
+  assert.ok(
+    assistantBoundsAfterDrag.x < assistantBoundsAfterResize.x - 20
+    && assistantBoundsAfterDrag.y > assistantBoundsAfterResize.y + 12,
+    "Dragging the assistant header should move the internal panel"
+  );
+  await selectionWorkspace.getByRole("button", { name: "关闭与笔记对话", exact: true }).click();
+  await selectionWorkspace.waitFor({ state: "detached", timeout: 3000 });
 
   console.log("[electron smoke] recognition status stays in the unified task center");
   const recognitionAuxiliaryTitles = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
@@ -907,7 +939,8 @@ try {
 
   console.log("[electron smoke] receiver identity survives an app restart");
   app = await electron.launch({
-    args: [path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    args: ["--no-stdio-init", path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    chromiumSandbox: false,
     cwd: projectRoot,
     env: {
       ...process.env,
@@ -950,7 +983,8 @@ try {
   blockedPortServer = createServer();
   await listen(blockedPortServer, updatedIngestState.port);
   app = await electron.launch({
-    args: [path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    args: ["--no-stdio-init", path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    chromiumSandbox: false,
     cwd: projectRoot,
     env: {
       ...process.env,

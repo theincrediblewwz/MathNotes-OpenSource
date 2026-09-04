@@ -40,6 +40,12 @@ interface CaptureDao {
     @Query("DELETE FROM capture_queue WHERE state = 'uploaded'")
     suspend fun deleteUploaded()
 
+    @Query("DELETE FROM capture_queue WHERE captureId = :captureId AND state = 'uploaded'")
+    suspend fun deleteUploadedById(captureId: String): Int
+
+    @Query("DELETE FROM capture_queue WHERE captureId = :captureId AND state != 'uploading'")
+    suspend fun deleteTaskByIdUnlessUploading(captureId: String): Int
+
     @Query("UPDATE capture_queue SET hiddenFromRecent = 1 WHERE state = 'uploaded' AND hiddenFromRecent = 0")
     suspend fun hideUploadedFromRecent(): Int
 }

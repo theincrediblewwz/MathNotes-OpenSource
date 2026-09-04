@@ -63,6 +63,20 @@ class PairingConfigTest {
     }
 
     @Test
+    fun `mac qr accepts a tailscale address with the runtime port`() {
+        val result = PairingConfig.parse(
+            "mathnotes://pair?v=2&host=100.88.42.7&port=49194&challenge=challenge-1234&code=ABCD-2345&expires=2027-09-01T10%3A00%3A00Z&transport=tailnet_http&hosts=192.168.1.8"
+        )
+
+        assertTrue(result is PairingParseResult.Success)
+        val config = (result as PairingParseResult.Success).config
+        assertEquals(EndpointKind.TAILNET, config.endpointKind)
+        assertEquals("tailnet_http", config.transport)
+        assertEquals("http://100.88.42.7:49194", config.endpoint)
+        assertEquals(listOf("192.168.1.8"), config.alternateHosts)
+    }
+
+    @Test
     fun `manual entry accepts an https tunnel hostname`() {
         val result = PairingConfig.fromManual(
             endpoint = "https://notes.example.test",

@@ -48,7 +48,7 @@ struct MathNotesMacApp: App {
             }
         }
 
-        Window("学习助手", id: "session-assistant") {
+        Window("与笔记对话", id: "session-assistant") {
             SessionAssistantWindowRoot(
                 coordinator: assistantWindow,
                 supervisor: supervisor

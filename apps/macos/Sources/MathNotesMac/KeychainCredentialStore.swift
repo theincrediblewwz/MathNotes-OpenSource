@@ -27,7 +27,11 @@ struct KeychainCredentialStore: Sendable {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            // Packaged development builds can have a different signing identity after
+            // an update. Never turn a background read into a login-keychain prompt;
+            // callers can instead ask the user to re-enter an unavailable secret.
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUISkip
         ] as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else { throw KeychainCredentialError.operationFailed(status) }

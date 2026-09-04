@@ -122,6 +122,11 @@ if (macosScreenshotUploadStep.if !== "github.event_name == 'push' || inputs.uplo
 if (macosScreenshotUploadStep.with?.["retention-days"] !== 1) {
   throw new Error("Native macOS UI screenshot artifact must expire after one day");
 }
+const macosScreenshotPaths = macosScreenshotUploadStep.with?.path ?? "";
+if (!macosScreenshotPaths.includes("output/playwright/macos-native-app*.png") ||
+    !macosScreenshotPaths.includes("output/playwright/macos-native-phone-connection.png")) {
+  throw new Error("Native macOS UI acceptance must retain local, remote-source, and phone-connection screenshots");
+}
 const uploadInput = macosPackage.on?.workflow_dispatch?.inputs?.upload_artifact;
 if (uploadInput?.type !== "boolean" || uploadInput.default !== false || uploadInput.required !== true) {
   throw new Error("Native macOS manual workflow must default to build/test without artifact storage");

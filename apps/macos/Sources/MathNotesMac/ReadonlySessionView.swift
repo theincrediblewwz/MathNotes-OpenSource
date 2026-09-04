@@ -8,18 +8,23 @@ struct ReadonlySessionView: View {
     let session: SessionCatalogItem
     @ObservedObject var supervisor: SidecarSupervisor
     @ObservedObject var assistantWindow: SessionAssistantWindowCoordinator
+    let onOpenRelatedSource: (SessionAssistantRelatedSource) -> Void
+    let onOpenSession: (SessionCatalogItem) -> Void
     let onDirtyStateChanged: (Bool) -> Void
     @Environment(\.openWindow) private var openWindow
     @State private var state: ManifestLoadState = .loading
     @State private var isSelectingImage = false
     @State private var isImportingImage = false
+    @State private var imageEditDraft: MacImageEditDraft?
     @State private var isSelectingPdf = false
     @State private var isImportingPdf = false
+    @State private var pdfImportDraft: MacPdfImportDraft?
+    @State private var pdfImportProgress: String?
+    @State private var pdfRecognitionBatches: [PdfRecognitionBatch] = []
     @State private var importError: String?
     @State private var isExporting = false
     @State private var exportError: String?
     @State private var exportNotice: String?
-    @State private var assistantSelectionEditDraft: MacSelectionEditDraft?
     @State private var selectedBlockID: String?
     @State private var recognitionActivity: SessionRecognitionTask?
     @State private var recognitionActivityDraft = ""
@@ -71,7 +76,7 @@ struct ReadonlySessionView: View {
                 if case let .failure(error) = result { importError = error.localizedDescription }
                 return
             }
-            Task { await importImage(url) }
+            Task { await prepareImageEdit(url) }
         }
         .fileImporter(
             isPresented: $isSelectingPdf,
@@ -82,7 +87,25 @@ struct ReadonlySessionView: View {
                 if case let .failure(error) = result { importError = error.localizedDescription }
                 return
             }
-            Task { await importPdf(url) }
+            Task { await preparePdfImport(url) }
+        }
+        .sheet(item: $imageEditDraft) { draft in
+            MacImageAnnotationEditor(
+                draft: draft,
+                onCancel: { if !isImportingImage { imageEditDraft = nil } },
+                onConfirm: { output in
+                    try await commitImageEdit(draft, output: output)
+                }
+            )
+        }
+        .sheet(item: $pdfImportDraft) { draft in
+            PdfImportOptionsSheet(
+                draft: draft,
+                isImporting: isImportingPdf,
+                progress: pdfImportProgress,
+                onCancel: { if !isImportingPdf { pdfImportDraft = nil } },
+                onConfirm: { options in Task { await importPdf(draft, options: options) } }
+            )
         }
         .alert("无法导入素材", isPresented: Binding(
             get: { importError != nil },
@@ -108,27 +131,6 @@ struct ReadonlySessionView: View {
         } message: {
             Text(exportNotice ?? "Markdown 已保存。")
         }
-        .sheet(item: $assistantSelectionEditDraft) { draft in
-            MacSelectionEditSheet(
-                draft: draft,
-                onGenerate: { instruction, replacingProposalID in
-                    if let replacingProposalID {
-                        _ = try? await supervisor.cancelSelectionEdit(session, proposalId: replacingProposalID)
-                    }
-                    return try await generateAssistantSelectionEdit(draft: draft, instruction: instruction)
-                },
-                onApply: { proposal in
-                    let response = try await supervisor.applySelectionEdit(session, proposalId: proposal.id)
-                    sourceWorkspace.applyAISelectionEdit(response.result.block)
-                    await load()
-                    return response
-                },
-                onCancel: { proposal in
-                    guard let proposal else { return }
-                    _ = try await supervisor.cancelSelectionEdit(session, proposalId: proposal.id)
-                }
-            )
-        }
     }
 
     private var sessionSkeleton: some View {
@@ -150,7 +152,7 @@ struct ReadonlySessionView: View {
 
     private func sessionContent(_ manifest: ReadonlySessionManifest) -> some View {
         let sourceBlocks = manifest.blocks.filter { $0.renderInNote && $0.type == "markdown" }
-        let previewBlocks = sourceBlocks
+        let previewBlocks = manifest.blocks.filter(\.renderInNote)
         return GeometryReader { geometry in
             if geometry.size.width < 760 {
                 VStack(spacing: 0) {
@@ -206,6 +208,7 @@ struct ReadonlySessionView: View {
             workspace: sourceWorkspace,
             supervisor: supervisor,
             onReordered: { reordered in applyManifest(reordered) },
+            onSelectionEditRequested: { draft in presentAssistant(manifest, selectionEditDraft: draft) },
             onSessionChanged: { await load() }
         )
     }
@@ -241,18 +244,7 @@ struct ReadonlySessionView: View {
             .accessibilityLabel(displayMode == .reading ? "显示源码" : "进入阅读模式")
 
             Button {
-                assistantWindow.present(SessionAssistantWindowContext(
-                    session: session,
-                    manifest: manifest,
-                    activeBlockID: selectedBlockID,
-                    selectedText: sourceWorkspace.selectedExcerpt,
-                    selectedTextBlockID: sourceWorkspace.selectedExcerptBlockID,
-                    onSelectionEditRequested: canEditCurrentSelection ? {
-                        beginAssistantSelectionEdit()
-                    } : nil,
-                    onSessionChanged: { await load() }
-                ))
-                openWindow(id: "session-assistant")
+                presentAssistant(manifest)
             } label: {
                 Image(systemName: "sparkles")
                     .frame(width: 30, height: 30)
@@ -261,7 +253,7 @@ struct ReadonlySessionView: View {
             }
             .buttonStyle(.plain)
             .help("按当前 Session、内容段或选中文字向 AI 提问")
-            .accessibilityLabel("打开学习助手")
+            .accessibilityLabel("打开与笔记对话")
 
             Menu {
                 Button {
@@ -276,7 +268,7 @@ struct ReadonlySessionView: View {
                 Button {
                     isSelectingImage = true
                 } label: {
-                    Label("导入图片", systemImage: "photo.badge.plus")
+                    Label("编辑并插入图片", systemImage: "photo.badge.plus")
                 }
                 .disabled(isImportingImage || isImportingPdf)
 
@@ -344,13 +336,18 @@ struct ReadonlySessionView: View {
                 if let upload = companionUploadActivity {
                     companionUploadActivityCard(upload)
                 }
-                if let task = recognitionActivity, dismissedRecognitionTaskID != task.id {
+                ForEach(pdfRecognitionBatches.prefix(4)) { batch in
+                    pdfRecognitionBatchCard(batch)
+                }
+                if let task = recognitionActivity, task.batchId == nil, dismissedRecognitionTaskID != task.id {
                     recognitionActivityCard(task)
                 }
-                ForEach(recentRecognitionTasks.filter { $0.id != recognitionActivity?.id }.prefix(6)) { task in
+                ForEach(recentRecognitionTasks.filter {
+                    $0.batchId == nil && $0.id != recognitionActivity?.id
+                }.prefix(6)) { task in
                     compactRecognitionHistoryRow(task)
                 }
-                if companionUploadActivity == nil && recentRecognitionTasks.isEmpty {
+                if companionUploadActivity == nil && recentRecognitionTasks.isEmpty && pdfRecognitionBatches.isEmpty {
                     Text("还没有接收或识别记录")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -363,7 +360,8 @@ struct ReadonlySessionView: View {
     }
 
     private var hasActiveSessionActivity: Bool {
-        companionUploadActivity?.status == "receiving" || recognitionActivity?.isTerminal == false
+        companionUploadActivity?.status == "receiving" || recognitionActivity?.isTerminal == false ||
+            pdfRecognitionBatches.contains { $0.isActive }
     }
 
     private func compactRecognitionHistoryRow(_ task: SessionRecognitionTask) -> some View {
@@ -453,7 +451,7 @@ struct ReadonlySessionView: View {
         return baselineLoaded ? tasks.first(where: { !knownTaskIDs.contains($0.id) }) : nil
     }
 
-    private func importImage(_ url: URL) async {
+    private func prepareImageEdit(_ url: URL) async {
         guard case let .loaded(manifest) = state else { return }
         isImportingImage = true
         importError = nil
@@ -466,18 +464,36 @@ struct ReadonlySessionView: View {
             let bytes = try await Task.detached(priority: .userInitiated) {
                 try Data(contentsOf: url, options: [.mappedIfSafe])
             }.value
-            let result = try await supervisor.importSessionImage(
-                session,
+            guard let previewImage = NSImage(data: bytes), previewImage.isValid else {
+                throw MacImageEditPreparationError.invalidImage
+            }
+            imageEditDraft = MacImageEditDraft(
                 fileName: url.lastPathComponent,
-                bytes: bytes,
+                sourceBytes: bytes,
+                previewImage: previewImage,
                 baseRevision: manifest.revision
             )
-            applyManifest(result.manifest)
         } catch is CancellationError {
             return
         } catch {
             importError = error.localizedDescription
         }
+    }
+
+    private func commitImageEdit(_ draft: MacImageEditDraft, output: MacImageEditOutput) async throws {
+        isImportingImage = true
+        defer { isImportingImage = false }
+        let result = try await supervisor.importSessionEditedImage(
+            session,
+            fileName: draft.fileName,
+            sourceBytes: draft.sourceBytes,
+            outputPngBytes: output.outputPngBytes,
+            baseRevision: draft.baseRevision,
+            operations: output.operations,
+            annotations: output.annotations
+        )
+        applyManifest(result.manifest)
+        imageEditDraft = nil
     }
 
     private func monitorRecognitionActivity() async {
@@ -492,6 +508,7 @@ struct ReadonlySessionView: View {
                 let shouldLongPoll = baselineLoaded
                     && recognitionActivity?.isTerminal != false
                     && companionUploadActivity?.status != "receiving"
+                    && !pdfRecognitionBatches.contains { $0.isActive }
                 let snapshot = try await supervisor.recognitionTaskSnapshot(
                     session,
                     afterActivitySequence: shouldLongPoll ? activitySequence : nil,
@@ -502,6 +519,11 @@ struct ReadonlySessionView: View {
                 let recentTasks = Array(tasks.prefix(8))
                 if recentRecognitionTasks != recentTasks {
                     recentRecognitionTasks = recentTasks
+                }
+                let batches = try await supervisor.pdfRecognitionBatches(session)
+                if pdfRecognitionBatches != batches {
+                    pdfRecognitionBatches = batches
+                    if batches.contains(where: { $0.isActive }) { isActivityPanelExpanded = true }
                 }
                 let upload = try await supervisor.companionUploadActivity(session)
                 if companionUploadActivity != upload {
@@ -527,9 +549,13 @@ struct ReadonlySessionView: View {
                         }
                         recognitionActivity = candidate
                         recognitionActivityDraft = ""
-                        recognitionActivityMessage = candidate.status == "pending"
+                        recognitionActivityMessage = candidate.pageNumber.map {
+                            candidate.status == "pending"
+                                ? "PDF 第 \($0) 页正在等待识别。"
+                                : "PDF 第 \($0) 页正在生成文字。"
+                        } ?? (candidate.status == "pending"
                             ? "手机素材已写入笔记，等待识别服务。"
-                            : "正在接收识别输出。"
+                            : "正在接收识别输出。")
                         recognitionActivitySequence = 0
                         dismissedRecognitionTaskID = nil
                         isRecognitionActivityExpanded = false
@@ -643,6 +669,80 @@ struct ReadonlySessionView: View {
         .accessibilityIdentifier("session-companion-upload-activity")
     }
 
+    private func pdfRecognitionBatchCard(_ batch: PdfRecognitionBatch) -> some View {
+        VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.compact) {
+            HStack(spacing: MathNotesTheme.Spacing.compact) {
+                if batch.isActive {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: batch.status == "completed" ? "checkmark.circle.fill" : "pause.circle.fill")
+                        .foregroundStyle(batch.status == "completed" ? MathNotesTheme.accent : .secondary)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pdfRecognitionStatus(batch))
+                        .font(.callout.weight(.semibold))
+                    Text(pdfRecognitionPages(batch))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if batch.canPause {
+                    Button("暂停") { Task { await controlPdfRecognition("pause", batch: batch) } }
+                } else if batch.canResume {
+                    Button("继续") { Task { await controlPdfRecognition("resume", batch: batch) } }
+                        .buttonStyle(.borderedProminent)
+                }
+                if batch.canCancel {
+                    Button("中断", role: .destructive) {
+                        Task { await controlPdfRecognition("cancel", batch: batch) }
+                    }
+                }
+            }
+            ProgressView(
+                value: Double(batch.completedPages),
+                total: Double(max(1, batch.selectedPages.count))
+            )
+            .progressViewStyle(.linear)
+        }
+        .padding(MathNotesTheme.Spacing.standard)
+        .frame(maxWidth: .infinity)
+        .background(MathNotesTheme.sidebar.opacity(0.45))
+        .clipShape(RoundedRectangle(cornerRadius: MathNotesTheme.Radius.panel))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("session-pdf-recognition-batch")
+    }
+
+    private func pdfRecognitionStatus(_ batch: PdfRecognitionBatch) -> String {
+        return switch batch.status {
+        case "running": "正在识别 PDF"
+        case "pausing": "完成当前页后暂停"
+        case "paused": "PDF 识别已暂停"
+        case "cancelled": "PDF 识别已中断"
+        default: batch.failed > 0 ? "PDF 识别完成，\(batch.failed) 页未完成" : "PDF 识别完成"
+        }
+    }
+
+    private func pdfRecognitionPages(_ batch: PdfRecognitionBatch) -> String {
+        let completed = batch.succeeded + batch.failed
+        return "已处理 \(completed) / \(batch.selectedPages.count) 页"
+    }
+
+    private func controlPdfRecognition(_ action: String, batch: PdfRecognitionBatch) async {
+        do {
+            let updated = try await supervisor.controlPdfRecognitionBatch(
+                action,
+                session: session,
+                batchId: batch.batchId
+            )
+            if let index = pdfRecognitionBatches.firstIndex(where: { $0.batchId == updated.batchId }) {
+                pdfRecognitionBatches[index] = updated
+            }
+            if action == "cancel" { await refreshManifestAfterActivity() }
+        } catch {
+            recognitionActivityMessage = error.localizedDescription
+        }
+    }
+
     private func recognitionActivityCard(_ task: SessionRecognitionTask) -> some View {
         VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.compact) {
             HStack(spacing: MathNotesTheme.Spacing.compact) {
@@ -725,7 +825,16 @@ struct ReadonlySessionView: View {
     }
 
     private func recognitionActivityTitle(_ task: SessionRecognitionTask) -> String {
-        switch task.status {
+        if let pageNumber = task.pageNumber {
+            return switch task.status {
+            case "pending": "PDF 第 \(pageNumber) 页等待识别"
+            case "running": "正在识别 PDF 第 \(pageNumber) 页"
+            case "succeeded": "PDF 第 \(pageNumber) 页已写入笔记"
+            case "cancelled": "PDF 第 \(pageNumber) 页已中断"
+            default: "PDF 第 \(pageNumber) 页没有完成"
+            }
+        }
+        return switch task.status {
         case "pending": "手机素材已接收"
         case "running": "正在识别并更新笔记"
         case "succeeded": "识别完成，笔记已更新"
@@ -742,8 +851,7 @@ struct ReadonlySessionView: View {
         return recognitionActivityMessage
     }
 
-    private func importPdf(_ url: URL) async {
-        guard case let .loaded(manifest) = state else { return }
+    private func preparePdfImport(_ url: URL) async {
         isImportingPdf = true
         importError = nil
         let hasAccess = url.startAccessingSecurityScopedResource()
@@ -755,13 +863,93 @@ struct ReadonlySessionView: View {
             let bytes = try await Task.detached(priority: .userInitiated) {
                 try Data(contentsOf: url, options: [.mappedIfSafe])
             }.value
-            let result = try await supervisor.importSessionPdf(
-                session,
+            guard let document = PDFDocument(data: bytes), document.pageCount > 0 else {
+                throw PdfImportPreparationError.invalidDocument
+            }
+            pdfImportDraft = MacPdfImportDraft(
+                url: url,
                 fileName: url.lastPathComponent,
                 bytes: bytes,
-                baseRevision: manifest.revision
+                pageCount: document.pageCount
             )
-            applyManifest(result.manifest)
+        } catch is CancellationError {
+            return
+        } catch {
+            importError = error.localizedDescription
+        }
+    }
+
+    private func importPdf(_ draft: MacPdfImportDraft, options: MacPdfImportOptions) async {
+        guard case let .loaded(currentManifest) = state else { return }
+        guard !sourceWorkspace.hasDirtyDrafts else {
+            importError = "请先保存当前源码修改，再导入 PDF。"
+            return
+        }
+        isImportingPdf = true
+        importError = nil
+        pdfImportProgress = "正在保存 PDF…"
+        defer {
+            isImportingPdf = false
+            pdfImportProgress = nil
+        }
+        do {
+            let targetSession: SessionCatalogItem
+            let baseManifest: ReadonlySessionManifest
+            if options.destination == .newSession {
+                let title = options.newSessionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                targetSession = try await supervisor.createSession(
+                    notebookId: session.notebookId,
+                    title: title.isEmpty ? draft.defaultSessionTitle : title
+                )
+                baseManifest = try await supervisor.fetchSessionManifest(targetSession)
+            } else {
+                targetSession = session
+                baseManifest = currentManifest
+            }
+            let result = try await supervisor.importSessionPdf(
+                targetSession,
+                fileName: draft.fileName,
+                bytes: draft.bytes,
+                baseRevision: baseManifest.revision,
+                pageCount: draft.pageCount
+            )
+            if targetSession.id == session.id { applyManifest(result.manifest) }
+
+            if options.mode != .readOnly {
+                let pageNumbers = options.pageNumbers(maximum: draft.pageCount)
+                var stagedPages: [StagedPdfRecognitionPage] = []
+                for (index, pageNumber) in pageNumbers.enumerated() {
+                    pdfImportProgress = "正在准备第 \(index + 1) / \(pageNumbers.count) 页…"
+                    let png = try await Task.detached(priority: .userInitiated) {
+                        try renderPdfPagePNG(data: draft.bytes, pageNumber: pageNumber)
+                    }.value
+                    stagedPages.append(try await supervisor.stagePdfRecognitionPage(
+                        targetSession,
+                        pdfBlockId: result.blockId,
+                        pageNumber: pageNumber,
+                        baseRevision: result.manifest.revision,
+                        bytes: png
+                    ))
+                }
+                pdfImportProgress = "正在开始识别…"
+                let batch = try await supervisor.startPdfRecognitionBatch(
+                    targetSession,
+                    pdfBlockId: result.blockId,
+                    pdfAssetPath: result.assetPath,
+                    pageCount: draft.pageCount,
+                    concurrency: options.concurrency,
+                    baseRevision: result.manifest.revision,
+                    pages: stagedPages
+                )
+                if targetSession.id == session.id {
+                    pdfRecognitionBatches.removeAll { $0.batchId == batch.batchId }
+                    pdfRecognitionBatches.insert(batch, at: 0)
+                    isActivityPanelExpanded = true
+                    await load(showLoading: false)
+                }
+            }
+            pdfImportDraft = nil
+            if targetSession.id != session.id { onOpenSession(targetSession) }
         } catch is CancellationError {
             return
         } catch {
@@ -834,11 +1022,34 @@ struct ReadonlySessionView: View {
         return !markdown.blockLocked
     }
 
-    private func beginAssistantSelectionEdit() {
+    private func presentAssistant(
+        _ manifest: ReadonlySessionManifest,
+        selectionEditDraft: MacSelectionEditDraft? = nil
+    ) {
+        let sourceWindow = NSApplication.shared.keyWindow
+        let selectionEdit = selectionEditDraft.map {
+            makeAssistantSelectionEditContext($0, sourceWindow: sourceWindow)
+        } ?? makeAssistantSelectionEditContext(sourceWindow: sourceWindow)
+        assistantWindow.present(SessionAssistantWindowContext(
+            session: session,
+            manifest: manifest,
+            activeBlockID: selectionEditDraft?.blockId ?? selectedBlockID,
+            selectedText: selectionEditDraft?.selectedText ?? sourceWorkspace.selectedExcerpt,
+            selectedTextBlockID: selectionEditDraft?.blockId ?? sourceWorkspace.selectedExcerptBlockID,
+            selectionEdit: selectionEdit,
+            onOpenRelatedSource: onOpenRelatedSource,
+            onSessionChanged: { await load() }
+        ))
+        openWindow(id: "session-assistant")
+    }
+
+    private func makeAssistantSelectionEditContext(
+        sourceWindow: NSWindow?
+    ) -> SessionAssistantSelectionEditContext? {
         guard canEditCurrentSelection,
               let blockID = sourceWorkspace.selectedExcerptBlockID,
-              let range = sourceWorkspace.selectedExcerptRange else { return }
-        assistantSelectionEditDraft = MacSelectionEditDraft(
+              let range = sourceWorkspace.selectedExcerptRange else { return nil }
+        let draft = MacSelectionEditDraft(
             blockId: blockID,
             selection: SelectionEditTextRange(
                 from: range.from,
@@ -847,6 +1058,48 @@ struct ReadonlySessionView: View {
             ),
             selectedText: sourceWorkspace.selectedExcerpt
         )
+        return makeAssistantSelectionEditContext(draft, sourceWindow: sourceWindow)
+    }
+
+    private func makeAssistantSelectionEditContext(
+        _ draft: MacSelectionEditDraft,
+        sourceWindow: NSWindow?
+    ) -> SessionAssistantSelectionEditContext {
+        SessionAssistantSelectionEditContext(
+            draft: draft,
+            onGenerate: { instruction, replacingProposalID in
+                if let replacingProposalID {
+                    _ = try? await supervisor.cancelSelectionEdit(session, proposalId: replacingProposalID)
+                }
+                return try await generateAssistantSelectionEdit(draft: draft, instruction: instruction)
+            },
+            onApply: { proposal, replacementMarkdown, retryAfterUnlock in
+                let response = try await supervisor.applySelectionEdit(
+                    session,
+                    proposalId: proposal.id,
+                    replacementMarkdown: replacementMarkdown,
+                    retryAfterUnlock: retryAfterUnlock
+                )
+                sourceWorkspace.applyAISelectionEdit(response.result.block)
+                await load()
+                return response
+            },
+            onCancel: { proposal in
+                guard let proposal else { return }
+                _ = try await supervisor.cancelSelectionEdit(session, proposalId: proposal.id)
+            },
+            onRevealLock: { [weak sourceWindow] in
+                revealSelectionLock(blockID: draft.blockId, sourceWindow: sourceWindow)
+            }
+        )
+    }
+
+    private func revealSelectionLock(blockID: String, sourceWindow: NSWindow?) {
+        selectedBlockID = blockID
+        displayModeRawValue = WorkbenchDisplayMode.split.rawValue
+        compactPaneRawValue = WorkbenchPane.source.rawValue
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        sourceWindow?.makeKeyAndOrderFront(nil)
     }
 
     private func generateAssistantSelectionEdit(
@@ -896,6 +1149,274 @@ struct ReadonlySessionView: View {
             throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
         }
     }
+}
+
+private enum MacImageEditPreparationError: LocalizedError {
+    case invalidImage
+
+    var errorDescription: String? { "无法读取这张图片；请选择有效的 PNG、JPEG 或 WebP 文件。" }
+}
+
+private struct MacPdfImportDraft: Identifiable {
+    let url: URL
+    let fileName: String
+    let bytes: Data
+    let pageCount: Int
+
+    var id: String { url.absoluteString }
+    var defaultSessionTitle: String {
+        url.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private enum MacPdfImportMode: String, CaseIterable, Identifiable {
+    case readOnly
+    case recognizeSelected
+    case recognizeAll
+
+    var id: String { rawValue }
+    var label: String {
+        return switch self {
+        case .readOnly: "仅阅读"
+        case .recognizeSelected: "识别选定页"
+        case .recognizeAll: "识别全部页"
+        }
+    }
+}
+
+private enum MacPdfImportDestination: String, CaseIterable, Identifiable {
+    case currentSession
+    case newSession
+
+    var id: String { rawValue }
+    var label: String { self == .currentSession ? "当前记录" : "新建记录" }
+}
+
+private struct MacPdfImportOptions {
+    let mode: MacPdfImportMode
+    let destination: MacPdfImportDestination
+    let newSessionTitle: String
+    let pageStart: Int
+    let pageEnd: Int
+    let concurrency: Int
+
+    func pageNumbers(maximum: Int) -> [Int] {
+        guard maximum > 0 else { return [] }
+        switch mode {
+        case .readOnly:
+            return []
+        case .recognizeAll:
+            return Array(1...maximum)
+        case .recognizeSelected:
+            let lower = min(max(1, pageStart), maximum)
+            let upper = min(max(lower, pageEnd), maximum)
+            return Array(lower...upper)
+        }
+    }
+}
+
+private struct PdfImportOptionsSheet: View {
+    let draft: MacPdfImportDraft
+    let isImporting: Bool
+    let progress: String?
+    let onCancel: () -> Void
+    let onConfirm: (MacPdfImportOptions) -> Void
+    @State private var mode: MacPdfImportMode = .readOnly
+    @State private var destination: MacPdfImportDestination = .currentSession
+    @State private var newSessionTitle: String
+    @State private var pageStart = 1
+    @State private var pageEnd: Int
+    @State private var concurrency = 2
+
+    init(
+        draft: MacPdfImportDraft,
+        isImporting: Bool,
+        progress: String?,
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping (MacPdfImportOptions) -> Void
+    ) {
+        self.draft = draft
+        self.isImporting = isImporting
+        self.progress = progress
+        self.onCancel = onCancel
+        self.onConfirm = onConfirm
+        _newSessionTitle = State(initialValue: draft.defaultSessionTitle)
+        _pageEnd = State(initialValue: min(draft.pageCount, 10))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.section) {
+            HStack(alignment: .top, spacing: MathNotesTheme.Spacing.standard) {
+                Image(systemName: "doc.richtext")
+                    .font(.title2)
+                    .foregroundStyle(MathNotesTheme.accent)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("导入 PDF")
+                        .font(.title2.weight(.semibold))
+                    Text(draft.fileName)
+                        .font(.body)
+                        .lineLimit(1)
+                    Text("\(draft.pageCount) 页 · \(formattedBytes)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    onCancel()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .disabled(isImporting)
+                .accessibilityLabel("关闭 PDF 导入")
+            }
+
+            GroupBox("处理方式") {
+                VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.standard) {
+                    Picker("处理方式", selection: $mode) {
+                        ForEach(MacPdfImportMode.allCases) { option in
+                            Text(option.label).tag(option)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+                    .labelsHidden()
+
+                    if mode == .recognizeSelected {
+                        HStack(spacing: MathNotesTheme.Spacing.section) {
+                            Stepper("起始页 \(pageStart)", value: $pageStart, in: 1...max(1, pageEnd))
+                            Stepper("结束页 \(pageEnd)", value: $pageEnd, in: pageStart...draft.pageCount)
+                        }
+                    }
+                    if mode != .readOnly {
+                        HStack {
+                            Text("同时识别")
+                            Picker("同时识别", selection: $concurrency) {
+                                Text("2（推荐）").tag(2)
+                                Text("3").tag(3)
+                                Text("4").tag(4)
+                            }
+                            .labelsHidden()
+                            .frame(width: 130)
+                            Spacer()
+                            Text("遇到限流或超时会自动降速")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(8)
+            }
+
+            GroupBox("放到哪里") {
+                VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.standard) {
+                    Picker("放到哪里", selection: $destination) {
+                        ForEach(MacPdfImportDestination.allCases) { option in
+                            Text(option.label).tag(option)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+                    .labelsHidden()
+                    if destination == .newSession {
+                        TextField("记录名称", text: $newSessionTitle)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+                .padding(8)
+            }
+
+            if let progress {
+                HStack(spacing: MathNotesTheme.Spacing.compact) {
+                    ProgressView().controlSize(.small)
+                    Text(progress).font(.callout).foregroundStyle(.secondary)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("取消", role: .cancel, action: onCancel)
+                    .disabled(isImporting)
+                Button("导入 PDF") {
+                    onConfirm(.init(
+                        mode: mode,
+                        destination: destination,
+                        newSessionTitle: newSessionTitle,
+                        pageStart: pageStart,
+                        pageEnd: pageEnd,
+                        concurrency: concurrency
+                    ))
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isImporting || (destination == .newSession && newSessionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(MathNotesTheme.Spacing.page)
+        .frame(width: 520)
+        .interactiveDismissDisabled(isImporting)
+        .accessibilityIdentifier("pdf-import-options-sheet")
+    }
+
+    private var formattedBytes: String {
+        ByteCountFormatter.string(fromByteCount: Int64(draft.bytes.count), countStyle: .file)
+    }
+}
+
+private enum PdfImportPreparationError: LocalizedError {
+    case invalidDocument
+    case pageOutOfRange
+    case renderingFailed
+
+    var errorDescription: String? {
+        return switch self {
+        case .invalidDocument: "无法读取这个 PDF；文件可能已损坏或受到密码保护。"
+        case .pageOutOfRange: "选择的 PDF 页码超出范围。"
+        case .renderingFailed: "PDF 页面没有成功转换为识别图片。"
+        }
+    }
+}
+
+private func renderPdfPagePNG(data: Data, pageNumber: Int) throws -> Data {
+    guard let document = PDFDocument(data: data),
+          pageNumber >= 1,
+          pageNumber <= document.pageCount,
+          let page = document.page(at: pageNumber - 1) else {
+        throw PdfImportPreparationError.pageOutOfRange
+    }
+    let bounds = page.bounds(for: .mediaBox)
+    let largestDimension = max(bounds.width, bounds.height)
+    guard largestDimension > 0 else { throw PdfImportPreparationError.renderingFailed }
+    let scale = min(2, 2_800 / largestDimension)
+    let width = max(1, Int(ceil(bounds.width * scale)))
+    let height = max(1, Int(ceil(bounds.height * scale)))
+    guard let bitmap = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: width,
+        pixelsHigh: height,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: false,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+    ), let graphics = NSGraphicsContext(bitmapImageRep: bitmap) else {
+        throw PdfImportPreparationError.renderingFailed
+    }
+    NSGraphicsContext.saveGraphicsState()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+    NSGraphicsContext.current = graphics
+    let context = graphics.cgContext
+    context.setFillColor(NSColor.white.cgColor)
+    context.fill(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+    context.saveGState()
+    context.scaleBy(x: scale, y: scale)
+    context.translateBy(x: -bounds.minX, y: -bounds.minY)
+    page.draw(with: .mediaBox, to: context)
+    context.restoreGState()
+    guard let png = bitmap.representation(using: .png, properties: [:]) else {
+        throw PdfImportPreparationError.renderingFailed
+    }
+    return png
 }
 
 private enum WorkbenchPane: String, CaseIterable, Identifiable {
@@ -1065,6 +1586,7 @@ private struct SessionSourcePane: View {
     @ObservedObject var workspace: SessionSourceWorkspace
     @ObservedObject var supervisor: SidecarSupervisor
     let onReordered: (ReadonlySessionManifest) -> Void
+    let onSelectionEditRequested: (MacSelectionEditDraft) -> Void
     let onSessionChanged: () async -> Void
     @State private var batchSelection: Set<String> = []
     @State private var isOrganizing = false
@@ -1073,6 +1595,8 @@ private struct SessionSourcePane: View {
     @State private var pendingMoveTarget: SessionTransferTarget?
     @State private var isSelectionMode = false
     @State private var pendingInsertedBlockID: String?
+    @State private var pendingDeleteUndo: DeleteSessionBlocksResponse?
+    @State private var isRestoringDelete = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1112,6 +1636,10 @@ private struct SessionSourcePane: View {
                         self.pendingInsertedBlockID = nil
                     }
                 }
+            }
+            if let pendingDeleteUndo {
+                Divider()
+                deleteUndoBar(pendingDeleteUndo)
             }
         }
         .background(MathNotesTheme.canvas)
@@ -1165,7 +1693,13 @@ private struct SessionSourcePane: View {
                     isSelectionMode = true
                     batchSelection.insert(block.id)
                 },
-                onManifestChanged: onReordered,
+                onBlockDeleted: { response in
+                    pendingDeleteUndo = response
+                    organizeFailed = false
+                    organizeStatus = nil
+                    onReordered(response.manifest)
+                },
+                onSelectionEditRequested: onSelectionEditRequested,
                 onBlockInserted: { blockID in
                     pendingInsertedBlockID = blockID
                     selectedBlockID = blockID
@@ -1251,6 +1785,53 @@ private struct SessionSourcePane: View {
         .padding(.vertical, MathNotesTheme.Spacing.compact)
         .background(MathNotesTheme.sidebar.opacity(0.24))
         .accessibilityIdentifier("session-block-organize-bar")
+    }
+
+    private func deleteUndoBar(_ response: DeleteSessionBlocksResponse) -> some View {
+        HStack(spacing: MathNotesTheme.Spacing.standard) {
+            Label(
+                response.undo.deletedBlockIds.count == 1
+                    ? "已删除 1 个内容段"
+                    : "已删除 \(response.undo.deletedBlockIds.count) 个内容段",
+                systemImage: "trash"
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            Spacer()
+            if isRestoringDelete { ProgressView().controlSize(.small) }
+            Button("撤销") {
+                Task { await restoreDeletion(response) }
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .buttonStyle(.borderedProminent)
+            .disabled(isRestoringDelete)
+        }
+        .padding(.horizontal, MathNotesTheme.Spacing.section)
+        .padding(.vertical, MathNotesTheme.Spacing.compact)
+        .background(MathNotesTheme.sidebar.opacity(0.24))
+        .accessibilityIdentifier("session-block-delete-undo")
+    }
+
+    private func restoreDeletion(_ pending: DeleteSessionBlocksResponse) async {
+        guard !isRestoringDelete,
+              pendingDeleteUndo?.undo.deletionId == pending.undo.deletionId else { return }
+        isRestoringDelete = true
+        defer { isRestoringDelete = false }
+        do {
+            let restored = try await supervisor.restoreSessionBlocks(
+                session,
+                deletionId: pending.undo.deletionId,
+                baseRevision: pending.manifest.revision
+            )
+            pendingDeleteUndo = nil
+            organizeFailed = false
+            organizeStatus = "删除已撤销。"
+            selectedBlockID = pending.undo.deletedBlockIds.first
+            onReordered(restored.manifest)
+        } catch {
+            organizeFailed = true
+            organizeStatus = error.localizedDescription
+        }
     }
 
     private var canOrganize: Bool {
@@ -1341,7 +1922,8 @@ private struct SessionSourceBlockView: View {
     let onActivate: () -> Void
     let onToggleBatchSelection: () -> Void
     let onBeginBatchSelection: () -> Void
-    let onManifestChanged: (ReadonlySessionManifest) -> Void
+    let onBlockDeleted: (DeleteSessionBlocksResponse) -> Void
+    let onSelectionEditRequested: (MacSelectionEditDraft) -> Void
     let onBlockInserted: (String) -> Void
     let onSessionChanged: () async -> Void
     @State private var errorMessage: String?
@@ -1354,7 +1936,7 @@ private struct SessionSourceBlockView: View {
     @State private var blockActionError: String?
     @State private var isConfirmingDelete = false
     @State private var isAddingBlock = false
-    @State private var selectionEditDraft: MacSelectionEditDraft?
+    @State private var isUpdatingProtectedSpan = false
     @State private var isHovering = false
     @State private var editorMeasuredHeight: CGFloat = 96
     @AppStorage(MacPreferenceKeys.sourceFont) private var sourceFontRawValue = MacSourceFontPreset.systemMono.rawValue
@@ -1395,6 +1977,9 @@ private struct SessionSourceBlockView: View {
                         Label("用 AI 修改选中文字", systemImage: "sparkles")
                     }
                     .disabled(!hasEditableSelection)
+                    if hasEditableSelection {
+                        protectedSpanSelectionAction
+                    }
                     Button {
                         Task { await addBlockAfter() }
                     } label: {
@@ -1436,6 +2021,19 @@ private struct SessionSourceBlockView: View {
                         Label("删除这个块", systemImage: "trash")
                     }
                     .disabled(workspace.isDirty(blockID: manifest.id) || markdownLockState == true)
+                }
+                if let isLocked = markdownLockState {
+                    Button {
+                        Task { await setBlockLock(!isLocked) }
+                    } label: {
+                        Image(systemName: isLocked ? "lock.fill" : "lock.open")
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(isLocked ? MathNotesTheme.accent : .secondary)
+                    .disabled(workspace.isDirty(blockID: manifest.id))
+                    .help(isLocked ? "解除这个内容段的固定" : "固定这个内容段")
+                    .accessibilityLabel(isLocked ? "解除固定" : "固定这个内容段")
                 }
             }
             .padding(.horizontal, MathNotesTheme.Spacing.standard)
@@ -1495,27 +2093,6 @@ private struct SessionSourceBlockView: View {
                 supervisor: supervisor
             )
         }
-        .sheet(item: $selectionEditDraft) { draft in
-            MacSelectionEditSheet(
-                draft: draft,
-                onGenerate: { instruction, replacingProposalID in
-                    if let replacingProposalID {
-                        _ = try? await supervisor.cancelSelectionEdit(session, proposalId: replacingProposalID)
-                    }
-                    return try await generateSelectionEdit(draft: draft, instruction: instruction)
-                },
-                onApply: { proposal in
-                    let response = try await supervisor.applySelectionEdit(session, proposalId: proposal.id)
-                    workspace.applyAISelectionEdit(response.result.block)
-                    await onSessionChanged()
-                    return response
-                },
-                onCancel: { proposal in
-                    guard let proposal else { return }
-                    _ = try await supervisor.cancelSelectionEdit(session, proposalId: proposal.id)
-                }
-            )
-        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("源码内容段 \(displayOrdinal)，\(manifest.sourceName)")
         .alert("无法识别", isPresented: Binding(
@@ -1540,7 +2117,7 @@ private struct SessionSourceBlockView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("这个内容段将从当前笔记移除。")
+            Text("这个内容段将从当前笔记移除；删除后可以撤销。")
         }
     }
 
@@ -1634,6 +2211,9 @@ private struct SessionSourceBlockView: View {
                         Label("用 AI 修改选中文字", systemImage: "sparkles")
                     }
                     .disabled(!hasEditableSelection)
+                    if hasEditableSelection {
+                        protectedSpanSelectionAction
+                    }
                     Divider()
                     Button {
                         Task { await addBlockAfter() }
@@ -1664,6 +2244,9 @@ private struct SessionSourceBlockView: View {
                     Label("\(markdown.protectedSpanCount) 处固定内容", systemImage: "lock.shield")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                if hasEditableSelection {
+                    protectedSpanSelectionAction
                 }
                 Spacer()
                 Button("还原") { workspace.resetDraft(blockID: manifest.id) }
@@ -1735,10 +2318,51 @@ private struct SessionSourceBlockView: View {
             && !workspace.selectedExcerpt.isEmpty
     }
 
+    private var canUpdateProtectedSpan: Bool {
+        hasEditableSelection
+            && !workspace.isDirty(blockID: manifest.id)
+            && !isSaving
+            && !isUpdatingProtectedSpan
+    }
+
+    @ViewBuilder
+    private var protectedSpanSelectionAction: some View {
+        let isUnlocking = selectionTargetsProtectedSpan
+        Button {
+            Task { await updateProtectedSpan(protected: !isUnlocking) }
+        } label: {
+            Label(
+                isUnlocking ? "解除固定" : "固定选区",
+                systemImage: isUnlocking ? "lock.open" : "lock.shield"
+            )
+        }
+        .disabled(!canUpdateProtectedSpan)
+        .help(workspace.isDirty(blockID: manifest.id)
+            ? "请先保存或还原当前草稿"
+            : isUnlocking ? "解除当前选区所在的固定内容" : "保护选中的文字，不允许 AI 修改")
+    }
+
+    private var selectionTargetsProtectedSpan: Bool {
+        guard hasEditableSelection,
+              let range = workspace.selectedExcerptRange,
+              let payload = workspace.payloads[manifest.id],
+              case let .markdown(markdown) = payload.content,
+              let expression = try? NSRegularExpression(
+                pattern: #"<!-- lock:start id="([^"]+)" hash="[a-f0-9]{64}" -->\r?\n?([\s\S]*?)\r?\n?<!-- lock:end id="\1" -->"#
+              ) else { return false }
+        let sourceRange = NSRange(location: 0, length: (markdown.markdown as NSString).length)
+        return expression.matches(in: markdown.markdown, range: sourceRange).contains { match in
+            let contentRange = match.range(at: 2)
+            return contentRange.location != NSNotFound
+                && range.from >= contentRange.location
+                && range.to <= NSMaxRange(contentRange)
+        }
+    }
+
     private func beginSelectionEdit() {
         guard hasEditableSelection,
               let range = workspace.selectedExcerptRange else { return }
-        selectionEditDraft = MacSelectionEditDraft(
+        onSelectionEditRequested(MacSelectionEditDraft(
             blockId: manifest.id,
             selection: SelectionEditTextRange(
                 from: range.from,
@@ -1746,51 +2370,7 @@ private struct SessionSourceBlockView: View {
                 selectedText: workspace.selectedExcerpt
             ),
             selectedText: workspace.selectedExcerpt
-        )
-    }
-
-    private func generateSelectionEdit(
-        draft: MacSelectionEditDraft,
-        instruction: String
-    ) async throws -> SelectionEditProposal {
-        guard let payload = workspace.payloads[manifest.id],
-              case let .markdown(markdown) = payload.content else {
-            throw SidecarProtocolError.selectionEditRejected(409, "block_not_found")
-        }
-        if workspace.isDirty(blockID: manifest.id) {
-            guard let currentDraft = workspace.drafts[manifest.id] else {
-                throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
-            }
-            let saved = try await supervisor.saveMarkdownBlock(
-                session,
-                blockId: manifest.id,
-                markdown: currentDraft,
-                baseRevision: markdown.baseRevision
-            )
-            workspace.applySaved(saved)
-            await onSessionChanged()
-        }
-        guard let current = workspace.drafts[manifest.id] else {
-            throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
-        }
-        let currentText = current as NSString
-        let selection = NSRange(
-            location: draft.selection.from,
-            length: draft.selection.to - draft.selection.from
-        )
-        guard selection.location >= 0,
-              selection.length > 0,
-              NSMaxRange(selection) <= currentText.length,
-              currentText.substring(with: selection) == draft.selectedText else {
-            throw SidecarProtocolError.selectionEditRejected(409, "selection_stale")
-        }
-        return try await supervisor.proposeSelectionEdit(
-            session,
-            blockId: manifest.id,
-            selection: draft.selection,
-            selectedText: draft.selectedText,
-            instruction: instruction
-        )
+        ))
     }
 
     private func estimatedEditorHeight(markdown: String) -> CGFloat {
@@ -1842,7 +2422,7 @@ private struct SessionSourceBlockView: View {
     }
 
     private var sourceLabel: String {
-        switch manifest.source {
+        return switch manifest.source {
         case "ai_transcription": "识别草稿 · \(manifest.sourceName)"
         case "user", "user_revision": "用户笔记"
         case "pdf_import": "PDF · \(manifest.sourceName)"
@@ -1851,7 +2431,7 @@ private struct SessionSourceBlockView: View {
     }
 
     private var blockIcon: String {
-        switch manifest.type {
+        return switch manifest.type {
         case "pdf": "doc.richtext"
         case "image": "photo"
         default: "text.alignleft"
@@ -1907,17 +2487,63 @@ private struct SessionSourceBlockView: View {
         }
     }
 
+    private func updateProtectedSpan(protected shouldProtect: Bool) async {
+        guard !workspace.isDirty(blockID: manifest.id) else {
+            blockActionError = "请先保存或还原当前草稿，再更改固定状态。"
+            return
+        }
+        guard let range = workspace.selectedExcerptRange,
+              workspace.selectedExcerptBlockID == manifest.id,
+              let payload = workspace.payloads[manifest.id],
+              case let .markdown(markdown) = payload.content else {
+            blockActionError = "请重新选择要固定或解除固定的文字。"
+            return
+        }
+        let selection = SelectionEditTextRange(
+            from: range.from,
+            to: range.to,
+            selectedText: workspace.selectedExcerpt
+        )
+        isUpdatingProtectedSpan = true
+        blockActionError = nil
+        defer { isUpdatingProtectedSpan = false }
+        do {
+            let response: UpdateMarkdownProtectedSpanResponse
+            if shouldProtect {
+                response = try await supervisor.protectMarkdownSelection(
+                    session,
+                    blockId: manifest.id,
+                    baseRevision: markdown.baseRevision,
+                    selection: selection
+                )
+            } else {
+                response = try await supervisor.unlockMarkdownProtectedSelection(
+                    session,
+                    blockId: manifest.id,
+                    baseRevision: markdown.baseRevision,
+                    selection: selection
+                )
+            }
+            workspace.applySaved(response.block)
+            workspace.setSelection("", range: nil, blockID: manifest.id)
+            await onSessionChanged()
+        } catch {
+            blockActionError = error.localizedDescription
+        }
+    }
+
     private func deleteBlock() async {
         guard !workspace.isDirty(blockID: manifest.id) else {
             blockActionError = "请先保存或还原当前草稿，再删除内容段。"
             return
         }
         do {
-            let updated = try await supervisor.deleteSessionBlocks(
+            let response = try await supervisor.deleteSessionBlocks(
                 session,
-                blockIds: [manifest.id]
+                blockIds: [manifest.id],
+                baseRevision: sessionRevision
             )
-            onManifestChanged(updated)
+            onBlockDeleted(response)
         } catch {
             blockActionError = error.localizedDescription
         }
@@ -1954,65 +2580,76 @@ private struct SessionSourceBlockView: View {
     }
 }
 
-private struct MacSelectionEditDraft: Identifiable {
+struct MacSelectionEditDraft: Identifiable {
     let id = UUID()
     let blockId: String
     let selection: SelectionEditTextRange
     let selectedText: String
 }
 
-private struct MacSelectionEditSheet: View {
+struct MacSelectionEditWorkspace: View {
     let draft: MacSelectionEditDraft
     let onGenerate: (String, String?) async throws -> SelectionEditProposal
-    let onApply: (SelectionEditProposal) async throws -> ApplySelectionEditResponse
+    let onApply: (SelectionEditProposal, String, Bool) async throws -> ApplySelectionEditResponse
     let onCancel: (SelectionEditProposal?) async throws -> Void
-    @Environment(\.dismiss) private var dismiss
+    let onRevealLock: () -> Void
+    let onClose: () -> Void
     @State private var instruction = "润色这段内容，使表达更清楚；保留原意、Markdown 和数学公式。"
     @State private var proposal: SelectionEditProposal?
+    @State private var replacementMarkdown = ""
+    @State private var requiresUnlock = false
+    @State private var showUnlockPrompt = false
     @State private var isGenerating = false
     @State private var isApplying = false
     @State private var isCancelling = false
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.section) {
+        VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.standard) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("AI 修改选中文字")
+                    Text("修改选中文字")
                         .font(.title3.weight(.semibold))
-                    Text("先生成候选并比较；只有点击“应用修改”才会写入笔记。")
+                    Text("原文不会自动改变；确认修改后才会写入笔记。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("取消") { Task { await cancelAndDismiss() } }
+                Button("取消") { Task { await cancelAndClose() } }
                     .disabled(isBusy)
             }
 
-            VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.compact) {
-                Text("修改要求").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                TextEditor(text: $instruction)
-                    .font(.body)
-                    .frame(minHeight: 70, maxHeight: 105)
-                    .padding(6)
-                    .background(MathNotesTheme.canvas)
-                    .clipShape(RoundedRectangle(cornerRadius: MathNotesTheme.Radius.control))
-            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.standard) {
+                    VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.compact) {
+                        Text("修改要求").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        TextEditor(text: $instruction)
+                            .font(.body)
+                            .frame(minHeight: 74, maxHeight: 105)
+                            .padding(6)
+                            .background(MathNotesTheme.canvas)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(MathNotesTheme.separator.opacity(0.72))
+                            }
+                    }
 
-            HStack(alignment: .top, spacing: MathNotesTheme.Spacing.standard) {
-                diffColumn(
-                    title: "原文（不会自动覆盖）",
-                    text: draft.selectedText,
-                    tint: MathNotesTheme.failure.opacity(0.06)
-                )
-                diffColumn(
-                    title: "AI 候选",
-                    text: proposal?.replacementMarkdown ?? "生成后会在这里显示候选内容。",
-                    tint: proposal == nil ? Color.clear : MathNotesTheme.accent.opacity(0.07),
-                    placeholder: proposal == nil
-                )
+                    readonlyDiff(
+                        title: "原文",
+                        text: draft.selectedText,
+                        tint: MathNotesTheme.failure.opacity(0.05)
+                    )
+
+                    Image(systemName: "arrow.down")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .accessibilityHidden(true)
+
+                    editableCandidate
+                }
             }
-            .frame(maxHeight: .infinity)
 
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
@@ -2022,47 +2659,45 @@ private struct MacSelectionEditSheet: View {
             }
 
             HStack {
-                if let proposal {
-                    Text("候选由 \(proposal.providerName) 生成 · 尚未写入")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("选区位置：UTF-16 \(draft.selection.from)–\(draft.selection.to)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
+                Text(proposal == nil ? "生成后可继续手动调整" : "候选尚未写入")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Button(proposal == nil ? "生成修改候选" : "重新生成") {
                     Task { await generate() }
                 }
                 .disabled(isBusy || instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if let proposal {
-                    Button("应用修改") { Task { await apply(proposal) } }
+                    Button(requiresUnlock ? "重试" : "应用修改") { Task { await apply(proposal) } }
                         .buttonStyle(.borderedProminent)
-                        .disabled(isBusy)
+                        .disabled(isBusy || replacementMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
-        .padding(MathNotesTheme.Spacing.page)
-        .frame(minWidth: 720, idealWidth: 820, minHeight: 520, idealHeight: 600)
-        .interactiveDismissDisabled(proposal?.status == "pending")
+        .padding(MathNotesTheme.Spacing.section)
+        .frame(minWidth: 420, idealWidth: 560, minHeight: 480, idealHeight: 620)
+        .interactiveDismissDisabled(true)
+        .alert("这段内容已经固定", isPresented: $showUnlockPrompt) {
+            Button("暂不解锁", role: .cancel) { }
+            Button("去解锁") { onRevealLock() }
+        } message: {
+            Text("AI 不会越过锁。修改候选会保留；解除固定后回到这里点击“重试”。")
+        }
         .accessibilityLabel("AI 选区修改候选比较")
     }
 
     private var isBusy: Bool { isGenerating || isApplying || isCancelling }
 
-    private func diffColumn(
+    private func readonlyDiff(
         title: String,
         text: String,
-        tint: Color,
-        placeholder: Bool = false
+        tint: Color
     ) -> some View {
         VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.compact) {
             Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ScrollView {
                 Text(text)
                     .font(.body.monospaced())
-                    .foregroundStyle(placeholder ? .secondary : .primary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(MathNotesTheme.Spacing.standard)
@@ -2074,7 +2709,44 @@ private struct MacSelectionEditSheet: View {
                     .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 112, maxHeight: 180)
+    }
+
+    private var editableCandidate: some View {
+        VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.compact) {
+            HStack {
+                Text("修改后")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if proposal != nil {
+                    Text("可以继续编辑")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $replacementMarkdown)
+                    .font(.body.monospaced())
+                    .padding(8)
+                    .scrollContentBackground(.hidden)
+                    .background(proposal == nil ? Color.clear : MathNotesTheme.accent.opacity(0.07))
+                if proposal == nil {
+                    Text("生成后会在这里显示候选内容。")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 16)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(minHeight: 150, maxHeight: 230)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(MathNotesTheme.separator.opacity(0.72))
+            }
+        }
     }
 
     private func generate() async {
@@ -2082,12 +2754,22 @@ private struct MacSelectionEditSheet: View {
         errorMessage = nil
         defer { isGenerating = false }
         do {
-            proposal = try await onGenerate(
+            let generated = try await onGenerate(
                 instruction.trimmingCharacters(in: .whitespacesAndNewlines),
                 proposal?.id
             )
+            proposal = generated
+            replacementMarkdown = generated.replacementMarkdown
+            requiresUnlock = false
         } catch {
-            errorMessage = error.localizedDescription
+            if let protocolError = error as? SidecarProtocolError,
+               protocolError.isSelectionEditLockConflict {
+                requiresUnlock = true
+                errorMessage = "这段内容已经被固定。解除固定后重新生成，原文没有被修改。"
+                showUnlockPrompt = true
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -2096,21 +2778,28 @@ private struct MacSelectionEditSheet: View {
         errorMessage = nil
         defer { isApplying = false }
         do {
-            _ = try await onApply(proposal)
-            dismiss()
+            _ = try await onApply(proposal, replacementMarkdown, requiresUnlock)
+            onClose()
         } catch {
             // Keep the proposal visible so a revision conflict never destroys the user's candidate.
-            errorMessage = error.localizedDescription
+            if let protocolError = error as? SidecarProtocolError,
+               protocolError.isSelectionEditLockConflict {
+                requiresUnlock = true
+                errorMessage = "这段内容已经被固定。解除固定后可以重试，修改候选已保留。"
+                showUnlockPrompt = true
+            } else {
+                errorMessage = "\(error.localizedDescription) 候选已保留。"
+            }
         }
     }
 
-    private func cancelAndDismiss() async {
+    private func cancelAndClose() async {
         isCancelling = true
         errorMessage = nil
         defer { isCancelling = false }
         do {
             try await onCancel(proposal)
-            dismiss()
+            onClose()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -2135,7 +2824,7 @@ private struct SessionAssetPreview: Identifiable {
     let assetPath: String
 
     var title: String {
-        switch kind {
+        return switch kind {
         case .image: "原始图片"
         case .pdf: "原始 PDF"
         }
@@ -2851,7 +3540,7 @@ private struct LazySessionBlockView: View {
     }
 
     private var sourceLabel: String {
-        switch manifest.source {
+        return switch manifest.source {
         case "ai_transcription": "识别草稿 · \(manifest.sourceName)"
         case "user", "user_revision": "用户笔记"
         case "pdf_import": "PDF · \(manifest.sourceName)"
@@ -2860,7 +3549,7 @@ private struct LazySessionBlockView: View {
     }
 
     private var blockIcon: String {
-        switch manifest.type {
+        return switch manifest.type {
         case "pdf": "doc.richtext"
         case "image": "photo"
         default: "text.alignleft"
@@ -3157,7 +3846,7 @@ private struct RecognitionTaskSheet: View {
     }
 
     private var statusLabel: String {
-        switch currentTask.status {
+        return switch currentTask.status {
         case "pending": "等待识别服务"
         case "running": "正在忠实转写"
         case "succeeded": "识别完成，草稿已写入笔记"
@@ -3167,7 +3856,7 @@ private struct RecognitionTaskSheet: View {
     }
 
     private var statusColor: Color {
-        switch currentTask.status {
+        return switch currentTask.status {
         case "succeeded": MathNotesTheme.accent
         case "failed": MathNotesTheme.failure
         case "cancelled": .secondary
@@ -3480,7 +4169,7 @@ private enum SessionAssistantScope: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
     var label: String {
-        switch self {
+        return switch self {
         case .session: "整个 Session"
         case .block: "当前块"
         case .selection: "选中文字"
@@ -3495,7 +4184,7 @@ private enum SessionAssistantMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
     var label: String {
-        switch self {
+        return switch self {
         case .explain: "解释"
         case .teach: "带我学习"
         case .summarize: "总结"
@@ -3510,7 +4199,8 @@ struct SessionAssistantPanel: View {
     let selectedText: String
     let selectedTextBlockID: String?
     @ObservedObject var supervisor: SidecarSupervisor
-    let onSelectionEditRequested: (() -> Void)?
+    let selectionEditContext: SessionAssistantSelectionEditContext?
+    let onOpenRelatedSource: (SessionAssistantRelatedSource) -> Void
     let onSessionChanged: () async -> Void
     let onClose: () -> Void
 
@@ -3527,12 +4217,13 @@ struct SessionAssistantPanel: View {
     @State private var assistantRequestTask: Task<Void, Never>?
     @State private var assistantTaskID: String?
     @State private var liveAssistantDraft = ""
-    @State private var assistantStageMessage = "正在连接学习助手…"
+    @State private var assistantStageMessage = "正在连接 AI…"
     @State private var isMutatingRemark = false
     @State private var pendingPromotion: SessionAssistantRemark?
     @State private var droppedBlockID: String?
     @State private var droppedText = ""
     @State private var droppedTextBlockID: String?
+    @State private var isEditingSelection = false
     @AppStorage(MacPreferenceKeys.assistantFont) private var assistantFontRaw = MacPreviewFontPreset.system.rawValue
     @AppStorage(MacPreferenceKeys.assistantFontSize) private var assistantFontSize = MacTypographyPreferences.defaultAssistantSize
 
@@ -3543,7 +4234,8 @@ struct SessionAssistantPanel: View {
         selectedText: String,
         selectedTextBlockID: String?,
         supervisor: SidecarSupervisor,
-        onSelectionEditRequested: (() -> Void)?,
+        selectionEditContext: SessionAssistantSelectionEditContext?,
+        onOpenRelatedSource: @escaping (SessionAssistantRelatedSource) -> Void,
         onSessionChanged: @escaping () async -> Void,
         onClose: @escaping () -> Void
     ) {
@@ -3553,7 +4245,8 @@ struct SessionAssistantPanel: View {
         self.selectedText = selectedText
         self.selectedTextBlockID = selectedTextBlockID
         self.supervisor = supervisor
-        self.onSelectionEditRequested = onSelectionEditRequested
+        self.selectionEditContext = selectionEditContext
+        self.onOpenRelatedSource = onOpenRelatedSource
         self.onSessionChanged = onSessionChanged
         self.onClose = onClose
         _scope = State(initialValue: selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .block : .selection)
@@ -3563,9 +4256,20 @@ struct SessionAssistantPanel: View {
         VStack(spacing: 0) {
             assistantHeader
             Divider()
-            conversationPane
-            Divider()
-            composer
+            if isEditingSelection, let selectionEditContext {
+                MacSelectionEditWorkspace(
+                    draft: selectionEditContext.draft,
+                    onGenerate: selectionEditContext.onGenerate,
+                    onApply: selectionEditContext.onApply,
+                    onCancel: selectionEditContext.onCancel,
+                    onRevealLock: selectionEditContext.onRevealLock,
+                    onClose: { isEditingSelection = false }
+                )
+            } else {
+                conversationPane
+                Divider()
+                composer
+            }
         }
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: MathNotesTheme.Radius.panel))
@@ -3613,21 +4317,27 @@ struct SessionAssistantPanel: View {
             Image(systemName: "sparkles")
                 .foregroundStyle(MathNotesTheme.accent)
             VStack(alignment: .leading, spacing: 2) {
-                Text("学习助手")
+                Text("与笔记对话")
                     .font(.headline)
-                Text("拖入内容段或选中文字，主界面仍可继续编辑")
+                Text(isEditingSelection ? "比较原文与修改后内容" : "引用当前笔记，也可以修改未固定内容")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button {
-                onClose()
-            } label: {
-                Image(systemName: "xmark")
+            if isEditingSelection {
+                Text("请先应用或取消本次修改")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .help("关闭与笔记对话")
+                .accessibilityLabel("关闭与笔记对话")
             }
-            .buttonStyle(.plain)
-            .help("关闭学习助手")
-            .accessibilityLabel("关闭学习助手")
         }
         .padding(.horizontal, MathNotesTheme.Spacing.section)
         .padding(.vertical, MathNotesTheme.Spacing.standard)
@@ -3690,15 +4400,16 @@ struct SessionAssistantPanel: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
             VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.compact) {
+                assistantSourceLinks(
+                    focusLabel: remark.focus.label,
+                    relatedSources: remark.relatedSources ?? []
+                )
                 MarkdownBlockWebView(html: MacTypographyPreferences.styledAssistantHTML(
                     remark.html,
                     preset: assistantFontPreset,
                     size: assistantFontSize
                 ))
                 HStack {
-                    Text("\(remark.providerName) · \(remark.usage.textCharacters) 字 · \(remark.imageCount) 图")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                     Spacer()
                     Button("加入正文") { pendingPromotion = remark }
                         .buttonStyle(.borderless)
@@ -3755,17 +4466,15 @@ struct SessionAssistantPanel: View {
 
                 if scope == .selection {
                     Button {
-                        onClose()
-                        onSelectionEditRequested?()
+                        isEditingSelection = true
                     } label: {
                         Label("修改选中文字", systemImage: "wand.and.sparkles")
                     }
-                    .disabled(!hasSelection || onSelectionEditRequested == nil)
-                    .help(onSelectionEditRequested == nil ? "选区为空或所在内容段已固定" : "先生成候选，明确应用后才修改笔记")
+                    .disabled(!hasSelection || selectionEditContext == nil)
+                    .help(selectionEditContext == nil ? "选区为空或所在内容段已固定" : "先生成候选，明确应用后才修改笔记")
                 }
 
                 Spacer()
-                compactContextBudget
             }
 
             if scope == .block {
@@ -3778,6 +4487,13 @@ struct SessionAssistantPanel: View {
                     droppedTextBlockID = nil
                     if selectedText.isEmpty { scope = .block }
                 }
+            }
+
+            if let preview, !(preview.relatedSources ?? []).isEmpty {
+                assistantSourceLinks(
+                    focusLabel: preview.focus.label,
+                    relatedSources: preview.relatedSources ?? []
+                )
             }
 
             HStack(alignment: .bottom, spacing: MathNotesTheme.Spacing.compact) {
@@ -3794,7 +4510,7 @@ struct SessionAssistantPanel: View {
                         RoundedRectangle(cornerRadius: MathNotesTheme.Radius.control)
                             .strokeBorder(MathNotesTheme.separator.opacity(0.72), lineWidth: 1)
                     }
-                    .accessibilityLabel("向学习助手提问")
+                    .accessibilityLabel("与笔记对话")
 
                 Button {
                     if isRunning {
@@ -3821,7 +4537,7 @@ struct SessionAssistantPanel: View {
                 .clipShape(Circle())
                 .disabled(!isRunning && requestInput == nil)
                 .help(isRunning ? "停止" : "发送")
-                .accessibilityLabel(isRunning ? "停止学习助手回答" : "发送给学习助手")
+                .accessibilityLabel(isRunning ? "停止回答" : "发送问题")
             }
 
             if let errorMessage {
@@ -3843,20 +4559,31 @@ struct SessionAssistantPanel: View {
         MacPreviewFontPreset(rawValue: assistantFontRaw) ?? .system
     }
 
-    private var compactContextBudget: some View {
-        Group {
-            if let preview {
-                let summary = "\(preview.usage.textCharacters) 字 · \(preview.imageCount) 图 · \(preview.usage.includedBlockIds.count)/\(preview.usage.sessionBlockCount) 块"
-                Label(summary, systemImage: preview.usage.truncated || preview.usage.focusTruncated ? "exclamationmark.triangle" : "info.circle")
-                    .help("本轮实际喂给 AI：\(summary)")
-            } else {
-                ProgressView().controlSize(.mini)
-                    .help("正在计算本轮实际喂给 AI 的内容")
+    private func assistantSourceLinks(
+        focusLabel: String,
+        relatedSources: [SessionAssistantRelatedSource]
+    ) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: MathNotesTheme.Spacing.compact) {
+                Label(focusLabel.isEmpty ? "当前笔记" : focusLabel, systemImage: "book.closed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(relatedSources) { source in
+                    Button {
+                        onOpenRelatedSource(source)
+                    } label: {
+                        HStack(spacing: 4) {
+                            if source.locked { Image(systemName: "lock.fill") }
+                            Text("Notebook：\(source.notebookTitle) · Session：\(source.sessionTitle)")
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .help(source.locked ? "来源已固定，仅供引用" : "打开引用来源")
+                    .accessibilityLabel("打开引用来源 \(source.notebookTitle)，\(source.sessionTitle)")
+                }
             }
         }
-        .font(.caption2.monospacedDigit())
-        .foregroundStyle(.secondary)
-        .accessibilityIdentifier("assistant-context-budget")
     }
 
     private func contextChip(_ label: String, systemImage: String, onClear: @escaping () -> Void) -> some View {
@@ -4009,7 +4736,7 @@ struct SessionAssistantPanel: View {
         question = ""
         isRunning = true
         liveAssistantDraft = ""
-        assistantStageMessage = "正在连接学习助手…"
+        assistantStageMessage = "正在连接 AI…"
         errorMessage = nil
         defer {
             isRunning = false
@@ -4042,7 +4769,7 @@ struct SessionAssistantPanel: View {
                 }
             }
             guard task.status == "succeeded" else {
-                errorMessage = task.error ?? (task.status == "cancelled" ? "已停止本次回答。" : "学习助手回答失败。")
+                errorMessage = task.error ?? (task.status == "cancelled" ? "已停止本次回答。" : "AI 回答失败。")
                 return
             }
             let updated = try await supervisor.listSessionAssistant(session)

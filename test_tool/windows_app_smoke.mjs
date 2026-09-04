@@ -162,7 +162,12 @@ assert.notEqual(sourceHeaderStyleAfterDrag.color, "rgb(47, 47, 43)", "source hea
 
 await page.locator(".session-source-editor .cm-line", { hasText: "设 T_n 为有界线性算子" }).click();
 await assertVisible(page, "[data-testid='source-context-bar']");
-assert.match(await page.getByTestId("source-context-bar").innerText(), /sample-ocr-1/);
+const sourceContextText = await page.getByTestId("source-context-bar").innerText();
+assert.match(sourceContextText, /块\s+0002 · photo_2026-06-26_001\.png/);
+assert.doesNotMatch(sourceContextText, /sample-ocr-1/);
+await page.locator(".session-source-editor .cm-line", { hasText: "设 T_n 为有界线性算子" }).click({ button: "right" });
+assert.ok(await page.getByRole("button", { name: "用 AI 修改该块", exact: true }).isVisible());
+await page.keyboard.press("Escape");
 const sourceContextDragStyles = await page.getByTestId("source-context-bar").evaluate((element) => {
   const button = element.querySelector("button");
   return {
@@ -224,25 +229,54 @@ assert.equal(await page.locator(".cm-lockSpanBody").count(), 0);
 
 await page.getByRole("button", { name: "笔记目录", exact: true }).click();
 await assertVisible(page, "[data-testid='notebook-drawer']");
-assert.doesNotMatch(await page.getByTestId("notebook-drawer").innerText(), /PDE Stability|算子半群/);
-await page.mouse.click(500, 850);
-await assertHidden(page, "[data-testid='notebook-drawer']");
-await page.getByRole("button", { name: "笔记目录", exact: true }).click();
-await assertVisible(page, "[data-testid='notebook-drawer']");
+const recentReadingText = await page.getByTestId("notebook-drawer").innerText();
+assert.match(recentReadingText, /最近阅读/);
+assert.match(recentReadingText, /泛函分析 第 3 讲/);
+assert.match(recentReadingText, /设置/);
+assert.match(recentReadingText, /打开 Notebooks/);
+assert.doesNotMatch(recentReadingText, /当前 Notebook 的 Sessions|新建 Notebook|新建 Session/);
+assert.ok(
+  await page.getByTestId("notebook-drawer").locator(".recent-reading-row").count() <= 4,
+  "Recent reading keeps the drawer short"
+);
+await page.screenshot({ path: path.join(outDir, "windows-app-smoke-recent-reading.png"), fullPage: false });
+const drawerActions = await page.getByTestId("notebook-drawer").locator(".recent-reading-actions > button").allInnerTexts();
+assert.deepEqual(drawerActions.map((text) => text.trim()), ["设置", "打开 Notebooks"]);
 await page.getByTestId("notebook-drawer").getByRole("button", { name: "设置", exact: true }).click();
 await assertVisible(page, "[data-testid='settings-modal']");
-assert.match(await page.getByTestId("settings-modal").innerText(), /文件位置/);
-assert.match(await page.getByTestId("settings-modal").innerText(), /字体与字号/);
-assert.match(await page.getByTestId("settings-modal").innerText(), /识别服务/);
+const settingsText = await page.getByTestId("settings-modal").innerText();
+assert.match(settingsText, /文件位置/);
+assert.match(settingsText, /字体与字号/);
+assert.match(settingsText, /识别服务/);
+assert.doesNotMatch(settingsText, /诊断与自检|选择自检图片/);
 assert.equal(await page.getByRole("button", { name: "选择笔记所在位置", exact: true }).isVisible(), true);
 assert.equal(await page.getByLabel("左侧字体").isVisible(), true);
 assert.equal(await page.getByLabel("右侧字体").isVisible(), true);
-assert.equal(await page.getByTestId("settings-modal").getByTestId("provider-config").isVisible(), true);
-assert.match(await page.getByTestId("provider-config").innerText(), /假识别服务（验证管线）|OpenAI 视觉识别|Codex 订阅识别/);
+assert.equal(await page.getByRole("button", { name: "一键应用", exact: true }).isVisible(), true);
+const providerConfigs = page.getByTestId("settings-modal").getByTestId("provider-config");
+assert.ok(await providerConfigs.count() >= 2, "Settings should expose separate recognition and conversation providers");
+assert.ok((await providerConfigs.allInnerTexts()).some((text) => /假识别服务（验证管线）|尚未配置真实识别服务|OpenAI Vision|Codex CLI/.test(text)));
 await page.getByRole("button", { name: "关闭设置", exact: true }).click();
 await assertHidden(page, "[data-testid='settings-modal']");
-await page.keyboard.press("Escape");
 await assertHidden(page, "[data-testid='notebook-drawer']");
+await page.getByRole("button", { name: "笔记目录", exact: true }).click();
+await assertVisible(page, "[data-testid='notebook-drawer']");
+await page.getByTestId("notebook-drawer").getByRole("button", { name: "打开 Notebooks", exact: true }).click();
+await assertVisible(page, "[data-testid='notebook-browser-dialog']");
+const notebookBrowser = page.getByRole("dialog", { name: "打开 Notebooks" });
+assert.match(await notebookBrowser.innerText(), /Notebooks/);
+assert.match(await notebookBrowser.innerText(), /泛函分析/);
+assert.match(await notebookBrowser.innerText(), /新建 Session/);
+assert.equal(await notebookBrowser.getByLabel("搜索 Notebooks 与 Sessions").isVisible(), true);
+assert.ok(await notebookBrowser.locator(".notebook-folder").count() >= 4, "Notebook browser should expose large folder choices");
+assert.ok(await notebookBrowser.locator(".notebook-session-main").count() >= 4, "Selected Notebook should expose its Sessions");
+await notebookBrowser.locator(".notebook-session-main").first().hover();
+await assertVisible(page, ".notebook-session-preview");
+assert.match(await page.locator(".notebook-session-preview").innerText(), /泛函分析|正在渲染预览/);
+await page.screenshot({ path: path.join(outDir, "windows-app-smoke-notebook-browser.png"), fullPage: false });
+assert.equal(await notebookBrowser.getByRole("button", { name: "设置", exact: true }).count(), 0);
+await notebookBrowser.getByRole("button", { name: "关闭", exact: true }).click();
+await assertHidden(page, "[data-testid='notebook-browser-dialog']");
 
 await page.getByRole("button", { name: "搜索", exact: true }).click();
 await assertVisible(page, "[data-testid='search-popover']");

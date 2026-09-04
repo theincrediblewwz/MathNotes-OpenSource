@@ -6,13 +6,16 @@ import {
   enqueueToastMessage,
   exceedsWindowDragThreshold,
   formatByteCount,
+  isSelectionEditLockError,
   isOrdinaryShortcutInput,
   isPreviewScrollbarGutterPoint,
   RecognitionRefreshPending,
   recognitionTaskToastTitle,
   resolvePdfImportTarget,
+  selectionEditTargetsCurrentLock,
   SessionDeleteConfirmPrompt,
   SelectionEditDialog,
+  SelectionEditUnlockPrompt,
   upsertCompanionUploadActivity
 } from "./App";
 
@@ -24,6 +27,7 @@ describe("SelectionEditDialog", () => {
     selectedText: "原始选区",
     instruction: "修正语病",
     proposal: null,
+    replacementMarkdown: "",
     status: "idle" as const
   };
 
@@ -116,6 +120,101 @@ describe("SelectionEditDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the candidate when locked and exposes unlock plus retry without regeneration", () => {
+    const onApply = vi.fn();
+    const onRetry = vi.fn();
+    const onUnlock = vi.fn();
+    render(
+      <SelectionEditDialog
+        draft={{
+          ...baseDraft,
+          error: "这段内容已经被固定",
+          requiresUnlock: true,
+          proposal: {
+            version: 1,
+            id: "selection_00000000-0000-0000-0000-000000000000",
+            notebookId: "book",
+            sessionId: "session",
+            blockId: "0007",
+            baseRevision: "a".repeat(64),
+            selection: { from: 2, to: 8, selectedText: "原始选区" },
+            instruction: "修正语病",
+            replacementMarkdown: "修改候选",
+            providerName: "Mimo v2.5",
+            status: "proposed",
+            createdAt: "2026-08-13T00:00:00.000Z",
+            updatedAt: "2026-08-13T00:00:00.000Z"
+          }
+        }}
+        onApply={onApply}
+        onCancel={vi.fn()}
+        onGenerate={vi.fn()}
+        onInstructionChange={vi.fn()}
+        onRetry={onRetry}
+        onUnlock={onUnlock}
+      />
+    );
+
+    expect(screen.getByText("修改候选")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "去解锁" }));
+    expect(onUnlock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(onApply).toHaveBeenCalledTimes(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+});
+
+describe("selection edit lock recovery", () => {
+  it("recognizes structured and serialized lock failures", () => {
+    expect(isSelectionEditLockError({ code: "block_locked" })).toBe(true);
+    expect(isSelectionEditLockError(new Error("remote apply failed: protected_selection"))).toBe(true);
+    expect(isSelectionEditLockError(new Error("revision_conflict"))).toBe(false);
+  });
+
+  it("detects a whole-block lock and a protected selection in the current source", () => {
+    const draft = { blockId: "0001", from: 2, to: 4, selectedText: "锁定" };
+    const sourceText = [
+      "--- source: user | block: 0001 ---",
+      `前文<!-- lock:start id="span" hash="${"a".repeat(64)}" -->`,
+      "锁定",
+      "<!-- lock:end id=\"span\" -->后文"
+    ].join("\n");
+    expect(selectionEditTargetsCurrentLock(draft, {
+      text: sourceText,
+      markdownBlocks: [{
+        blockId: "0001",
+        sourceId: "src-0001",
+        path: "blocks/0001.md",
+        source: "user",
+        header: "user",
+        locked: false
+      }]
+    }, sourceText)).toBe(true);
+    expect(selectionEditTargetsCurrentLock(draft, {
+      text: "",
+      markdownBlocks: [{
+        blockId: "0001",
+        sourceId: "src-0001",
+        path: "blocks/0001.md",
+        source: "user",
+        header: "user",
+        locked: true
+      }]
+    }, "")).toBe(true);
+  });
+
+  it("asks before navigating to unlock", () => {
+    const onCancel = vi.fn();
+    const onUnlock = vi.fn();
+    render(<SelectionEditUnlockPrompt onCancel={onCancel} onUnlock={onUnlock} open />);
+    expect(screen.getByText("这段内容存在写入锁")).toBeTruthy();
+    expect(screen.getByText(/AI 无权取消固定/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "去解除固定" }));
+    expect(onUnlock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "暂不解锁" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
@@ -314,6 +413,36 @@ describe("AssetPreviewOverlay", () => {
 });
 
 describe("App floating layers", () => {
+  it("renders the assistant into a separate native-window document", () => {
+    const childDocument = document.implementation.createHTMLDocument("assistant");
+    const childEvents = new EventTarget();
+    const childWindow = {
+      document: childDocument,
+      closed: false,
+      focus: vi.fn(),
+      close: vi.fn(),
+      addEventListener: childEvents.addEventListener.bind(childEvents),
+      removeEventListener: childEvents.removeEventListener.bind(childEvents)
+    } as unknown as Window;
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(childWindow);
+    const { container, unmount } = render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 学习助手" }));
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "",
+      "mathnotes-assistant",
+      "width=560,height=760,resizable=yes,scrollbars=no"
+    );
+    expect(childDocument.querySelector('[aria-label="与笔记对话"]')).toBeTruthy();
+    expect(container.querySelector('[aria-label="与笔记对话"]')).toBeNull();
+    expect(childWindow.focus).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(childWindow.close).toHaveBeenCalledTimes(1);
+    openSpy.mockRestore();
+  });
+
   it("can switch to a preview-only reading mode and restore the source pane", () => {
     const { container } = render(<App />);
 

@@ -11,6 +11,11 @@ struct ContentView: View {
     @State private var selectedSession: SessionCatalogItem?
     @State private var selectedNotebookId: String?
     @State private var pendingSession: SessionCatalogItem?
+    @State private var recentReading = MacRecentReadingStore.load()
+    @State private var showNotebookBrowser = false
+    @State private var showPhoneConnection = ProcessInfo.processInfo.arguments.contains(
+        "-mathnotes.open-phone-connection"
+    )
     @State private var searchText = ""
     @State private var creationTarget: WorkspaceCreationTarget?
     @State private var creationTitle = ""
@@ -29,9 +34,11 @@ struct ContentView: View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 sidebarHeader
-                catalogSidebar
-                Divider()
-                coreStatus
+                sidebarPhoneConnectionAction
+                sidebarSettingsAction
+                recentReadingSidebar
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                notebookBrowserAction
             }
             .navigationSplitViewColumnWidth(min: 246, ideal: 292, max: 360)
             .background(MathNotesTheme.sidebar)
@@ -54,7 +61,7 @@ struct ContentView: View {
         .onChange(of: sourceModeRawValue) { _, _ in
             selectedSession = nil
             selectedNotebookId = nil
-            searchText = ""
+            showNotebookBrowser = false
             editingState.hasUnsavedSourceDrafts = false
             if sourceMode == .companion {
                 companionReader.reloadCatalog()
@@ -71,6 +78,29 @@ struct ContentView: View {
         }
         .sheet(item: $creationTarget) { target in
             creationSheet(target)
+        }
+        .sheet(isPresented: $showPhoneConnection) {
+            PhoneConnectionSheet(
+                supervisor: supervisor,
+                onOpenSettings: { openSettings() }
+            )
+        }
+        .sheet(isPresented: $showNotebookBrowser) {
+            MacNotebookBrowser(
+                notebooks: loadedNotebooks,
+                sourceMode: sourceMode,
+                supervisor: supervisor,
+                companionReader: companionReader,
+                initialNotebookID: selectedSession?.notebookId ?? selectedNotebookId,
+                onCreateNotebook: { beginCreationAfterBrowserDismiss(.notebook) },
+                onCreateSession: { notebook in
+                    beginCreationAfterBrowserDismiss(
+                        .session(notebookId: notebook.notebookId, notebookTitle: notebook.title)
+                    )
+                },
+                onOpenSession: requestSessionSelection,
+                onClose: { showNotebookBrowser = false }
+            )
         }
         .sheet(isPresented: $showMarkdownArchive) {
             MarkdownArchiveSheet(
@@ -116,7 +146,7 @@ struct ContentView: View {
         )) {
             Button("继续编辑", role: .cancel) { pendingSession = nil }
             Button("放弃并切换", role: .destructive) {
-                selectedSession = pendingSession
+                if let pendingSession { openSession(pendingSession) }
                 pendingSession = nil
                 editingState.hasUnsavedSourceDrafts = false
             }
@@ -133,15 +163,6 @@ struct ContentView: View {
                     .frame(minWidth: 180)
                     .accessibilityIdentifier("workspace-toolbar-title")
             }
-            ToolbarItem {
-                Button {
-                    openSettings()
-                } label: {
-                    Label("设置", systemImage: "gearshape")
-                }
-                .help("设置外观与识别服务")
-                .accessibilityLabel("打开设置")
-            }
         }
     }
 
@@ -149,9 +170,9 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.standard) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("笔记")
+                    Text("最近阅读")
                         .font(.title2.weight(.semibold))
-                    Text(sidebarSummary)
+                    Text(sourceMode == .local ? "这台 Mac 上的笔记" : "来自已连接电脑")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -199,8 +220,72 @@ struct ContentView: View {
         .padding(.bottom, MathNotesTheme.Spacing.standard)
     }
 
+    private var sidebarPhoneConnectionAction: some View {
+        Button {
+            showPhoneConnection = true
+        } label: {
+            HStack(spacing: MathNotesTheme.Spacing.standard) {
+                Image(systemName: "qrcode")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(MathNotesTheme.accent)
+                    .frame(width: 34, height: 34)
+                    .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("连接手机")
+                        .font(.body.weight(.semibold))
+                    Text("显示二维码，让 Android 扫码")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(MathNotesTheme.accentSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(MathNotesTheme.accent.opacity(0.22))
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, MathNotesTheme.Spacing.section)
+        .padding(.bottom, 8)
+        .help("显示一次性二维码，让 Android 手机连接这台 Mac")
+        .accessibilityLabel("连接手机，显示二维码")
+        .accessibilityIdentifier("sidebar-phone-connection")
+    }
+
+    private var sidebarSettingsAction: some View {
+        Button {
+            openSettings()
+        } label: {
+            Label("设置", systemImage: "gearshape")
+                .font(.body.weight(.medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(MathNotesTheme.sidebar, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(MathNotesTheme.separator.opacity(0.62))
+                }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, MathNotesTheme.Spacing.section)
+        .padding(.bottom, MathNotesTheme.Spacing.standard)
+        .help("设置外观、连接与 AI 服务")
+        .accessibilityLabel("打开设置")
+    }
+
     @ViewBuilder
-    private var catalogSidebar: some View {
+    private var recentReadingSidebar: some View {
         switch activeCatalogState {
         case .idle, .loading:
             loadingState
@@ -213,7 +298,25 @@ struct ContentView: View {
                 Button("重新读取") { reloadActiveCatalog() }
             }
         case let .loaded(notebooks):
-            catalogList(notebooks)
+            recentReadingList(notebooks)
+        }
+    }
+
+    private var notebookBrowserAction: some View {
+        VStack(spacing: 0) {
+            Divider()
+            Button {
+                showNotebookBrowser = true
+            } label: {
+                Label("打开 Notebooks", systemImage: "folder")
+                    .font(.body.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(MathNotesTheme.Spacing.section)
+            .accessibilityLabel("打开 Notebooks")
         }
     }
 
@@ -228,6 +331,69 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("正在读取笔记目录")
+    }
+
+    @ViewBuilder
+    private func recentReadingList(_ notebooks: [NotebookCatalogItem]) -> some View {
+        let items = recentReadingItems(in: notebooks)
+        if items.isEmpty {
+            ContentUnavailableView(
+                "还没有最近阅读",
+                systemImage: "clock",
+                description: Text(notebooks.isEmpty ? "先新建或连接一份笔记。" : "从 Notebooks 打开 Session 后会显示在这里。")
+            )
+            .frame(maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(items) { item in
+                        recentReadingRow(item)
+                    }
+                }
+                .padding(.horizontal, MathNotesTheme.Spacing.standard)
+                .padding(.vertical, 4)
+            }
+            .accessibilityLabel("最近阅读")
+        }
+    }
+
+    private func recentReadingRow(_ item: MacRecentSessionItem) -> some View {
+        Button {
+            requestSessionSelection(item.session)
+        } label: {
+            HStack(spacing: MathNotesTheme.Spacing.standard) {
+                Image(systemName: "clock")
+                    .foregroundStyle(MathNotesTheme.accent)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.session.title)
+                        .font(.body.weight(.medium))
+                        .lineLimit(2)
+                        .foregroundStyle(.primary)
+                    Text(item.notebookTitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text(relativeOpenedTime(item.entry.openedAt))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                selectedSession?.id == item.session.id ? MathNotesTheme.accentSoft : Color.clear,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!temporaryMarkdownDocuments.isEmpty)
+        .accessibilityLabel("最近阅读，\(item.session.title)，\(item.notebookTitle)")
+        .accessibilityAddTraits(selectedSession?.id == item.session.id ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -334,6 +500,8 @@ struct ContentView: View {
                     session: selectedSession,
                     supervisor: supervisor,
                     assistantWindow: assistantWindow,
+                    onOpenRelatedSource: openRelatedSource,
+                    onOpenSession: requestSessionSelection,
                     onDirtyStateChanged: { editingState.hasUnsavedSourceDrafts = $0 }
                 )
                 .id("\(selectedSession.id):\(sessionRefreshNonce)")
@@ -388,6 +556,25 @@ struct ContentView: View {
     private var loadedNotebooks: [NotebookCatalogItem] {
         guard case let .loaded(notebooks) = activeCatalogState else { return [] }
         return notebooks
+    }
+
+    private func recentReadingItems(in notebooks: [NotebookCatalogItem]) -> [MacRecentSessionItem] {
+        let notebookByID = Dictionary(uniqueKeysWithValues: notebooks.map { ($0.notebookId, $0) })
+        return recentReading
+            .filter { $0.sourceRawValue == sourceMode.rawValue }
+            .compactMap { entry in
+                guard let notebook = notebookByID[entry.notebookId],
+                      let session = notebook.sessions.first(where: { $0.sessionId == entry.sessionId }) else {
+                    return nil
+                }
+                return MacRecentSessionItem(
+                    entry: entry,
+                    session: session,
+                    notebookTitle: notebook.title
+                )
+            }
+            .prefix(MacRecentReadingStore.sidebarCount)
+            .map { $0 }
     }
 
     private var preferredNotebook: NotebookCatalogItem? {
@@ -445,13 +632,47 @@ struct ContentView: View {
     }
 
     private func requestSessionSelection(_ session: SessionCatalogItem) {
-        guard selectedSession?.id != session.id else { return }
+        guard selectedSession?.id != session.id else {
+            recordRecentReading(session)
+            return
+        }
         selectedNotebookId = session.notebookId
         if editingState.hasUnsavedSourceDrafts {
             pendingSession = session
         } else {
-            selectedSession = session
+            openSession(session)
         }
+    }
+
+    private func openRelatedSource(_ source: SessionAssistantRelatedSource) {
+        guard sourceMode == .local,
+              let notebook = loadedNotebooks.first(where: { $0.notebookId == source.notebookId }),
+              let session = notebook.sessions.first(where: { $0.sessionId == source.sessionId }) else { return }
+        requestSessionSelection(session)
+    }
+
+    private func openSession(_ session: SessionCatalogItem) {
+        selectedNotebookId = session.notebookId
+        selectedSession = session
+        recordRecentReading(session)
+    }
+
+    private func recordRecentReading(_ session: SessionCatalogItem) {
+        let notebookTitle = loadedNotebooks.first(where: { $0.notebookId == session.notebookId })?.title
+            ?? session.notebookId
+        recentReading = MacRecentReadingStore.recording(
+            session: session,
+            notebookTitle: notebookTitle,
+            source: sourceMode,
+            in: recentReading
+        )
+        MacRecentReadingStore.save(recentReading)
+    }
+
+    private func relativeOpenedTime(_ timestamp: TimeInterval) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: Date(timeIntervalSince1970: timestamp), relativeTo: Date())
     }
 
     @MainActor
@@ -490,7 +711,7 @@ struct ContentView: View {
             let session = try await supervisor.createSession(notebookId: notebook.notebookId, title: first.title)
             try await populateImportedSession(session, documents: documents)
             selectedNotebookId = notebook.notebookId
-            selectedSession = session
+            openSession(session)
             sessionRefreshNonce += 1
             editingState.hasUnsavedSourceDrafts = false
         } catch {
@@ -512,7 +733,7 @@ struct ContentView: View {
             temporaryMarkdownDocuments = []
             showMarkdownArchive = false
             selectedNotebookId = notebookId
-            selectedSession = session
+            openSession(session)
             sessionRefreshNonce += 1
             editingState.hasUnsavedSourceDrafts = false
         } catch {
@@ -528,7 +749,14 @@ struct ContentView: View {
         for document in documents {
             _ = try await supervisor.appendMarkdown(session, markdown: document.markdown, sourceName: document.name)
         }
-        if !starter.isEmpty { _ = try await supervisor.deleteSessionBlocks(session, blockIds: starter) }
+        if !starter.isEmpty {
+            let current = try await supervisor.fetchSessionManifest(session)
+            _ = try await supervisor.deleteSessionBlocks(
+                session,
+                blockIds: starter,
+                baseRevision: current.revision
+            )
+        }
     }
 
     private var sourceMode: WorkspaceSourceMode {
@@ -568,6 +796,14 @@ struct ContentView: View {
         creationTitle = target.defaultTitle
         creationError = nil
         creationTarget = target
+    }
+
+    private func beginCreationAfterBrowserDismiss(_ target: WorkspaceCreationTarget) {
+        showNotebookBrowser = false
+        Task { @MainActor in
+            await Task.yield()
+            beginCreation(target)
+        }
     }
 
     private func creationSheet(_ target: WorkspaceCreationTarget) -> some View {
@@ -615,8 +851,7 @@ struct ContentView: View {
                 selectedNotebookId = notebook.notebookId
             case let .session(notebookId, _):
                 let session = try await supervisor.createSession(notebookId: notebookId, title: creationTitle)
-                selectedNotebookId = notebookId
-                selectedSession = session
+                openSession(session)
                 editingState.hasUnsavedSourceDrafts = false
             }
             creationTarget = nil
@@ -624,6 +859,14 @@ struct ContentView: View {
             creationError = error.localizedDescription
         }
     }
+}
+
+private struct MacRecentSessionItem: Identifiable {
+    let entry: MacRecentReadingEntry
+    let session: SessionCatalogItem
+    let notebookTitle: String
+
+    var id: String { entry.id }
 }
 
 private enum WorkspaceCreationTarget: Identifiable {

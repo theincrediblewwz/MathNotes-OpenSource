@@ -12,6 +12,7 @@ import com.mathnotes.capture.imageedit.NormalizedRect
 import com.mathnotes.capture.pairing.PairingStore
 import com.mathnotes.capture.storage.CaptureEntity
 import com.mathnotes.capture.storage.CaptureRepository
+import com.mathnotes.capture.storage.CaptureState
 import com.mathnotes.capture.upload.UploadScheduler
 import com.mathnotes.capture.upload.UploadRecovery
 import kotlinx.coroutines.flow.SharingStarted
@@ -104,6 +105,47 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteAcknowledged(capture: CaptureEntity) {
         viewModelScope.launch { repository.deleteAcknowledged(capture) }
+    }
+
+    fun renderImageDraft(
+        draft: ImageEditDraft,
+        rotationQuarterTurns: Int,
+        perspectiveCorners: List<NormalizedPoint>?,
+        cropRect: NormalizedRect?,
+        lassoPoints: List<NormalizedPoint>?,
+        annotations: List<ImageAnnotationObject>,
+        onComplete: (Result<File>) -> Unit
+    ) {
+        viewModelScope.launch {
+            onComplete(runCatching {
+                repository.renderImageDraft(
+                    draft,
+                    rotationQuarterTurns,
+                    perspectiveCorners,
+                    cropRect,
+                    lassoPoints,
+                    annotations
+                )
+            })
+        }
+    }
+
+    fun deleteUploadedHistory(capture: CaptureEntity, onComplete: (Result<Unit>) -> Unit = {}) {
+        viewModelScope.launch {
+            onComplete(runCatching {
+                check(repository.deleteUploadedHistory(capture)) { "只有已上传历史可以删除" }
+            })
+        }
+    }
+
+    fun deleteQueueTask(capture: CaptureEntity, onComplete: (Result<Unit>) -> Unit = {}) {
+        viewModelScope.launch {
+            onComplete(runCatching {
+                check(capture.state != CaptureState.UPLOADING) { "正在上传，请先暂停后再删除" }
+                if (capture.state != CaptureState.UPLOADED) uploadScheduler.cancel(capture.captureId)
+                check(repository.deleteQueueTask(capture)) { "任务已经变化，请刷新后重试" }
+            })
+        }
     }
 
     fun clearUploadedHistory() {

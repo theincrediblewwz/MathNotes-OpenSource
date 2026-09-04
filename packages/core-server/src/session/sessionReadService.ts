@@ -54,6 +54,15 @@ export type ReadonlySessionBlockContent =
 
 export type ReadonlySessionAsset = Readonly<{ bytes: Buffer; mimeType: string }>;
 export type ReadonlyMarkdownPreview = Readonly<{ version: 1; html: string }>;
+export type ReadonlySessionPreview = Readonly<{
+  version: 1;
+  notebookId: string;
+  sessionId: string;
+  title: string;
+  updatedAt: string;
+  html: string;
+  truncated: boolean;
+}>;
 
 export async function readReadonlySessionManifest(args: {
   rootDir: string;
@@ -121,6 +130,45 @@ export async function readReadonlySessionBlock(args: {
     content: block.type === "pdf"
       ? { kind: "pdf", assetPath, mimeType: "application/pdf" }
       : { kind: "image", assetPath, mimeType: assetMimeType(assetPath) }
+  };
+}
+
+export async function readReadonlySessionPreview(args: {
+  rootDir: string;
+  notebookId: string;
+  sessionId: string;
+  maximumMarkdownCharacters?: number;
+}): Promise<ReadonlySessionPreview> {
+  const { session, sessionDir } = await readSession(args);
+  const maximum = Math.max(1_000, Math.min(16_000, Math.floor(args.maximumMarkdownCharacters ?? 8_000)));
+  let remaining = maximum;
+  let truncated = false;
+  const fragments: string[] = [];
+  for (const block of session.blocks) {
+    if (block.type !== "markdown" || block.renderInNote === false) continue;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    const markdownPath = resolve(sessionDir, block.path);
+    assertInside(sessionDir, markdownPath);
+    const markdown = await readFile(markdownPath, "utf8");
+    const bounded = takeCharacters(markdown, remaining);
+    if (bounded.length < markdown.length) truncated = true;
+    remaining -= Array.from(bounded).length;
+    fragments.push(`<section class="session-preview-block">${await renderPortableMarkdown({
+      markdown: bounded,
+      rewriteImage: async (source) => inlineLocalImage({ source, markdownPath, sessionDir })
+    })}</section>`);
+  }
+  return {
+    version: 1,
+    notebookId: args.notebookId,
+    sessionId: args.sessionId,
+    title: session.title,
+    updatedAt: session.updatedAt,
+    html: fragments.join(""),
+    truncated
   };
 }
 
@@ -260,6 +308,11 @@ function assetMimeType(path: string): string {
     case ".pdf": return "application/pdf";
     default: return "image/png";
   }
+}
+
+function takeCharacters(value: string, maximum: number): string {
+  const characters = Array.from(value);
+  return characters.length <= maximum ? value : characters.slice(0, maximum).join("");
 }
 
 export function markdownBlockDocument(body: string): string {

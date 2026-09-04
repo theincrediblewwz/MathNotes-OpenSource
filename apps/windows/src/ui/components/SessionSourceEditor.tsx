@@ -71,6 +71,8 @@ type SessionSourceEditorProps = {
     sourceId: string;
     lineInBlock?: number;
     lineCount?: number;
+    selectionFrom?: number;
+    selectionTo?: number;
     nonce: number;
   } | null;
   insertMarkdownRequest?: {
@@ -715,6 +717,29 @@ export function SessionSourceEditor({
     const frame = window.requestAnimationFrame(() => {
       scrollSourceBlockIntoView(element, locatingRequest.lineInBlock, locatingRequest.lineCount);
       const view = editorViewsRef.current.get(locatingRequest.blockId);
+      if (
+        view &&
+        Number.isFinite(locatingRequest.selectionFrom) &&
+        Number.isFinite(locatingRequest.selectionTo)
+      ) {
+        const from = Math.max(0, Math.min(view.state.doc.length, locatingRequest.selectionFrom ?? 0));
+        const to = Math.max(0, Math.min(view.state.doc.length, locatingRequest.selectionTo ?? from));
+        view.dispatch({
+          selection: { anchor: from, head: to },
+          effects: EditorView.scrollIntoView(from, { y: "center" })
+        });
+        view.focus();
+        const block = documentRef.current.markdownBlocks.find(
+          (candidate) => candidate.blockId === locatingRequest.blockId
+        );
+        if (block) {
+          activeBlockIdRef.current = block.blockId;
+          onActiveBlockChangeRef.current(block);
+          notifyCaretLocation(block, view);
+          onSelectionLockableChangeRef.current(!view.state.selection.main.empty);
+          onProtectedSpanUnlockableChangeRef.current(Boolean(findUnlockableProtectedSpan(view.state)));
+        }
+      }
       if (!view || !locatingRequest.lineInBlock || locatingRequest.lineInBlock <= 1) {
         return;
       }
@@ -731,6 +756,8 @@ export function SessionSourceEditor({
     locatingRequest?.lineCount,
     locatingRequest?.lineInBlock,
     locatingRequest?.nonce,
+    locatingRequest?.selectionFrom,
+    locatingRequest?.selectionTo,
     locatingMountEpoch,
     virtualBlockRange.end,
     virtualBlockRange.start,
@@ -908,7 +935,7 @@ export function SessionSourceEditor({
     onCaretLocationChangeRef.current?.({
       blockId: block.blockId,
       sourceId: block.sourceId,
-      displayBlockId: block.blockId,
+      displayBlockId: displayByBlockId.get(block.blockId) ?? block.blockId,
       lineInBlock: view.state.doc.lineAt(view.state.selection.main.head).number,
       lineCount: view.state.doc.lines
     });
@@ -1141,22 +1168,24 @@ export function SessionSourceEditor({
               <button onClick={() => void runContextCommand("unfoldAll")} type="button">展开全部</button>
               <span />
               <button
-                disabled={contextMenu.block.locked || contextMenu.view.state.selection.main.empty}
                 onClick={() => {
                   const selection = contextMenu.view.state.selection.main;
-                  const selectedText = contextMenu.view.state.doc.sliceString(selection.from, selection.to);
+                  const wholeBlock = selection.empty;
+                  const from = wholeBlock ? 0 : selection.from;
+                  const to = wholeBlock ? contextMenu.view.state.doc.length : selection.to;
+                  const selectedText = contextMenu.view.state.doc.sliceString(from, to);
                   const blockId = contextMenu.block.blockId;
                   setContextMenu(null);
                   onAiSelectionEditRequest?.({
                     blockId,
-                    from: selection.from,
-                    to: selection.to,
+                    from,
+                    to,
                     selectedText
                   });
                 }}
                 type="button"
               >
-                用 AI 修改选中文字
+                {contextMenu.view.state.selection.main.empty ? "用 AI 修改该块" : "用 AI 修改选中文字"}
               </button>
               <span />
             </>

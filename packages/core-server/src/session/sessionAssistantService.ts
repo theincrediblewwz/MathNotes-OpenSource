@@ -19,6 +19,7 @@ import { renderPortableMarkdown } from "../render/portableMarkdown";
 import { markdownBlockDocument } from "./sessionReadService";
 import { SessionWriteCoordinator } from "./sessionWriteCoordinator";
 import { isSafeWorkspaceIdentifier } from "./workspaceIdentifier";
+import { searchAssistantKnowledge, type AssistantKnowledgeReference } from "./assistantKnowledgeGateway";
 
 export type SessionAssistantInput = Readonly<{
   notebookId: string;
@@ -36,6 +37,17 @@ export type SessionAssistantPreview = Readonly<{
   usage: AssistantContextUsage;
   imageCount: number;
   sourceBlockIds: readonly string[];
+  relatedSources: readonly SessionAssistantRelatedSource[];
+}>;
+
+export type SessionAssistantRelatedSource = Readonly<{
+  refId: string;
+  notebookId: string;
+  notebookTitle: string;
+  sessionId: string;
+  sessionTitle: string;
+  blockId: string;
+  locked: boolean;
 }>;
 
 export const DEFAULT_ASSISTANT_FIRST_BYTE_TIMEOUT_MS = 30_000;
@@ -101,6 +113,7 @@ export type SessionAssistantRemark = Readonly<{
   html: string;
   providerName: string;
   sourceBlockIds: readonly string[];
+  relatedSources: readonly SessionAssistantRelatedSource[];
   usage: AssistantContextUsage;
   imageCount: number;
   createdAt: string;
@@ -116,6 +129,7 @@ type PreparedAssistantInput = Readonly<{
   focus: AssistantContextFocus;
   imagePaths: string[];
   sourceBlockIds: readonly string[];
+  relatedSources: readonly SessionAssistantRelatedSource[];
 }>;
 type StoredAssistantTask = SessionAssistantTask & Readonly<{
   scope: SessionAssistantInput["scope"];
@@ -169,7 +183,8 @@ export class SessionAssistantService {
       focus: prepared.focus,
       usage: prepared.usage,
       imageCount: prepared.imagePaths.length,
-      sourceBlockIds: prepared.sourceBlockIds
+      sourceBlockIds: prepared.sourceBlockIds,
+      relatedSources: prepared.relatedSources
     };
   }
 
@@ -212,6 +227,7 @@ export class SessionAssistantService {
       markdown: result.markdown.trim(),
       providerName: provider.name,
       sourceBlockIds: prepared.sourceBlockIds,
+      relatedSources: prepared.relatedSources,
       usage: prepared.usage,
       imageCount: prepared.imagePaths.length,
       createdAt: timestamp,
@@ -371,6 +387,12 @@ export class SessionAssistantService {
       : readableBlocks.filter((block) => block.id === input.activeBlockId);
     if (focusBlocks.length === 0) throw new SessionAssistantError("block_not_found", 404);
     const focus = buildFocus(input, focusBlocks, markdownByBlockId);
+    const relatedKnowledge = await searchAssistantKnowledge({
+      rootDir: this.rootDir,
+      query: [input.question, focus.excerpt].filter(Boolean).join("\n"),
+      currentNotebookId: input.notebookId,
+      currentSessionId: input.sessionId
+    });
     const packet = buildAssistantContextPacket({
       focus,
       question: input.question,
@@ -378,7 +400,8 @@ export class SessionAssistantService {
         id: block.id,
         source: block.source,
         markdown: markdownByBlockId.get(block.id) ?? ""
-      }))
+      })),
+      relatedSources: relatedKnowledge.references
     });
     const imagePaths = await collectImagePaths({
       sessionDir: context.sessionDir,
@@ -390,7 +413,8 @@ export class SessionAssistantService {
       ...packet,
       focus,
       imagePaths,
-      sourceBlockIds: focusBlocks.map((block) => block.id)
+      sourceBlockIds: focusBlocks.map((block) => block.id),
+      relatedSources: relatedKnowledge.references.map(toRelatedSource)
     };
   }
 
@@ -569,6 +593,7 @@ export class SessionAssistantService {
         markdown: result.markdown.trim(),
         providerName: provider.name,
         sourceBlockIds: prepared.sourceBlockIds,
+        relatedSources: prepared.relatedSources,
         usage: prepared.usage,
         imageCount: prepared.imagePaths.length,
         createdAt: completedAt,
@@ -702,6 +727,18 @@ export class SessionAssistantService {
     const body = await renderPortableMarkdown({ markdown: remark.markdown });
     return { ...remark, html: markdownBlockDocument(body) };
   }
+}
+
+function toRelatedSource(reference: AssistantKnowledgeReference): SessionAssistantRelatedSource {
+  return {
+    refId: reference.refId,
+    notebookId: reference.notebookId,
+    notebookTitle: reference.notebookTitle,
+    sessionId: reference.sessionId,
+    sessionTitle: reference.sessionTitle,
+    blockId: reference.blockId,
+    locked: reference.locked
+  };
 }
 
 class AssistantTaskFailure extends Error {

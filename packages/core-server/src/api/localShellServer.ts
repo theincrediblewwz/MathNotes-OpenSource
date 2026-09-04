@@ -1,5 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import Busboy from "busboy";
+import type { ImageAnnotationObject, ImageTransformOperation } from "@mathnotes/shared";
 import { authorizeCoreApiCapability, resolveLocalShellApiRoute } from "./capabilityPolicy";
 import type {
   NotebookSessionSummary,
@@ -20,13 +22,23 @@ import type {
   SaveMarkdownBlockResult,
   SetMarkdownBlockLockResult,
   SessionMarkdownConflict,
-  SessionMarkdownConflictSummary
+  SessionMarkdownConflictSummary,
+  UpdateMarkdownProtectedSpanInput,
+  UpdateMarkdownProtectedSpanResult
 } from "../session/sessionEditService";
 import { SessionEditError } from "../session/sessionEditService";
-import type { ImportSessionImageResult } from "../session/sessionImageImportService";
+import type {
+  ImportSessionEditedImageInput,
+  ImportSessionEditedImageResult,
+  ImportSessionImageResult
+} from "../session/sessionImageImportService";
 import { MAX_LOCAL_IMAGE_BYTES, SessionImageImportError } from "../session/sessionImageImportService";
 import type { ImportSessionPdfResult } from "../session/sessionPdfImportService";
 import { MAX_LOCAL_PDF_BYTES, SessionPdfImportError } from "../session/sessionPdfImportService";
+import {
+  SessionPdfRecognitionBatchError,
+  type SessionPdfRecognitionBatchService
+} from "../session/sessionPdfRecognitionBatchService";
 import { SessionRecognitionError, type SessionRecognitionService } from "../session/sessionRecognitionService";
 import {
   SessionAssistantError,
@@ -41,7 +53,9 @@ import {
 import {
   SessionBlockOrganizeError,
   type DeleteSessionBlocksInput,
+  type RecoverableDeleteReceipt,
   type ReorderSessionBlocksInput,
+  type RestoreSessionBlocksInput,
   type TransferSessionBlocksInput,
   type TransferSessionBlocksResult
 } from "../session/sessionBlockOrganizeService";
@@ -59,16 +73,20 @@ import type {
   NotationPromptPreview,
   PromptTemplateConfig
 } from "../provider/aiGuidanceSettingsService";
+import type { CreateNotesBackupResult } from "../backup/notesBackup";
 
 const MAX_MARKDOWN_SAVE_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_BLOCK_LOCK_BODY_BYTES = 1024;
+const MAX_PROTECTED_SPAN_BODY_BYTES = 64 * 1024;
 const MAX_CONFLICT_RESOLUTION_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_RECOGNITION_BODY_BYTES = 16 * 1024;
 const MAX_PROVIDER_BODY_BYTES = 16 * 1024;
 const MAX_WORKSPACE_CREATE_BODY_BYTES = 8 * 1024;
 const MAX_BLOCK_ORGANIZE_BODY_BYTES = 64 * 1024;
+const MAX_PDF_RECOGNITION_BODY_BYTES = 1024 * 1024;
 const MAX_ASSISTANT_BODY_BYTES = 64 * 1024;
 const MAX_AI_GUIDANCE_BODY_BYTES = 512 * 1024;
+const MAX_BACKUP_BODY_BYTES = 16 * 1024;
 
 export type LocalShellServerOptions = {
   host?: "127.0.0.1" | "::1";
@@ -78,6 +96,7 @@ export type LocalShellServerOptions = {
   readCatalog?: () => Promise<NotesCatalog>;
   createNotebook?: (input: { title: string }) => Promise<NotebookSummary>;
   createSession?: (input: { notebookId: string; title: string }) => Promise<NotebookSessionSummary>;
+  createNotesBackup?: (input: { destinationParentDir: string }) => Promise<CreateNotesBackupResult>;
   createCompanionPairingChallenge?: () => Promise<PairingChallenge>;
   readSessionManifest?: (input: { notebookId: string; sessionId: string }) => Promise<ReadonlySessionManifest>;
   readSessionBlock?: (input: { notebookId: string; sessionId: string; blockId: string }) => Promise<ReadonlySessionBlock>;
@@ -108,8 +127,14 @@ export type LocalShellServerOptions = {
     blockId: string;
     locked: boolean;
   }) => Promise<SetMarkdownBlockLockResult>;
+  protectSessionBlockSpan?: (input: UpdateMarkdownProtectedSpanInput) => Promise<UpdateMarkdownProtectedSpanResult>;
+  unlockSessionBlockSpan?: (input: UpdateMarkdownProtectedSpanInput) => Promise<UpdateMarkdownProtectedSpanResult>;
   reorderSessionBlocks?: (input: ReorderSessionBlocksInput) => Promise<ReadonlySessionManifest>;
-  deleteSessionBlocks?: (input: DeleteSessionBlocksInput) => Promise<ReadonlySessionManifest>;
+  deleteSessionBlocks?: (input: DeleteSessionBlocksInput) => Promise<{
+    manifest: ReadonlySessionManifest;
+    undo: RecoverableDeleteReceipt;
+  }>;
+  restoreSessionBlocks?: (input: RestoreSessionBlocksInput) => Promise<ReadonlySessionManifest>;
   transferSessionBlocks?: (input: TransferSessionBlocksInput) => Promise<TransferSessionBlocksResult>;
   listSessionConflicts?: (input: {
     notebookId: string;
@@ -129,13 +154,16 @@ export type LocalShellServerOptions = {
     bytes: Buffer;
     baseRevision: string;
   }) => Promise<ImportSessionImageResult>;
+  importSessionEditedImage?: (input: ImportSessionEditedImageInput) => Promise<ImportSessionEditedImageResult>;
   importSessionPdf?: (input: {
     notebookId: string;
     sessionId: string;
     fileName: string;
     bytes: Buffer;
     baseRevision: string;
+    pageCountHint?: number;
   }) => Promise<ImportSessionPdfResult>;
+  sessionPdfRecognition?: SessionPdfRecognitionBatchService;
   readSessionAsset?: (input: { notebookId: string; sessionId: string; assetPath: string }) => Promise<ReadonlySessionAsset>;
   sessionRecognition?: SessionRecognitionService;
   readSessionCompanionActivity?: (input: {
@@ -228,6 +256,16 @@ export class LocalShellServer {
       if (route.id === "local.catalog") {
         if (!this.options.readCatalog) return writeJson(response, 503, { error: "catalog_unavailable" });
         writeJson(response, 200, await this.options.readCatalog());
+        return;
+      }
+      if (route.id === "local.notes.backup") {
+        if (!this.options.createNotesBackup) return writeJson(response, 503, { error: "backup_unavailable" });
+        const body = await readJsonBody(request, MAX_BACKUP_BODY_BYTES);
+        if (!isNotesBackupBody(body)) throw new BodyError("invalid_backup_body", 400);
+        writeJson(response, 201, {
+          version: 1,
+          backup: await this.options.createNotesBackup({ destinationParentDir: body.destinationParentDir })
+        });
         return;
       }
       if (route.id === "local.companion.pairing.challenge") {
@@ -436,6 +474,42 @@ export class LocalShellServer {
         }));
         return;
       }
+      if (route.id === "local.session.image.edit") {
+        if (!this.options.importSessionEditedImage) {
+          return writeJson(response, 503, { error: "session_write_unavailable" });
+        }
+        const upload = await parseEditedImageUpload(request);
+        writeJson(response, 200, await this.options.importSessionEditedImage({
+          notebookId,
+          sessionId,
+          fileName: requiredMultipartField(upload.fields, "fileName"),
+          sourceBytes: upload.source,
+          outputPngBytes: upload.output,
+          baseRevision: requiredMultipartRevision(upload.fields, "baseRevision"),
+          ...parseImageEditMetadata(requiredMultipartField(upload.fields, "metadata"))
+        }));
+        return;
+      }
+      if (route.id === "local.session.block.span.protect" || route.id === "local.session.block.span.unlock") {
+        const updateSpan = route.id === "local.session.block.span.protect"
+          ? this.options.protectSessionBlockSpan
+          : this.options.unlockSessionBlockSpan;
+        if (!updateSpan) return writeJson(response, 503, { error: "session_write_unavailable" });
+        const body = await readJsonBody(request, MAX_PROTECTED_SPAN_BODY_BYTES);
+        if (!isProtectedSpanBody(body)) throw new BodyError("invalid_protected_span_body", 400);
+        writeJson(response, 200, await updateSpan({
+          notebookId,
+          sessionId,
+          blockId: requiredQuery(url, "blockId"),
+          baseRevision: body.baseRevision,
+          selection: {
+            from: body.from,
+            to: body.to,
+            selectedText: body.selectedText
+          }
+        }));
+        return;
+      }
       if (route.id === "local.session.blocks.reorder") {
         if (!this.options.reorderSessionBlocks) {
           return writeJson(response, 503, { error: "session_organize_unavailable" });
@@ -457,12 +531,28 @@ export class LocalShellServer {
         }
         const body = await readJsonBody(request, MAX_BLOCK_ORGANIZE_BODY_BYTES);
         if (!isDeleteBlocksBody(body)) throw new BodyError("invalid_delete_body", 400);
-        const manifest = await this.options.deleteSessionBlocks({
+        const result = await this.options.deleteSessionBlocks({
           notebookId,
           sessionId,
-          blockIds: body.blockIds
+          blockIds: body.blockIds,
+          baseRevision: body.baseRevision
         });
-        writeJson(response, 200, { version: 1, deleted: true, manifest });
+        writeJson(response, 200, { version: 1, deleted: true, ...result });
+        return;
+      }
+      if (route.id === "local.session.blocks.restore") {
+        if (!this.options.restoreSessionBlocks) {
+          return writeJson(response, 503, { error: "session_organize_unavailable" });
+        }
+        const body = await readJsonBody(request, MAX_BLOCK_ORGANIZE_BODY_BYTES);
+        if (!isRestoreBlocksBody(body)) throw new BodyError("invalid_restore_body", 400);
+        const manifest = await this.options.restoreSessionBlocks({
+          notebookId,
+          sessionId,
+          deletionId: body.deletionId,
+          baseRevision: body.baseRevision
+        });
+        writeJson(response, 200, { version: 1, restored: true, manifest });
         return;
       }
       if (route.id === "local.session.markdown.preview") {
@@ -504,8 +594,69 @@ export class LocalShellServer {
           sessionId,
           fileName: requiredQuery(url, "fileName"),
           bytes,
-          baseRevision
+          baseRevision,
+          pageCountHint: optionalPositiveInteger(url, "pageCount")
         }));
+        return;
+      }
+      if (route.id === "local.session.pdf-recognition.page") {
+        if (!this.options.sessionPdfRecognition) {
+          return writeJson(response, 503, { error: "pdf_recognition_unavailable" });
+        }
+        const page = await this.options.sessionPdfRecognition.stagePage({
+          notebookId,
+          sessionId,
+          pdfBlockId: requiredQuery(url, "pdfBlockId"),
+          pageNumber: requiredPositiveInteger(url, "pageNumber"),
+          baseRevision: requiredRevision(url, "baseRevision"),
+          bytes: await readBody(request, MAX_LOCAL_IMAGE_BYTES)
+        });
+        writeJson(response, 201, { version: 1, page });
+        return;
+      }
+      if (route.id === "local.session.pdf-recognition.start") {
+        if (!this.options.sessionPdfRecognition) {
+          return writeJson(response, 503, { error: "pdf_recognition_unavailable" });
+        }
+        const body = await readJsonBody(request, MAX_PDF_RECOGNITION_BODY_BYTES);
+        if (!isPdfRecognitionStartBody(body)) throw new BodyError("invalid_pdf_recognition_body", 400);
+        writeJson(response, 202, {
+          version: 1,
+          batch: await this.options.sessionPdfRecognition.start({ notebookId, sessionId, ...body })
+        });
+        return;
+      }
+      if (route.id === "local.session.pdf-recognition.status") {
+        if (!this.options.sessionPdfRecognition) {
+          return writeJson(response, 503, { error: "pdf_recognition_unavailable" });
+        }
+        const batchId = url.searchParams.get("batchId")?.trim();
+        if (batchId) {
+          writeJson(response, 200, {
+            version: 1,
+            batch: await this.options.sessionPdfRecognition.get({ notebookId, sessionId, batchId })
+          });
+        } else {
+          writeJson(response, 200, {
+            version: 1,
+            batches: await this.options.sessionPdfRecognition.list({ notebookId, sessionId })
+          });
+        }
+        return;
+      }
+      if (route.id === "local.session.pdf-recognition.pause" ||
+          route.id === "local.session.pdf-recognition.resume" ||
+          route.id === "local.session.pdf-recognition.cancel") {
+        if (!this.options.sessionPdfRecognition) {
+          return writeJson(response, 503, { error: "pdf_recognition_unavailable" });
+        }
+        const input = { notebookId, sessionId, batchId: requiredQuery(url, "batchId") };
+        const batch = route.id === "local.session.pdf-recognition.pause"
+          ? await this.options.sessionPdfRecognition.pause(input)
+          : route.id === "local.session.pdf-recognition.resume"
+          ? await this.options.sessionPdfRecognition.resume(input)
+          : await this.options.sessionPdfRecognition.cancel(input);
+        writeJson(response, 200, { version: 1, batch });
         return;
       }
       if (route.id === "local.session.recognition.start") {
@@ -727,7 +878,11 @@ export class LocalShellServer {
         if (!isSelectionEditCommandBody(body)) throw new BodyError("invalid_selection_edit_body", 400);
         if (route.id === "local.session.selection-edit.apply") {
           writeJson(response, 200, await this.options.sessionSelectionEdit.apply({
-            notebookId, sessionId, proposalId: body.proposalId
+            notebookId,
+            sessionId,
+            proposalId: body.proposalId,
+            replacementMarkdown: body.replacementMarkdown,
+            retryAfterUnlock: body.retryAfterUnlock
           }));
         } else {
           writeJson(response, 200, await this.options.sessionSelectionEdit.cancel({
@@ -775,6 +930,7 @@ export class LocalShellServer {
         ? 400
         : error instanceof SessionReadError || error instanceof SessionEditError || error instanceof SessionImageImportError ||
           error instanceof SessionPdfImportError ||
+          error instanceof SessionPdfRecognitionBatchError ||
           error instanceof SessionRecognitionError || error instanceof SessionAssistantError ||
           error instanceof SessionSelectionEditError ||
           error instanceof SessionExportError ||
@@ -784,6 +940,7 @@ export class LocalShellServer {
       writeJson(response, statusCode, {
         error: statusCode === 500 ? "local_request_failed" :
           error instanceof SessionEditError || error instanceof SessionImageImportError || error instanceof SessionPdfImportError ||
+          error instanceof SessionPdfRecognitionBatchError ||
           error instanceof SessionExportError || error instanceof RuntimeProviderConfigurationError ||
           error instanceof SessionAssistantError || error instanceof SessionSelectionEditError || error instanceof SessionBlockOrganizeError ||
           error instanceof WorkspaceCommandError ? error.code :
@@ -871,6 +1028,111 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Buffer
   return Buffer.concat(chunks);
 }
 
+type ParsedEditedImageUpload = {
+  fields: Record<string, string>;
+  source: Buffer;
+  output: Buffer;
+};
+
+function parseEditedImageUpload(request: IncomingMessage): Promise<ParsedEditedImageUpload> {
+  return new Promise((resolve, reject) => {
+    let parser: ReturnType<typeof Busboy>;
+    try {
+      parser = Busboy({
+        headers: request.headers,
+        defParamCharset: "utf8",
+        limits: {
+          fields: 8,
+          fieldSize: 1024 * 1024,
+          files: 2,
+          fileSize: MAX_LOCAL_IMAGE_BYTES,
+          parts: 10
+        }
+      });
+    } catch {
+      reject(new BodyError("invalid_image_edit_multipart", 400));
+      return;
+    }
+
+    const fields: Record<string, string> = {};
+    const files = new Map<string, Buffer>();
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    parser.on("field", (name, value, info) => {
+      if (info.valueTruncated || Object.hasOwn(fields, name)) {
+        fail(new BodyError("invalid_image_edit_multipart", 400));
+        return;
+      }
+      fields[name] = value;
+    });
+    parser.on("file", (fieldName, file) => {
+      if ((fieldName !== "source" && fieldName !== "output") || files.has(fieldName)) {
+        file.resume();
+        fail(new BodyError("invalid_image_edit_multipart", 400));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      file.on("data", (chunk: Buffer) => chunks.push(chunk));
+      file.on("limit", () => fail(new BodyError("request_body_too_large", 413)));
+      file.on("end", () => {
+        if (!settled) files.set(fieldName, Buffer.concat(chunks));
+      });
+    });
+    parser.on("filesLimit", () => fail(new BodyError("invalid_image_edit_multipart", 400)));
+    parser.on("fieldsLimit", () => fail(new BodyError("invalid_image_edit_multipart", 400)));
+    parser.on("partsLimit", () => fail(new BodyError("invalid_image_edit_multipart", 400)));
+    parser.on("error", () => fail(new BodyError("invalid_image_edit_multipart", 400)));
+    parser.on("finish", () => {
+      if (settled) return;
+      const source = files.get("source");
+      const output = files.get("output");
+      if (!source || !output) {
+        fail(new BodyError("invalid_image_edit_multipart", 400));
+        return;
+      }
+      settled = true;
+      resolve({ fields, source, output });
+    });
+    request.pipe(parser);
+  });
+}
+
+function requiredMultipartField(fields: Record<string, string>, name: string): string {
+  const value = fields[name]?.trim();
+  if (!value) throw new BodyError(`invalid_${name}`, 400);
+  return value;
+}
+
+function requiredMultipartRevision(fields: Record<string, string>, name: string): string {
+  const value = requiredMultipartField(fields, name);
+  if (!/^[a-f0-9]{64}$/.test(value)) throw new BodyError(`invalid_${name}`, 400);
+  return value;
+}
+
+function parseImageEditMetadata(value: string): {
+  operations: ImageTransformOperation[];
+  annotations?: ImageAnnotationObject[];
+} {
+  try {
+    const metadata = JSON.parse(value) as Record<string, unknown>;
+    if (!metadata || typeof metadata !== "object" || !Array.isArray(metadata.operations) ||
+        (metadata.annotations !== undefined && !Array.isArray(metadata.annotations))) {
+      throw new Error("invalid metadata");
+    }
+    return {
+      operations: metadata.operations as ImageTransformOperation[],
+      ...(metadata.annotations === undefined ? {} : { annotations: metadata.annotations as ImageAnnotationObject[] })
+    };
+  } catch {
+    throw new BodyError("invalid_image_edit_metadata", 400);
+  }
+}
+
 function isSaveBody(value: unknown): value is { markdown: string; baseRevision: string } {
   if (!value || typeof value !== "object") return false;
   const body = value as Record<string, unknown>;
@@ -915,9 +1177,17 @@ function isReorderBlocksBody(value: unknown): value is {
   return isBlockIdList(body.blockIds) && (body.direction === "up" || body.direction === "down");
 }
 
-function isDeleteBlocksBody(value: unknown): value is { blockIds: string[] } {
+function isDeleteBlocksBody(value: unknown): value is { blockIds: string[]; baseRevision: string } {
   if (!value || typeof value !== "object") return false;
-  return isBlockIdList((value as Record<string, unknown>).blockIds);
+  const body = value as Record<string, unknown>;
+  return isBlockIdList(body.blockIds) && isRevision(body.baseRevision);
+}
+
+function isRestoreBlocksBody(value: unknown): value is { deletionId: string; baseRevision: string } {
+  if (!value || typeof value !== "object") return false;
+  const body = value as Record<string, unknown>;
+  return typeof body.deletionId === "string" && isSafeLocalIdentifier(body.deletionId) &&
+    isRevision(body.baseRevision);
 }
 
 function isTransferBlocksBody(value: unknown): value is {
@@ -1030,10 +1300,66 @@ function isSelectionEditProposalBody(value: unknown): value is {
     typeof body.instruction === "string" && body.instruction.trim().length > 0 && body.instruction.length <= 8_000;
 }
 
-function isSelectionEditCommandBody(value: unknown): value is { proposalId: string } {
+function isSelectionEditCommandBody(value: unknown): value is {
+  proposalId: string;
+  replacementMarkdown?: string;
+  retryAfterUnlock?: boolean;
+} {
   if (!value || typeof value !== "object") return false;
-  const proposalId = (value as Record<string, unknown>).proposalId;
-  return typeof proposalId === "string" && /^selection_[0-9a-f-]{36}$/.test(proposalId);
+  const body = value as Record<string, unknown>;
+  return typeof body.proposalId === "string" && /^selection_[0-9a-f-]{36}$/.test(body.proposalId) &&
+    optionalBoundedText(body.replacementMarkdown, 12_000) &&
+    (body.retryAfterUnlock === undefined || typeof body.retryAfterUnlock === "boolean");
+}
+
+function isPdfRecognitionStartBody(value: unknown): value is {
+  pdfBlockId: string;
+  pdfAssetPath: string;
+  pageCount: number;
+  concurrency: number;
+  baseRevision: string;
+  pages: Array<{ pageNumber: number; assetPath: string }>;
+} {
+  if (!value || typeof value !== "object") return false;
+  const body = value as Record<string, unknown>;
+  return typeof body.pdfBlockId === "string" && isSafeLocalIdentifier(body.pdfBlockId) &&
+    typeof body.pdfAssetPath === "string" && body.pdfAssetPath.length > 0 && body.pdfAssetPath.length <= 4096 &&
+    Number.isInteger(body.pageCount) && (body.pageCount as number) >= 1 && (body.pageCount as number) <= 100_000 &&
+    Number.isInteger(body.concurrency) && (body.concurrency as number) >= 1 && (body.concurrency as number) <= 4 &&
+    isRevision(body.baseRevision) && Array.isArray(body.pages) && body.pages.length > 0 && body.pages.length <= 10_000 &&
+    body.pages.every((page) => Boolean(page) && typeof page === "object" &&
+      Number.isInteger((page as Record<string, unknown>).pageNumber) &&
+      ((page as Record<string, unknown>).pageNumber as number) >= 1 &&
+      typeof (page as Record<string, unknown>).assetPath === "string" &&
+      ((page as Record<string, unknown>).assetPath as string).length > 0 &&
+      ((page as Record<string, unknown>).assetPath as string).length <= 4096);
+}
+
+function isRevision(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function isNotesBackupBody(value: unknown): value is { destinationParentDir: string } {
+  if (!value || typeof value !== "object") return false;
+  const destinationParentDir = (value as Record<string, unknown>).destinationParentDir;
+  return typeof destinationParentDir === "string" &&
+    destinationParentDir.trim().length > 0 &&
+    destinationParentDir.length <= 4096 &&
+    !destinationParentDir.includes("\0");
+}
+
+function isProtectedSpanBody(value: unknown): value is {
+  baseRevision: string;
+  from: number;
+  to: number;
+  selectedText: string;
+} {
+  if (!value || typeof value !== "object") return false;
+  const body = value as Record<string, unknown>;
+  return typeof body.baseRevision === "string" && /^[a-f0-9]{64}$/.test(body.baseRevision) &&
+    Number.isSafeInteger(body.from) && (body.from as number) >= 0 &&
+    Number.isSafeInteger(body.to) && (body.to as number) > (body.from as number) &&
+    typeof body.selectedText === "string" && body.selectedText.length > 0 && body.selectedText.length <= 12_000;
 }
 
 function optionalBoundedText(value: unknown, maximum: number): boolean {
@@ -1091,6 +1417,19 @@ function requiredRevision(url: URL, name: string): string {
   const value = requiredQuery(url, name);
   if (!/^[a-f0-9]{64}$/.test(value)) throw new QueryError(`invalid_${name}`);
   return value;
+}
+
+function requiredPositiveInteger(url: URL, name: string): number {
+  const raw = requiredQuery(url, name);
+  if (!/^\d+$/.test(raw)) throw new QueryError(`invalid_${name}`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new QueryError(`invalid_${name}`);
+  return value;
+}
+
+function optionalPositiveInteger(url: URL, name: string): number | undefined {
+  if (!url.searchParams.has(name)) return undefined;
+  return requiredPositiveInteger(url, name);
 }
 
 function requiredConflictId(url: URL): string {

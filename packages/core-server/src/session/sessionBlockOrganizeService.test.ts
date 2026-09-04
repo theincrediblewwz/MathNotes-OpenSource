@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import type { BlockRef, SessionRecord } from "@mathnotes/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionBlockOrganizeService } from "./sessionBlockOrganizeService";
+import { sessionManifestRevision } from "./sessionRevision";
 
 const roots: string[] = [];
 
@@ -77,6 +78,94 @@ describe("SessionBlockOrganizeService", () => {
     const deleteIds = await readdir(trash);
     expect(deleteIds).toHaveLength(1);
     expect(await readFile(join(trash, deleteIds[0], "blocks/0002_b.md"), "utf8")).toBe("B");
+  });
+
+  it("restores one exact deletion with its order, markdown, and protected-span locks", async () => {
+    const root = await fixture();
+    await setSpanLock(root, "notes", "source", "0002");
+    const service = new SessionBlockOrganizeService(root, () => "2026-07-28T10:00:00.000Z");
+    const before = await session(root, "notes", "source");
+    const deleted = await service.deleteRecoverable({
+      notebookId: "notes",
+      sessionId: "source",
+      blockIds: ["0002"],
+      baseRevision: sessionManifestRevision(before)
+    });
+
+    expect(deleted.session.blocks.map((block) => block.id)).toEqual(["0001", "0003"]);
+    expect(deleted.undo).toMatchObject({ version: 1, deletedBlockIds: ["0002"] });
+    const restored = await service.restoreDeleted({
+      notebookId: "notes",
+      sessionId: "source",
+      deletionId: deleted.undo.deletionId,
+      baseRevision: sessionManifestRevision(deleted.session)
+    });
+
+    expect(restored.blocks.map((block) => block.id)).toEqual(["0001", "0002", "0003"]);
+    expect(restored.locks).toEqual([
+      expect.objectContaining({ id: "lock_span_0002", blockId: "0002", kind: "span" })
+    ]);
+    expect(await markdown(root, "notes", "source", "0002_b.md")).toBe("B");
+    await expect(readFile(join(
+      root,
+      "notebooks/notes/sessions/source/.mathnotes/trash",
+      deleted.undo.deletionId,
+      "delete.json"
+    ), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects stale delete and restore revisions without touching the current session", async () => {
+    const root = await fixture();
+    const service = new SessionBlockOrganizeService(root, () => "2026-07-28T10:00:00.000Z");
+    await expect(service.deleteRecoverable({
+      notebookId: "notes",
+      sessionId: "source",
+      blockIds: ["0002"],
+      baseRevision: "0".repeat(64)
+    })).rejects.toMatchObject({ code: "revision_conflict", statusCode: 409 });
+
+    const before = await session(root, "notes", "source");
+    const deleted = await service.deleteRecoverable({
+      notebookId: "notes",
+      sessionId: "source",
+      blockIds: ["0002"],
+      baseRevision: sessionManifestRevision(before)
+    });
+    await expect(service.restoreDeleted({
+      notebookId: "notes",
+      sessionId: "source",
+      deletionId: deleted.undo.deletionId,
+      baseRevision: "0".repeat(64)
+    })).rejects.toMatchObject({ code: "revision_conflict", statusCode: 409 });
+    expect((await session(root, "notes", "source")).blocks.map((block) => block.id))
+      .toEqual(["0001", "0003"]);
+  });
+
+  it("rejects undo when its recoverable Markdown copy is missing", async () => {
+    const root = await fixture();
+    const service = new SessionBlockOrganizeService(root, () => "2026-07-28T10:00:00.000Z");
+    const before = await session(root, "notes", "source");
+    const deleted = await service.deleteRecoverable({
+      notebookId: "notes",
+      sessionId: "source",
+      blockIds: ["0002"],
+      baseRevision: sessionManifestRevision(before)
+    });
+    await rm(join(
+      root,
+      "notebooks/notes/sessions/source/.mathnotes/trash",
+      deleted.undo.deletionId,
+      "blocks/0002_b.md"
+    ));
+
+    await expect(service.restoreDeleted({
+      notebookId: "notes",
+      sessionId: "source",
+      deletionId: deleted.undo.deletionId,
+      baseRevision: sessionManifestRevision(deleted.session)
+    })).rejects.toMatchObject({ code: "undo_conflict", statusCode: 409 });
+    await expect(markdown(root, "notes", "source", "0002_b.md"))
+      .rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps fixed blocks immutable while still allowing a non-destructive copy", async () => {
@@ -183,6 +272,21 @@ async function setBlockLock(root: string, notebookId: string, sessionId: string,
     blockId,
     kind: "block",
     contentHash: "0".repeat(64),
+    createdAt: "2026-07-28T09:30:00.000Z",
+    createdBy: "user",
+    aiEditable: false
+  }];
+  const path = join(root, "notebooks", notebookId, "sessions", sessionId, "session.json");
+  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function setSpanLock(root: string, notebookId: string, sessionId: string, blockId: string) {
+  const value = await session(root, notebookId, sessionId);
+  value.locks = [{
+    id: `lock_span_${blockId}`,
+    blockId,
+    kind: "span",
+    contentHash: "1".repeat(64),
     createdAt: "2026-07-28T09:30:00.000Z",
     createdBy: "user",
     aiEditable: false

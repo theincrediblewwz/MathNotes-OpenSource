@@ -6,14 +6,19 @@ import {
   ChevronRight,
   Download,
   FileText,
+  Folder,
   HardDrive,
   ImagePlus,
+  ListChecks,
   Link2,
   LogOut,
+  MonitorUp,
+  QrCode,
   RefreshCw,
   RotateCcw,
   RotateCw,
   Search,
+  Settings2,
   Trash2,
   TriangleAlert,
   UploadCloud,
@@ -72,13 +77,14 @@ import {
 
 type SyncState = "idle" | "syncing" | "live" | "offline" | "failed";
 type PersistenceState = "unknown" | "granted" | "best-effort" | "unavailable";
+export type CompanionTab = "notes" | "capture" | "queue" | "settings";
 const LEGACY_HOST_CAPABILITIES: CompanionHostCapabilities = {
   imageUpload: true,
   pdfUpload: false,
   recognitionStatus: false,
   recognitionRetry: false
 };
-const PWA_BUILD_LABEL = "2026.07.29.13";
+const PWA_BUILD_LABEL = "2026.09.01.1";
 
 export default function App() {
   const [booting, setBooting] = useState(true);
@@ -100,7 +106,10 @@ export default function App() {
   const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
   const [persistenceState, setPersistenceState] = useState<PersistenceState>("unknown");
   const [searchQuery, setSearchQuery] = useState("");
-  const [mobileCaptureOpen, setMobileCaptureOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<CompanionTab>("notes");
+  const [expandedNotebookId, setExpandedNotebookId] = useState("");
+  const [continuePreview, setContinuePreview] = useState("");
   const requestGeneration = useRef(0);
   const touchStart = useRef<number | undefined>(undefined);
   const bootStarted = useRef(false);
@@ -257,9 +266,14 @@ export default function App() {
         if (storedProfileId) {
           const cachedCatalog = await companionStorage.loadCatalog(storedProfileId);
           setCatalog(cachedCatalog);
-          setSelected(cachedCatalog?.activeTarget ?? cachedCatalog?.targets[0]);
+          setSelected(undefined);
         }
-        if (activeCredential && navigator.onLine) await refreshCatalog(activeCredential);
+        if (activeCredential && navigator.onLine) {
+          await refreshCatalog(activeCredential);
+        } else if (activeCredential) {
+          setSyncState("offline");
+          setSyncMessage("网络已断开，正在显示离线缓存");
+        }
       } catch (error) {
         setSyncState("failed");
         setSyncMessage(userMessage(error, "本地笔记缓存暂时不可用。"));
@@ -320,6 +334,21 @@ export default function App() {
       }
     })();
   }, [credential, profileId, refreshSession, selected]);
+
+  useEffect(() => {
+    const target = catalog?.activeTarget;
+    if (!profileId || !target) {
+      setContinuePreview("");
+      return;
+    }
+    let cancelled = false;
+    void companionStorage.loadSession(
+      sessionCacheKey(profileId, target.notebookId, target.sessionId)
+    ).then((cached) => {
+      if (!cancelled) setContinuePreview(cached ? sessionPreviewText(cached) : "");
+    });
+    return () => { cancelled = true; };
+  }, [catalog?.activeTarget, profileId, session?.revision]);
 
   useEffect(() => {
     if (!session) {
@@ -577,39 +606,79 @@ export default function App() {
 
   if (booting) return <LoadingScreen />;
 
+  const activeTaskCount = uploadTasks.filter((task) => !isFullyComplete(task)).length;
+  const visibleNotebookId = expandedNotebookId || groups[0]?.notebookId || "";
+  const pageCopy: Record<CompanionTab, { eyebrow: string; title: string; detail: string }> = {
+    notes: {
+      eyebrow: "MathNotes",
+      title: selected?.title ?? "我的笔记",
+      detail: selected
+        ? `${selected.notebookTitle} · ${syncMessage || statusLabel(syncState)}`
+        : "来自已连接电脑，离线时继续阅读最近缓存"
+    },
+    capture: {
+      eyebrow: "采集",
+      title: "拍下这一页",
+      detail: "保持光线均匀，对齐页面边缘"
+    },
+    queue: {
+      eyebrow: "采集记录",
+      title: "今日采集",
+      detail: activeTaskCount > 0 ? `${activeTaskCount} 项正在等待电脑处理` : "拍摄内容会先安全保存在本机"
+    },
+    settings: {
+      eyebrow: "连接与传输",
+      title: "连接电脑",
+      detail: "连接运行 MathNotes 的 Windows 或 Mac，开始阅读和采集"
+    }
+  };
+  const currentPage = pageCopy[activeTab];
+  const openCapture = () => {
+    setActiveTab("capture");
+    setSelected((current) => current ?? catalog?.activeTarget ?? catalog?.targets[0]);
+  };
+
   return (
-    <main className={`companion-app ${selected ? "session-open" : ""}`}>
-      <header className="app-header">
-        <img src="/icons/mathnotes-192.png" alt="" className="brand-mark" />
-        <div className="brand-copy">
-          <span>MathNotes</span>
-          <strong>我的笔记</strong>
+    <main className={`companion-app android-parity-shell tab-${activeTab} ${selected ? "session-open" : ""}`}>
+      {!(selected && activeTab === "notes") ? <header className="android-page-header">
+        <div className="android-page-heading">
+          <div>
+            <span>{currentPage.eyebrow}</span>
+            <h1>{currentPage.title}</h1>
+            <p>{currentPage.detail}</p>
+          </div>
         </div>
-        <ConnectionState
-          expanded={connectionDetailsOpen}
-          onToggle={() => setConnectionDetailsOpen((current) => !current)}
-          state={syncState}
-        />
-        <button
-          className="icon-button"
-          type="button"
-          onClick={() => selected ? void refreshSession() : void refreshCatalog()}
-          title="立即刷新"
-          aria-label="立即刷新"
-        >
-          <RefreshCw size={19} className={syncState === "syncing" ? "spinning" : ""} />
-        </button>
-      </header>
-      {connectionDetailsOpen && (
-        <ConnectionDetails
-          lastSuccessfulSyncAt={lastSuccessfulSyncAt}
-          message={syncMessage}
-          onClose={() => setConnectionDetailsOpen(false)}
-          onRetry={() => selected ? void refreshSession() : void refreshCatalog()}
-          origin={credential?.origin}
-          state={syncState}
-        />
-      )}
+        <div className="android-header-actions">
+          {activeTab === "notes" && !selected ? (
+            <button
+              className={`round-action ${searchOpen || searchQuery ? "active" : ""}`}
+              type="button"
+              onClick={() => setSearchOpen((current) => !current)}
+              aria-label="搜索笔记"
+            >
+              <Search size={23} />
+            </button>
+          ) : null}
+          {activeTab === "capture" ? (
+            <button className="round-action accent-soft" type="button" onClick={() => setPairingOpen(true)} aria-label="连接电脑">
+              <QrCode size={24} />
+            </button>
+          ) : null}
+          {activeTab === "queue" ? (
+            <button className="recognition-chip" type="button" onClick={() => setActiveTab("settings")}>
+              <span className={syncState === "live" ? "online" : ""} />
+              {credential ? "电脑识别" : "等待连接"}
+            </button>
+          ) : null}
+          {activeTab === "settings" ? (
+            <ConnectionState
+              expanded={connectionDetailsOpen}
+              onToggle={() => setConnectionDetailsOpen((current) => !current)}
+              state={syncState}
+            />
+          ) : null}
+        </div>
+      </header> : null}
 
       {pwaState.updateReady && (
         <div className="update-banner">
@@ -620,7 +689,7 @@ export default function App() {
       )}
 
       <div
-        className={`workspace ${pullDistance > 0 ? "pulling" : ""} ${pullDistance >= 64 ? "pull-ready" : ""}`}
+        className={`workspace android-mobile-workspace ${pullDistance > 0 ? "pulling" : ""} ${pullDistance >= 64 ? "pull-ready" : ""}`}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
@@ -630,29 +699,9 @@ export default function App() {
           {pullDistance >= 64 ? "松开刷新" : "下拉刷新"}
         </div>
 
-        <aside className="catalog-pane" aria-label="笔记目录">
-          {!credential && catalog && (
-            <button className="offline-callout" type="button" onClick={() => setPairingOpen(true)}>
-              <WifiOff size={18} />
-              <span><strong>当前仅离线阅读</strong><small>重新配对以继续同步</small></span>
-              <ChevronRight size={18} />
-            </button>
-          )}
-          {credential && captureTarget && (
-            <button
-              className="catalog-capture-cta"
-              type="button"
-              onClick={() => setMobileCaptureOpen(true)}
-            >
-              <Camera size={20} />
-              <span>
-                <strong>采集到笔记</strong>
-                <small>{captureTarget.notebookTitle} / {captureTarget.title}</small>
-              </span>
-              <ChevronRight size={18} />
-            </button>
-          )}
-          {(catalog?.targets.length ?? 0) > 0 && (
+        {activeTab === "notes" && !selected ? (
+        <section className="android-tab-page notes-tab" aria-label="笔记目录">
+          {searchOpen && (catalog?.targets.length ?? 0) > 0 ? (
             <label className="catalog-search">
               <Search size={17} />
               <input
@@ -668,7 +717,26 @@ export default function App() {
                 </button>
               )}
             </label>
-          )}
+          ) : null}
+          {!credential && catalog ? (
+            <button className="offline-callout" type="button" onClick={() => setPairingOpen(true)}>
+              <WifiOff size={18} />
+              <span><strong>当前仅离线阅读</strong><small>重新连接后会继续同步</small></span>
+              <ChevronRight size={18} />
+            </button>
+          ) : null}
+          {catalog?.activeTarget ? (
+            <button className="continue-reading-card" type="button" onClick={() => setSelected(catalog.activeTarget ?? undefined)}>
+              <div className="continue-reading-copy">
+                <span><BookOpenText size={18} />继续阅读</span>
+                <strong>{catalog.activeTarget.title}</strong>
+                <small>{catalog.activeTarget.notebookTitle} · 上次阅读</small>
+                {continuePreview ? <p>{continuePreview}</p> : null}
+              </div>
+              <div className="continue-reading-mark"><BookOpenText size={32} /></div>
+              <div className="continue-reading-footer"><span>继续阅读</span><i /></div>
+            </button>
+          ) : null}
           {groups.length === 0 ? (
             <div className="empty-state">
               <BookOpenText size={28} />
@@ -679,61 +747,46 @@ export default function App() {
               {!credential && <button className="primary-button" type="button" onClick={() => setPairingOpen(true)}>开始配对</button>}
             </div>
           ) : (
-            <div className="notebook-list">
+            <div className="notebook-library">
+              <div className="section-heading"><h2>Notebooks</h2><span>{groups.length} 个</span></div>
+              <div className="notebook-folder-grid">
               {groups.map((group) => (
-                <section className="notebook-group" key={group.notebookId}>
-                  <div className="notebook-heading">
-                    <span>Notebook</span>
-                    <h2>{group.title}</h2>
+                <section className={`notebook-group ${visibleNotebookId === group.notebookId ? "open" : ""}`} key={group.notebookId}>
+                  <button
+                    className="notebook-folder-card"
+                    type="button"
+                    onClick={() => setExpandedNotebookId(visibleNotebookId === group.notebookId ? "__closed__" : group.notebookId)}
+                    aria-expanded={visibleNotebookId === group.notebookId}
+                  >
+                    <span className="folder-icon"><Folder size={28} /></span>
+                    <strong>{group.title}</strong>
                     <small>{group.sessions.length} 个 Session</small>
-                  </div>
-                  <div className="session-list">
+                  </button>
+                  {visibleNotebookId === group.notebookId ? <div className="session-list">
                     {group.sessions.map((target) => (
                       <button
                         type="button"
                         key={`${target.notebookId}/${target.sessionId}`}
                         className={selected && sameTarget(target, selected) ? "active" : ""}
-                        onClick={() => setSelected(target)}
+                        onClick={() => { setSelected(target); setActiveTab("notes"); }}
                       >
-                        <span>{target.title}</span>
-                        <small>{target.sessionId}</small>
+                        <span><strong>{target.title}</strong><small>{group.title}</small></span>
                         <ChevronRight size={17} />
                       </button>
                     ))}
-                  </div>
+                  </div> : null}
                 </section>
               ))}
+              </div>
             </div>
           )}
-          {credential && (catalog?.targets.length ?? 0) > 0 && (
-            <CapturePanel
-              targets={catalog?.targets ?? []}
-              preferredTarget={selected ?? catalog?.activeTarget}
-              tasks={uploadTasks}
-              capabilities={hostCapabilities}
-              persistenceState={persistenceState}
-              onFiles={queueMaterials}
-              onRetry={(id) => void uploadQueue.current?.retry(id)}
-              onRetryRecognition={(task) => void retryRecognition(task)}
-              onRemove={(id) => void uploadQueue.current?.remove(id)}
-              onClearSucceeded={() => void uploadQueue.current?.clearSucceeded()}
-            />
-          )}
-          <div className="catalog-actions">
-            <button type="button" onClick={() => setPairingOpen(true)}><Link2 size={17} />重新配对</button>
-            {credential && (
-              <button type="button" onClick={() => void loseAuthorization("已退出同步，离线缓存仍保留。")}>
-                <LogOut size={17} />退出同步
-              </button>
-            )}
-            <span className="build-label">PWA {PWA_BUILD_LABEL}</span>
-          </div>
-        </aside>
+        </section>
+        ) : null}
 
-        <section className="reader-pane" aria-label="笔记阅读">
+        {activeTab === "notes" && selected ? <section className="reader-pane android-reader-page" aria-label="笔记阅读">
           <div className="reader-toolbar">
             <button className="back-button" type="button" onClick={() => setSelected(undefined)}>
-              <ChevronLeft size={19} />返回目录
+              <ChevronLeft size={19} />返回 Notebooks
             </button>
             <div>
               <strong>{selected?.title ?? "选择一篇笔记"}</strong>
@@ -743,7 +796,7 @@ export default function App() {
               <button
                 className="reader-capture-button"
                 type="button"
-                onClick={() => setMobileCaptureOpen(true)}
+                onClick={openCapture}
               >
                 <Camera size={17} />采集
               </button>
@@ -767,44 +820,92 @@ export default function App() {
               <p>{syncMessage || "正文会保存在本机，断网后仍可重新打开。"}</p>
             </div>
           )}
-        </section>
-      </div>
+        </section> : null}
 
-      {mobileCaptureOpen && credential && captureTarget && (
-        <div className="mobile-capture-layer" role="dialog" aria-modal="true" aria-label="采集到当前 Session">
-          <button
-            className="mobile-capture-backdrop"
-            type="button"
-            aria-label="关闭采集"
-            onClick={() => setMobileCaptureOpen(false)}
-          />
-          <div className="mobile-capture-sheet">
-            <div className="mobile-capture-title">
-              <div>
-                <strong>采集到当前 Session</strong>
-                <small>{captureTarget.notebookTitle} / {captureTarget.title}</small>
-              </div>
-              <button type="button" onClick={() => setMobileCaptureOpen(false)} aria-label="关闭采集">
-                <X size={18} />
-              </button>
-            </div>
+        {activeTab === "capture" ? <section className="android-tab-page capture-tab" aria-label="拍摄">
+          {credential && captureTarget ? (
             <CapturePanel
               targets={catalog?.targets ?? []}
               preferredTarget={captureTarget}
               tasks={uploadTasks}
               capabilities={hostCapabilities}
               persistenceState={persistenceState}
-              onFiles={async (files, kind, target) => {
-                await queueMaterials(files, kind, target);
-              }}
+              presentation="page"
+              onOpenQueue={() => setActiveTab("queue")}
+              onFiles={queueMaterials}
               onRetry={(id) => void uploadQueue.current?.retry(id)}
               onRetryRecognition={(task) => void retryRecognition(task)}
               onRemove={(id) => void uploadQueue.current?.remove(id)}
               onClearSucceeded={() => void uploadQueue.current?.clearSucceeded()}
             />
+          ) : (
+            <div className="connect-required-card">
+              <MonitorUp size={34} />
+              <h2>先连接一台电脑</h2>
+              <p>连接后选择 Notebook 与 Session，拍下的页面会先进入本机队列。</p>
+              <button className="primary-button" type="button" onClick={() => setPairingOpen(true)}>连接电脑</button>
+            </div>
+          )}
+        </section> : null}
+
+        {activeTab === "queue" ? <QueuePanel
+          tasks={uploadTasks}
+          capabilities={hostCapabilities}
+          persistenceState={persistenceState}
+          target={captureTarget}
+          onOpenCapture={openCapture}
+          onRetry={(id) => void uploadQueue.current?.retry(id)}
+          onRetryRecognition={(task) => void retryRecognition(task)}
+          onRemove={(id) => void uploadQueue.current?.remove(id)}
+          onClearSucceeded={() => void uploadQueue.current?.clearSucceeded()}
+        /> : null}
+
+        {activeTab === "settings" ? <section className="android-tab-page settings-tab" aria-label="设置">
+          <div className="settings-connect-actions">
+            <h2>{credential ? "已连接电脑" : "添加电脑"}</h2>
+            <button className="settings-primary-action" type="button" onClick={() => setPairingOpen(true)}>
+              <Link2 size={21} />{credential ? "重新连接电脑" : "连接这台电脑"}
+            </button>
+            {credential ? <button className="settings-secondary-action" type="button" onClick={() => void refreshCatalog()}>
+              <RefreshCw size={19} className={syncState === "syncing" ? "spinning" : ""} />立即同步
+            </button> : null}
           </div>
-        </div>
-      )}
+          <div className="settings-paper">
+            <div className="settings-paper-heading">
+              <div><span className={`settings-status-dot ${syncState}`} /><strong>电脑连接</strong></div>
+              <small>{statusLabel(syncState)}</small>
+            </div>
+            <dl>
+              <div><dt>当前主机</dt><dd>{credential?.origin ?? "尚未连接"}</dd></div>
+              <div><dt>离线阅读</dt><dd>{catalog ? "缓存可用" : "连接后启用"}</dd></div>
+              <div><dt>本机存储</dt><dd>{persistenceLabel(persistenceState)}</dd></div>
+            </dl>
+            <button type="button" onClick={() => setConnectionDetailsOpen((current) => !current)}>
+              {connectionDetailsOpen ? "收起连接详情" : "查看连接详情"}
+            </button>
+          </div>
+          {connectionDetailsOpen ? <ConnectionDetails
+            lastSuccessfulSyncAt={lastSuccessfulSyncAt}
+            message={syncMessage}
+            onClose={() => setConnectionDetailsOpen(false)}
+            onRetry={() => selected ? void refreshSession() : void refreshCatalog()}
+            origin={credential?.origin}
+            state={syncState}
+          /> : null}
+          <div className="settings-footer-actions">
+            {credential ? <button type="button" onClick={() => void loseAuthorization("已退出同步，离线缓存仍保留。")}>
+              <LogOut size={17} />退出同步
+            </button> : null}
+            <span>PWA {PWA_BUILD_LABEL}</span>
+          </div>
+        </section> : null}
+      </div>
+
+      <CompanionBottomNavigation
+        activeTab={activeTab}
+        queueCount={activeTaskCount}
+        onSelect={(tab) => { setActiveTab(tab); if (tab !== "notes") setSearchOpen(false); }}
+      />
 
       {showPairing && (
         <PairingSheet
@@ -821,7 +922,7 @@ export default function App() {
             setCredential(nextCredential);
             setProfileId(nextCredential.deviceId);
             setCatalog(nextCatalog);
-            setSelected(nextCatalog.activeTarget ?? nextCatalog.targets[0]);
+            setSelected(undefined);
             setPairingOpen(false);
             setSyncState("live");
             setSyncMessage("");
@@ -832,6 +933,110 @@ export default function App() {
         <div className="toast error"><TriangleAlert size={17} />离线组件暂不可用，在线阅读不受影响。</div>
       )}
     </main>
+  );
+}
+
+export function CompanionBottomNavigation({
+  activeTab,
+  queueCount,
+  onSelect
+}: {
+  activeTab: CompanionTab;
+  queueCount: number;
+  onSelect(tab: CompanionTab): void;
+}) {
+  const items = [
+    { key: "notes" as const, label: "笔记", icon: BookOpenText },
+    { key: "capture" as const, label: "拍摄", icon: Camera },
+    { key: "queue" as const, label: "队列", icon: ListChecks },
+    { key: "settings" as const, label: "设置", icon: Settings2 }
+  ];
+  return (
+    <nav className="android-bottom-navigation" aria-label="主要功能">
+      {items.map((item) => {
+        const Icon = item.icon;
+        const selected = activeTab === item.key;
+        return (
+          <button
+            key={item.key}
+            type="button"
+            className={selected ? "active" : ""}
+            aria-label={item.label}
+            aria-current={selected ? "page" : undefined}
+            onClick={() => onSelect(item.key)}
+          >
+            <span className="bottom-navigation-icon">
+              <Icon size={22} strokeWidth={selected ? 2.5 : 2.1} />
+              {item.key === "queue" && queueCount > 0 ? <em aria-hidden="true">{Math.min(queueCount, 99)}</em> : null}
+            </span>
+            <strong>{item.label}</strong>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+export function QueuePanel({
+  tasks,
+  capabilities,
+  persistenceState,
+  target,
+  onOpenCapture,
+  onRetry,
+  onRetryRecognition,
+  onRemove,
+  onClearSucceeded
+}: {
+  tasks: readonly UploadTask[];
+  capabilities: CompanionHostCapabilities;
+  persistenceState: PersistenceState;
+  target?: PairingTarget;
+  onOpenCapture(): void;
+  onRetry(id: string): void;
+  onRetryRecognition(task: UploadTask): void;
+  onRemove(id: string): void;
+  onClearSucceeded(): void;
+}) {
+  const activeTasks = tasks.filter((task) => !isFullyComplete(task)).length;
+  const succeededTasks = tasks.length - activeTasks;
+  return (
+    <section className="android-tab-page queue-tab" aria-label="处理队列">
+      <button className="queue-continue-card" type="button" onClick={onOpenCapture}>
+        <span><strong>继续拍摄</strong><small>{target ? `${target.notebookTitle} · ${target.title}` : "选择一份笔记后开始"}</small></span>
+        <i><Camera size={23} /></i>
+      </button>
+
+      <div className="queue-section-heading">
+        <div><h2>处理队列</h2><small>{tasks.length ? `${tasks.length} 项记录` : "暂无记录"}</small></div>
+        {succeededTasks > 0 ? <button type="button" onClick={onClearSucceeded}>清除已完成</button> : null}
+      </div>
+
+      {tasks.length ? (
+        <div className="upload-task-list editorial-task-list">
+          {tasks.map((task) => (
+            <UploadTaskCard
+              key={task.id}
+              task={task}
+              canRetryRecognition={capabilities.recognitionRetry}
+              onRetry={() => onRetry(task.id)}
+              onRetryRecognition={() => onRetryRecognition(task)}
+              onRemove={() => onRemove(task.id)}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="queue-empty-state">
+          <ListChecks size={34} />
+          <h2>队列是空的</h2>
+          <p>拍下页面后，它会立刻出现在这里，并在连接可用时发送到电脑。</p>
+          <button type="button" onClick={onOpenCapture}>去拍摄</button>
+        </div>
+      )}
+      <div className={`storage-note queue-storage-note ${persistenceState}`}>
+        <HardDrive size={15} /><span>{persistenceLabel(persistenceState)}</span>
+      </div>
+    </section>
   );
 }
 
@@ -975,6 +1180,8 @@ export function CapturePanel({
   tasks,
   capabilities,
   persistenceState,
+  presentation = "panel",
+  onOpenQueue,
   onFiles,
   onRetry,
   onRetryRecognition,
@@ -986,6 +1193,8 @@ export function CapturePanel({
   tasks: readonly UploadTask[];
   capabilities: CompanionHostCapabilities;
   persistenceState: PersistenceState;
+  presentation?: "panel" | "page";
+  onOpenQueue?(): void;
   onFiles(files: readonly File[], kind: UploadMaterialKind, target: PairingTarget): Promise<void>;
   onRetry(id: string): void;
   onRetryRecognition(task: UploadTask): void;
@@ -1083,8 +1292,8 @@ export function CapturePanel({
 
   return (
     <>
-    <section className="capture-panel" aria-labelledby="capture-title">
-      <button className="capture-heading" type="button" onClick={() => setExpanded((value) => !value)}>
+    <section className={`capture-panel ${presentation === "page" ? "capture-page-panel" : ""}`} aria-labelledby="capture-title">
+      {presentation === "panel" ? <button className="capture-heading" type="button" onClick={() => setExpanded((value) => !value)}>
         <span>
           <UploadCloud size={18} />
           <span>
@@ -1093,30 +1302,35 @@ export function CapturePanel({
           </span>
         </span>
         <ChevronRight className={expanded ? "expanded" : ""} size={18} />
-      </button>
-      {expanded && (
+      </button> : null}
+      {(presentation === "page" || expanded) && (
         <div className="capture-body">
-          <div className="target-pickers">
-            <label>
-              <span>Notebook</span>
-              <select value={notebookId} onChange={(event) => selectNotebook(event.target.value)}>
-                {groups.map((group) => (
-                  <option key={group.notebookId} value={group.notebookId}>{group.title}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Session</span>
-              <select value={target?.sessionId ?? ""} onChange={(event) => setSessionId(event.target.value)}>
-                {sessions.map((session) => (
-                  <option key={session.sessionId} value={session.sessionId}>{session.title}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-
           {capabilities.imageUpload && (
-            <div className="capture-photo-row">
+            <div className="browser-camera-stage">
+              {presentation === "page" ? <div className="browser-camera-message">
+                <Camera size={38} />
+                <strong>使用系统相机拍摄</strong>
+                <small>打开厂商相机完成取景、防抖与对焦，返回后照片会立即进入当前批次。</small>
+              </div> : null}
+              <div className="target-pickers camera-target-pickers">
+                <label>
+                  <span>Notebook</span>
+                  <select value={notebookId} onChange={(event) => selectNotebook(event.target.value)}>
+                    {groups.map((group) => (
+                      <option key={group.notebookId} value={group.notebookId}>{group.title}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Session</span>
+                  <select value={target?.sessionId ?? ""} onChange={(event) => setSessionId(event.target.value)}>
+                    {sessions.map((session) => (
+                      <option key={session.sessionId} value={session.sessionId}>{session.title}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="capture-photo-row">
               <button
                 type="button"
                 className="capture-photo-button"
@@ -1129,12 +1343,14 @@ export function CapturePanel({
                 type="button"
                 className={`capture-edit-toggle ${editAfterCapture ? "active" : ""}`}
                 role="switch"
+                aria-label="拍后编辑"
                 aria-checked={editAfterCapture}
                 onClick={() => setEditAfterCapture((value) => !value)}
               >
                 <span>拍后编辑</span>
                 <strong>{editAfterCapture ? "开" : "关"}</strong>
               </button>
+              </div>
             </div>
           )}
 
@@ -1260,7 +1476,16 @@ export function CapturePanel({
             <span>{persistenceLabel(persistenceState)}</span>
           </div>
 
-          {tasks.length > 0 && (
+          {presentation === "page" && onOpenQueue ? (
+            <button className="open-local-queue" type="button" onClick={onOpenQueue}>
+              <ListChecks size={18} />
+              <span>打开本机队列</span>
+              <strong>{activeTasks > 0 ? activeTasks : ""}</strong>
+              <ChevronRight size={17} />
+            </button>
+          ) : null}
+
+          {presentation === "panel" && tasks.length > 0 && (
             <div className="upload-queue" ref={uploadQueueElement}>
               <div className="queue-heading">
                 <strong>本机队列</strong>
@@ -1680,6 +1905,47 @@ export function connectionDetail(state: SyncState, message: string): { title: st
     title: "正在显示本机缓存",
     body: message || "尚未完成本次在线同步。"
   };
+}
+
+export function sessionPreviewText(cached: CachedSession): string {
+  const markdownText = cached.markdown
+    .replace(/<?!?--?\s*block:[^\n>]*(?:--?>)?/gi, " ")
+    .replace(/<?!?--?\s*source:[^\n>]*(?:--?>)?/gi, " ")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\$\$[\s\S]*?\$\$/g, " ")
+    .replace(/\\\[[\s\S]*?\\\]/g, " ")
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, formula: string) => compactFormulaText(formula))
+    .replace(/\$([^$\n]+)\$/g, (_, formula: string) => compactFormulaText(formula))
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/[`*_>~-]+/g, " ")
+    .replace(/<[^>]+>/g, " ");
+  const parsed = new DOMParser().parseFromString(cached.html, "text/html");
+  parsed.querySelectorAll("script, style, math, .katex, .MathJax").forEach((node) => node.remove());
+  const renderedFallback = parsed.body.textContent ?? "";
+  const normalized = (markdownText || renderedFallback)
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[，,、]?\s*(?:并且|其中|因此|则|以及)$/u, "")
+    .trim();
+  if (normalized.length <= 180) return normalized;
+  return `${normalized.slice(0, 176).trimEnd()}…`;
+}
+
+function compactFormulaText(formula: string): string {
+  return formula
+    .replace(/\\(?:mathrm|mathbf|mathit|operatorname)\{([^{}]+)\}/g, "$1")
+    .replace(/\\(?:left|right|,|;|!)/g, "")
+    .replace(/\\omega\b/g, "ω")
+    .replace(/\\leq?\b/g, "≤")
+    .replace(/\\geq?\b/g, "≥")
+    .replace(/\\times\b/g, "×")
+    .replace(/\\cdot\b/g, "·")
+    .replace(/\\[A-Za-z]+\b/g, "")
+    .replace(/[{}]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function formatLastSuccessfulSync(value?: string): string {

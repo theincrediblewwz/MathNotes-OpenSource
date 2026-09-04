@@ -3,8 +3,10 @@ package com.mathnotes.capture
 import android.content.Intent
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,25 +16,40 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -40,6 +57,13 @@ import androidx.core.content.FileProvider
 import com.mathnotes.capture.storage.CaptureEntity
 import com.mathnotes.capture.storage.CaptureState
 import com.mathnotes.capture.storage.MaterialType
+import com.mathnotes.capture.standalone.StandaloneBlockEntity
+import com.mathnotes.capture.standalone.StandaloneNotebookEntity
+import com.mathnotes.capture.standalone.StandaloneProviderCatalog
+import com.mathnotes.capture.standalone.StandaloneRecognitionTaskEntity
+import com.mathnotes.capture.standalone.StandaloneSessionEntity
+import com.mathnotes.capture.standalone.StandaloneTaskStatus
+import com.mathnotes.capture.standalone.taskStatusLabel
 import com.mathnotes.capture.ui.MathNotesColors
 import com.mathnotes.capture.ui.MathNotesPageHeader
 import com.mathnotes.capture.ui.MathNotesPaper
@@ -60,52 +84,162 @@ fun QueueScreen(
     onRetry: (CaptureEntity) -> Unit,
     onCancel: (CaptureEntity) -> Unit,
     onClearRecentUploaded: () -> Unit,
-    onClearUploadedHistory: () -> Unit
+    onClearUploadedHistory: () -> Unit,
+    onDeleteHistory: (CaptureEntity) -> Unit = {},
+    focusCaptureId: String? = null,
+    onFocusConsumed: () -> Unit = {},
+    onDeleteTask: (CaptureEntity) -> Unit = {},
+    localTasks: List<StandaloneRecognitionTaskEntity> = emptyList(),
+    localBlocks: List<StandaloneBlockEntity> = emptyList(),
+    localSessions: List<StandaloneSessionEntity> = emptyList(),
+    localNotebooks: List<StandaloneNotebookEntity> = emptyList(),
+    onDeleteLocalTask: (StandaloneRecognitionTaskEntity) -> Unit = {},
+    connectionLabel: String = "本机识别",
+    captureTargetLabel: String = "本机笔记",
+    onContinueCapture: () -> Unit = {}
 ) {
     var view by remember { mutableStateOf(LibraryView.RECENT) }
     var preview by remember { mutableStateOf<CaptureEntity?>(null) }
+    var localPreview by remember { mutableStateOf<Pair<StandaloneRecognitionTaskEntity, CaptureGalleryItem>?>(null) }
     var confirmClearRecent by remember { mutableStateOf(false) }
     var confirmClearHistory by remember { mutableStateOf(false) }
     val recentCaptures = remember(captures) { captures.filterNot { it.hiddenFromRecent } }
+    val displayedRecentCaptures = remember(recentCaptures) { recentCaptures.take(40) }
+    val recentLocalTasks = remember(localTasks) { localTasks.take(40) }
+    val localHistoryTasks = remember(localTasks) {
+        localTasks.filter { it.status in setOf(
+            StandaloneTaskStatus.SUCCEEDED,
+            StandaloneTaskStatus.FAILED,
+            StandaloneTaskStatus.POSSIBLY_CHARGED,
+            StandaloneTaskStatus.CANCELLED
+        ) }
+    }
+    val listState = rememberLazyListState()
+    LaunchedEffect(focusCaptureId, recentCaptures) {
+        val targetId = focusCaptureId ?: return@LaunchedEffect
+        view = LibraryView.RECENT
+        try {
+            withFrameNanos { }
+            val targetIndex = displayedRecentCaptures.indexOfFirst { it.captureId == targetId }
+            listState.animateScrollToItem(if (targetIndex >= 0) targetIndex + 1 else 0)
+        } finally {
+            onFocusConsumed()
+        }
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
+        state = listState,
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 22.dp,
-            top = 28.dp,
+            top = 14.dp,
             end = 22.dp,
-            bottom = 112.dp
+            bottom = 132.dp
         )
     ) {
         item {
-            MathNotesPageHeader(
-                eyebrow = "本机素材",
-                title = "上传与历史",
-                detail = "最近任务保持扁平；历史按电脑与 Notebook 归档。"
-            )
-            Spacer(Modifier.height(18.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LibraryTab("最近", view == LibraryView.RECENT, Modifier.weight(1f)) { view = LibraryView.RECENT }
-                LibraryTab("历史", view == LibraryView.HISTORY, Modifier.weight(1f)) { view = LibraryView.HISTORY }
-            }
-            if (view == LibraryView.HISTORY && captures.any { it.state == CaptureState.UPLOADED }) {
-                Spacer(Modifier.height(9.dp))
-                MathNotesSecondaryButton(
-                    "清空已上传记录",
-                    { confirmClearHistory = true },
-                    Modifier.fillMaxWidth()
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "今日采集",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = MathNotesColors.Ink,
+                    fontFamily = FontFamily.Serif,
+                    modifier = Modifier.weight(1f)
                 )
-            } else if (view == LibraryView.RECENT && recentCaptures.any { it.state == CaptureState.UPLOADED }) {
-                Spacer(Modifier.height(9.dp))
-                MathNotesSecondaryButton(
-                    "清理最近已完成",
-                    { confirmClearRecent = true },
-                    Modifier.fillMaxWidth()
-                )
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MathNotesColors.AccentSoft,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        MathNotesStatusDot(MathNotesColors.Accent)
+                        Text(connectionLabel, style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Accent, maxLines = 1)
+                    }
+                }
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(14.dp))
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(170.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable(onClick = onContinueCapture),
+                shape = RoundedCornerShape(18.dp),
+                color = MathNotesColors.AccentSoft,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MathNotesColors.Line),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 18.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("继续拍摄", style = MaterialTheme.typography.titleLarge, color = MathNotesColors.Accent, fontFamily = FontFamily.Serif)
+                        Spacer(Modifier.height(8.dp))
+                        Text(captureTargetLabel, style = MaterialTheme.typography.bodyMedium, color = MathNotesColors.Muted, maxLines = 2)
+                    }
+                    Surface(
+                        modifier = Modifier.size(48.dp),
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        color = MathNotesColors.Accent
+                    ) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Icon(
+                                painterResource(R.drawable.ic_mathnotes_camera),
+                                contentDescription = null,
+                                tint = androidx.compose.ui.graphics.Color.White,
+                                modifier = Modifier.size(23.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(34.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (view == LibraryView.RECENT) "处理队列" else "全部记录",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MathNotesColors.Ink,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    if (view == LibraryView.RECENT) "查看全部 ›" else "返回队列",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MathNotesColors.Accent,
+                    modifier = Modifier.clearAndSetSemantics {
+                        text = AnnotatedString(if (view == LibraryView.RECENT) "历史" else "返回队列")
+                    }.clip(RoundedCornerShape(9.dp)).clickable {
+                        view = if (view == LibraryView.RECENT) LibraryView.HISTORY else LibraryView.RECENT
+                    }.padding(horizontal = 5.dp, vertical = 8.dp)
+                )
+                if (view == LibraryView.HISTORY && captures.any { it.state == CaptureState.UPLOADED }) {
+                    Text(
+                        "清空",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MathNotesColors.Error,
+                        modifier = Modifier.clip(RoundedCornerShape(9.dp)).clickable { confirmClearHistory = true }.padding(start = 10.dp, top = 8.dp, bottom = 8.dp)
+                    )
+                } else if (view == LibraryView.RECENT && recentCaptures.any { it.state == CaptureState.UPLOADED }) {
+                    Text(
+                        "清理",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MathNotesColors.Muted,
+                        modifier = Modifier.clip(RoundedCornerShape(9.dp)).clickable { confirmClearRecent = true }.padding(start = 10.dp, top = 8.dp, bottom = 8.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.height(9.dp))
         }
 
-        if ((view == LibraryView.RECENT && recentCaptures.isEmpty()) || (view == LibraryView.HISTORY && captures.isEmpty())) {
+        if (
+            (view == LibraryView.RECENT && recentCaptures.isEmpty() && recentLocalTasks.isEmpty()) ||
+            (view == LibraryView.HISTORY && captures.isEmpty() && localHistoryTasks.isEmpty())
+        ) {
             item {
                 MathNotesPaper(Modifier.fillMaxWidth()) {
                     Text("还没有素材", style = MaterialTheme.typography.titleMedium)
@@ -118,24 +252,81 @@ fun QueueScreen(
                 }
             }
         } else if (view == LibraryView.RECENT) {
-            items(recentCaptures.take(40), key = { it.captureId }) { capture ->
+            items(recentLocalTasks, key = { "local:${it.id}" }) { task ->
+                val block = localBlocks.firstOrNull { it.id == task.assetBlockId }
+                LocalRecognitionTaskCard(
+                    task = task,
+                    block = block,
+                    session = localSessions.firstOrNull { it.id == task.sessionId },
+                    notebook = localSessions.firstOrNull { it.id == task.sessionId }?.let { session ->
+                        localNotebooks.firstOrNull { it.id == session.notebookId }
+                    },
+                    onDelete = onDeleteLocalTask,
+                    onPreview = {
+                        if (block != null && File(block.localPath).isFile) {
+                            localPreview = task to CaptureGalleryItem(
+                                id = "queue-local:${task.id}",
+                                path = block.localPath,
+                                label = localSessions.firstOrNull { it.id == task.sessionId }?.title ?: "本机拍摄",
+                                canDelete = task.status != StandaloneTaskStatus.CLAIMED,
+                                createdAt = task.createdAt
+                            )
+                        }
+                    }
+                )
+            }
+            items(displayedRecentCaptures, key = { it.captureId }) { capture ->
                 CaptureCard(
                     capture = capture,
                     onDelete = onDelete,
+                    onDeleteHistory = onDeleteHistory,
+                    onDeleteTask = onDeleteTask,
                     onRetry = onRetry,
                     onCancel = onCancel,
                     onPreview = { preview = capture }
                 )
             }
         } else {
+            items(localHistoryTasks, key = { "local-history:${it.id}" }) { task ->
+                val block = localBlocks.firstOrNull { it.id == task.assetBlockId }
+                LocalRecognitionTaskCard(
+                    task = task,
+                    block = block,
+                    session = localSessions.firstOrNull { it.id == task.sessionId },
+                    notebook = localSessions.firstOrNull { it.id == task.sessionId }?.let { session ->
+                        localNotebooks.firstOrNull { it.id == session.notebookId }
+                    },
+                    onDelete = onDeleteLocalTask,
+                    onPreview = {
+                        if (block != null && File(block.localPath).isFile) {
+                            localPreview = task to CaptureGalleryItem(
+                                id = "queue-local:${task.id}",
+                                path = block.localPath,
+                                label = localSessions.firstOrNull { it.id == task.sessionId }?.title ?: "本机拍摄",
+                                canDelete = task.status != StandaloneTaskStatus.CLAIMED,
+                                createdAt = task.createdAt
+                            )
+                        }
+                    }
+                )
+            }
             item {
-                HistoryGroups(captures, onDelete, onRetry, onCancel) { preview = it }
+                HistoryGroups(captures, onDelete, onDeleteHistory, onDeleteTask, onRetry, onCancel) { preview = it }
             }
         }
     }
 
     preview?.let { capture ->
         MaterialPreview(capture, onDismiss = { preview = null })
+    }
+    localPreview?.let { (task, item) ->
+        CapturePreviewGallery(
+            items = listOf(item),
+            initialSelectedId = item.id,
+            detailOnly = true,
+            onClose = { localPreview = null },
+            onDelete = { onDeleteLocalTask(task) }
+        )
     }
     if (confirmClearRecent) {
         AlertDialog(
@@ -176,6 +367,7 @@ private fun LibraryTab(text: String, selected: Boolean, modifier: Modifier, onCl
     Surface(
         modifier = modifier
             .height(44.dp)
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(10.dp),
         color = if (selected) MathNotesColors.AccentSoft else MathNotesColors.Paper,
@@ -195,6 +387,8 @@ private fun LibraryTab(text: String, selected: Boolean, modifier: Modifier, onCl
 private fun HistoryGroups(
     captures: List<CaptureEntity>,
     onDelete: (CaptureEntity) -> Unit,
+    onDeleteHistory: (CaptureEntity) -> Unit,
+    onDeleteTask: (CaptureEntity) -> Unit,
     onRetry: (CaptureEntity) -> Unit,
     onCancel: (CaptureEntity) -> Unit,
     onPreview: (CaptureEntity) -> Unit
@@ -230,6 +424,8 @@ private fun HistoryGroups(
                             CaptureCard(
                                 capture,
                                 onDelete,
+                                onDeleteHistory,
+                                onDeleteTask,
                                 onRetry,
                                 onCancel,
                                 onPreview,
@@ -254,6 +450,7 @@ private fun FolderRow(
     MathNotesPaper(
         modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -266,22 +463,43 @@ private fun FolderRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun CaptureCard(
     capture: CaptureEntity,
     onDelete: (CaptureEntity) -> Unit,
+    onDeleteHistory: (CaptureEntity) -> Unit,
+    onDeleteTask: (CaptureEntity) -> Unit,
     onRetry: (CaptureEntity) -> Unit,
     onCancel: (CaptureEntity) -> Unit,
     onPreview: (CaptureEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val localFileExists = capture.localCopyAvailable && File(capture.localPath).isFile
-    MathNotesPaper(
-        modifier
-            .fillMaxWidth()
-            .padding(bottom = 9.dp)
-            .clickable(enabled = localFileExists) { onPreview(capture) }
+    var confirmDeleteTask by remember(capture.captureId) { mutableStateOf(false) }
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) confirmDeleteTask = true
+            false
+        },
+        positionalThreshold = { distance -> distance * 0.28f }
+    )
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = modifier.fillMaxWidth().padding(bottom = 9.dp),
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
+        backgroundContent = { QueueDeleteBackground() }
     ) {
+        MathNotesPaper(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .combinedClickable(
+                    onClick = { if (localFileExists) onPreview(capture) },
+                    onLongClick = { confirmDeleteTask = true }
+                )
+        ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             MathNotesStatusDot(queueStateColor(capture.state))
             Text(
@@ -315,19 +533,172 @@ private fun CaptureCard(
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 5.dp)
         )
+        Text(
+            if (capture.state == CaptureState.UPLOADING) "正在上传；先暂停后可长按删除" else "长按可删除这项任务",
+            color = MathNotesColors.Muted,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 4.dp)
+        )
         capture.lastError?.let {
             Text(it, color = MathNotesColors.Error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
         }
-        when (capture.state) {
-            CaptureState.UPLOADED -> if (localFileExists) {
-                MathNotesSecondaryButton("清理本地副本", { onDelete(capture) }, Modifier.padding(top = 10.dp))
+            when (capture.state) {
+                CaptureState.PENDING, CaptureState.UPLOADING -> MathNotesSecondaryButton(
+                    "暂停上传",
+                    { onCancel(capture) },
+                    Modifier.padding(top = 10.dp)
+                )
+                CaptureState.RETRYABLE, CaptureState.PAUSED, CaptureState.BLOCKED_AUTH, CaptureState.FAILED_PERMANENT ->
+                    MathNotesSecondaryButton("立即重试", { onRetry(capture) }, Modifier.padding(top = 10.dp))
             }
-            CaptureState.PENDING, CaptureState.UPLOADING -> MathNotesSecondaryButton(
-                "暂停上传",
-                { onCancel(capture) },
-                Modifier.padding(top = 10.dp)
-            )
-            else -> MathNotesSecondaryButton("立即重试", { onRetry(capture) }, Modifier.padding(top = 10.dp))
+        }
+    }
+    if (confirmDeleteTask) {
+        val uploaded = capture.state == CaptureState.UPLOADED
+        val uploading = capture.state == CaptureState.UPLOADING
+        AlertDialog(
+            onDismissRequest = { confirmDeleteTask = false },
+            title = { Text(if (uploaded) "删除历史？" else "删除任务？") },
+            text = {
+                Text(
+                    when {
+                        uploading -> "这项素材正在上传。请先暂停，确认状态变为“已暂停”后再删除。"
+                        uploaded -> "会删除这条已上传记录和仍保留的本地照片；Windows 端已经收到的内容不会被删除。"
+                        else -> "会取消等待中的工作，并删除这条任务及本机素材；电脑端已经收到的内容不会被撤回。"
+                    }
+                )
+            },
+            confirmButton = {
+                if (!uploading) {
+                    TextButton(onClick = {
+                        if (uploaded) onDeleteHistory(capture) else onDeleteTask(capture)
+                        confirmDeleteTask = false
+                    }) { Text(if (uploaded) "删除历史" else "删除任务") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteTask = false }) { Text(if (uploading) "知道了" else "取消") }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun LocalRecognitionTaskCard(
+    task: StandaloneRecognitionTaskEntity,
+    block: StandaloneBlockEntity?,
+    session: StandaloneSessionEntity?,
+    notebook: StandaloneNotebookEntity?,
+    onDelete: (StandaloneRecognitionTaskEntity) -> Unit,
+    onPreview: () -> Unit
+) {
+    var confirmDelete by remember(task.id) { mutableStateOf(false) }
+    val running = task.status == StandaloneTaskStatus.CLAIMED
+    val thumbnail = block?.localPath?.let { rememberCameraThumbnail(it) }
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) confirmDelete = true
+            false
+        },
+        positionalThreshold = { distance -> distance * 0.28f }
+    )
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 9.dp),
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
+        backgroundContent = { QueueDeleteBackground() }
+    ) {
+        MathNotesPaper(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .combinedClickable(onClick = onPreview, onLongClick = { confirmDelete = true })
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(13.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    modifier = Modifier.size(width = 68.dp, height = 92.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    color = MathNotesColors.Subtle,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MathNotesColors.Line)
+                ) {
+                    if (thumbnail != null) {
+                        Image(
+                            bitmap = thumbnail.asImageBitmap(),
+                            contentDescription = "拍摄缩略图",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MathNotesStatusDot(if (running) MathNotesColors.Accent else if (task.status == StandaloneTaskStatus.SUCCEEDED) MathNotesColors.Success else MathNotesColors.Warning)
+                        Text("本机识别", modifier = Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Accent)
+                        Spacer(Modifier.weight(1f))
+                        Text(formatTime(task.createdAt), style = MaterialTheme.typography.bodySmall, color = MathNotesColors.Muted)
+                    }
+                    Spacer(Modifier.height(7.dp))
+                    Text(
+                        session?.title?.ifBlank { null } ?: "拍摄内容",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MathNotesColors.Ink,
+                        maxLines = 1
+                    )
+                    Text(taskStatusLabel(task.status), style = MaterialTheme.typography.bodySmall, color = if (running) MathNotesColors.Accent else MathNotesColors.Muted)
+                    Text(
+                        listOfNotNull(notebook?.title, session?.title).joinToString(" · ").ifBlank { "本机笔记" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MathNotesColors.Muted,
+                        maxLines = 1
+                    )
+                    Text(
+                        if (running) "正在识别" else "向左滑动或长按可删除",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MathNotesColors.Muted,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除本机任务？") },
+            text = {
+                Text(
+                    if (running) "这项任务正在调用识别服务。为避免把可能已经计费的请求误作未发送，请等待任务结束后再删除。"
+                    else "会删除队列任务、本机照片和对应识别草稿；Windows 笔记不会受到影响。"
+                )
+            },
+            confirmButton = {
+                if (!running) {
+                    TextButton(onClick = {
+                        onDelete(task)
+                        confirmDelete = false
+                    }) { Text("删除任务") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text(if (running) "知道了" else "取消") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun QueueDeleteBackground() {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        shape = RoundedCornerShape(16.dp),
+        color = MathNotesColors.Error,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
+    ) {
+        Box(Modifier.fillMaxSize().padding(end = 24.dp), contentAlignment = Alignment.CenterEnd) {
+            Text("删除", color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelLarge)
         }
     }
 }

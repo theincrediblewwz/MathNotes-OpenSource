@@ -14,6 +14,7 @@ export type ImportSessionPdfInput = Readonly<{
   fileName: string;
   bytes: Buffer;
   baseRevision: string;
+  pageCountHint?: number;
 }>;
 
 export type ImportSessionPdfResult = Readonly<{
@@ -57,6 +58,10 @@ export class SessionPdfImportService {
     if (input.bytes.byteLength === 0) throw new SessionPdfImportError("empty_pdf", 400);
     if (input.bytes.byteLength > MAX_LOCAL_PDF_BYTES) throw new SessionPdfImportError("pdf_too_large", 413);
     if (!isPdf(input.bytes)) throw new SessionPdfImportError("unsupported_pdf", 415);
+    if (input.pageCountHint !== undefined &&
+        (!Number.isInteger(input.pageCountHint) || input.pageCountHint < 1 || input.pageCountHint > 100_000)) {
+      throw new SessionPdfImportError("unsupported_pdf", 415);
+    }
 
     const { session, sessionDir, sessionPath } = await readSession(
       this.rootDir,
@@ -76,7 +81,7 @@ export class SessionPdfImportService {
     if (!assetAlreadyExists) await writeAtomically(assetPath, input.bytes);
 
     const timestamp = this.now();
-    const pageCount = countPdfPages(input.bytes);
+    const pageCount = input.pageCountHint ?? countPdfPages(input.bytes);
     const block = createBlockRef({
       id: nextBlockId(session),
       type: "pdf",

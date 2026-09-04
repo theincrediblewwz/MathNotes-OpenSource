@@ -9,6 +9,7 @@ import {
 } from "@mathnotes/shared";
 import { SessionEditService, type SaveMarkdownBlockResult } from "./sessionEditService";
 import { readReadonlySessionBlock } from "./sessionReadService";
+import { sha256Text } from "./sessionRevision";
 
 export type SelectionEditProposalStatus = "proposed" | "applied" | "cancelled";
 
@@ -19,6 +20,7 @@ export type SelectionEditProposal = Readonly<{
   sessionId: string;
   blockId: string;
   baseRevision: string;
+  baseMarkdownHash?: string;
   selection: TextSelection;
   instruction: string;
   replacementMarkdown: string;
@@ -27,6 +29,7 @@ export type SelectionEditProposal = Readonly<{
   createdAt: string;
   updatedAt: string;
   appliedAt?: string;
+  retriedAfterUnlockAt?: string;
 }>;
 
 export type ProposeSelectionEditInput = Readonly<{
@@ -128,6 +131,7 @@ export class SessionSelectionEditService {
       sessionId: input.sessionId,
       blockId: input.blockId,
       baseRevision: block.content.baseRevision,
+      baseMarkdownHash: sha256Text(block.content.markdown),
       selection: input.selection,
       instruction,
       replacementMarkdown,
@@ -144,26 +148,64 @@ export class SessionSelectionEditService {
     notebookId: string;
     sessionId: string;
     proposalId: string;
+    replacementMarkdown?: string;
+    retryAfterUnlock?: boolean;
   }): Promise<Readonly<{ version: 1; applied: true; proposal: SelectionEditProposal; result: SaveMarkdownBlockResult }>> {
     const proposal = await this.read(input);
     if (proposal.status !== "proposed") throw new SessionSelectionEditError("proposal_not_pending", 409);
+    const replacementMarkdown = input.replacementMarkdown === undefined
+      ? proposal.replacementMarkdown
+      : normalizeReplacement(input.replacementMarkdown);
+    if (!replacementMarkdown) throw new SessionSelectionEditError("empty_replacement", 422);
+    const baseRevision = input.retryAfterUnlock
+      ? await this.resolveUnlockedRetryRevision(proposal)
+      : proposal.baseRevision;
     const result = await this.editor.applySelectionEdit({
       notebookId: proposal.notebookId,
       sessionId: proposal.sessionId,
       blockId: proposal.blockId,
-      baseRevision: proposal.baseRevision,
+      baseRevision,
       selection: proposal.selection,
-      replacement: proposal.replacementMarkdown
+      replacement: replacementMarkdown
     });
     const appliedAt = this.now();
     const applied: SelectionEditProposal = {
       ...proposal,
+      baseRevision,
+      replacementMarkdown,
       status: "applied",
       appliedAt,
+      retriedAfterUnlockAt: input.retryAfterUnlock ? appliedAt : proposal.retriedAfterUnlockAt,
       updatedAt: appliedAt
     };
     await writeAtomic(this.proposalPath(applied), `${JSON.stringify(applied, null, 2)}\n`);
     return { version: 1, applied: true, proposal: applied, result };
+  }
+
+  private async resolveUnlockedRetryRevision(proposal: SelectionEditProposal): Promise<string> {
+    const block = await readReadonlySessionBlock({
+      rootDir: this.rootDir,
+      notebookId: proposal.notebookId,
+      sessionId: proposal.sessionId,
+      blockId: proposal.blockId
+    });
+    if (block.content.kind !== "markdown") throw new SessionSelectionEditError("not_markdown_block", 422);
+    if (!block.block.editable) {
+      throw new SessionSelectionEditError(
+        block.content.blockLocked || block.block.status === "locked" ? "block_locked" : "block_not_editable",
+        423
+      );
+    }
+    if (!proposal.baseMarkdownHash || sha256Text(block.content.markdown) !== proposal.baseMarkdownHash) {
+      throw new SessionSelectionEditError("selection_stale", 409);
+    }
+    const validation = applySelectionEdit({
+      markdown: block.content.markdown,
+      selection: proposal.selection,
+      replacement: proposal.selection.selectedText
+    });
+    if (!validation.ok) throw selectionValidationError(validation.reason);
+    return block.content.baseRevision;
   }
 
   async cancel(input: {

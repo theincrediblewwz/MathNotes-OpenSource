@@ -30,14 +30,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 
 @Composable
 fun MathNotesPageHeader(
@@ -53,19 +54,22 @@ fun MathNotesPageHeader(
                 style = androidx.compose.material3.MaterialTheme.typography.labelMedium,
                 color = MathNotesColors.Muted
             )
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(6.dp))
         }
         Text(
             title,
             style = androidx.compose.material3.MaterialTheme.typography.headlineLarge,
-            color = MathNotesColors.Ink
+            color = MathNotesColors.Ink,
+            fontFamily = FontFamily.Serif
         )
-        Spacer(Modifier.height(7.dp))
-        Text(
-            detail,
-            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-            color = MathNotesColors.Muted
-        )
+        if (detail.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                detail,
+                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                color = MathNotesColors.Muted
+            )
+        }
     }
 }
 
@@ -76,7 +80,7 @@ fun MathNotesPaper(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MathNotesColors.Paper,
         border = BorderStroke(1.dp, MathNotesColors.Line),
         tonalElevation = 0.dp,
@@ -92,13 +96,14 @@ fun MathNotesPrimaryButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    @DrawableRes icon: Int? = null
+    @DrawableRes icon: Int? = null,
+    height: Dp = 52.dp
 ) {
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.height(52.dp),
-        shape = RoundedCornerShape(10.dp),
+        modifier = modifier.height(height),
+        shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = MathNotesColors.Accent,
             contentColor = Color.White,
@@ -127,7 +132,7 @@ fun MathNotesSecondaryButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.height(46.dp).semantics { this.selected = selected },
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(14.dp),
         border = BorderStroke(if (selected) 1.5.dp else 1.dp, if (selected) MathNotesColors.Accent else MathNotesColors.Line),
         colors = ButtonDefaults.outlinedButtonColors(
             containerColor = if (selected) MathNotesColors.AccentSoft else Color.Transparent,
@@ -157,17 +162,17 @@ fun MathNotesFloatingNavigation(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    Column(
         modifier = modifier
-            .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 10.dp)
             .fillMaxWidth()
-            .shadow(10.dp, RoundedCornerShape(16.dp), ambientColor = Color(0x221F201D), spotColor = Color(0x221F201D)),
-        shape = RoundedCornerShape(16.dp),
-        color = MathNotesColors.Paper.copy(alpha = 0.97f),
-        border = BorderStroke(1.dp, MathNotesColors.Line)
+            .background(MathNotesColors.Paper)
+            .navigationBarsPadding()
     ) {
-        Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(MathNotesColors.Line))
+        Row(
+            Modifier.fillMaxWidth().height(90.dp).padding(horizontal = 12.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             items.forEach { item ->
                 MathNotesNavigationItem(
                     item = item,
@@ -185,16 +190,16 @@ private fun RowScope.MathNotesNavigationItem(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    val itemShape = RoundedCornerShape(11.dp)
+    val itemShape = RoundedCornerShape(14.dp)
     Column(
         modifier = Modifier
             .weight(1f)
-            .height(58.dp)
+            .height(80.dp)
             .semantics { this.selected = selected }
             .clip(itemShape)
-            .background(if (selected) MathNotesColors.AccentSoft else Color.Transparent, itemShape)
+            .background(Color.Transparent, itemShape)
             .clickable(role = Role.Tab, onClick = onClick)
-            .padding(vertical = 7.dp),
+            .padding(top = 12.dp, bottom = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
@@ -222,7 +227,7 @@ fun MathNotesFloatingIconButton(
     dark: Boolean = false
 ) {
     Surface(
-        modifier = modifier.shadow(8.dp, RoundedCornerShape(14.dp), ambientColor = Color(0x331F201D), spotColor = Color(0x331F201D)),
+        modifier = modifier,
         shape = RoundedCornerShape(14.dp),
         color = if (dark) Color(0xE6242424) else MathNotesColors.Paper.copy(alpha = 0.9f),
         border = BorderStroke(1.dp, if (dark) Color.White.copy(alpha = 0.12f) else MathNotesColors.Line)

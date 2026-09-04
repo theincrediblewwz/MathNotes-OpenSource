@@ -34,6 +34,7 @@ export type NetworkApiRouteId =
 export type LocalShellApiRouteId =
   | "local.health"
   | "local.catalog"
+  | "local.notes.backup"
   | "local.companion.pairing.challenge"
   | "local.notebook.create"
   | "local.session.create"
@@ -42,16 +43,26 @@ export type LocalShellApiRouteId =
   | "local.session.block.save"
   | "local.session.markdown.append"
   | "local.session.block.lock"
+  | "local.session.block.span.protect"
+  | "local.session.block.span.unlock"
   | "local.session.markdown.preview"
   | "local.markdown.preview"
   | "local.session.blocks.reorder"
   | "local.session.blocks.delete"
+  | "local.session.blocks.restore"
   | "local.session.blocks.transfer"
   | "local.session.conflicts"
   | "local.session.conflict"
   | "local.session.conflict.resolve"
   | "local.session.image.import"
+  | "local.session.image.edit"
   | "local.session.pdf.import"
+  | "local.session.pdf-recognition.page"
+  | "local.session.pdf-recognition.start"
+  | "local.session.pdf-recognition.status"
+  | "local.session.pdf-recognition.pause"
+  | "local.session.pdf-recognition.resume"
+  | "local.session.pdf-recognition.cancel"
   | "local.session.recognition.start"
   | "local.session.recognition.status"
   | "local.session.recognition.events"
@@ -96,7 +107,7 @@ export type LocalShellApiRoute = Readonly<{
   id: LocalShellApiRouteId;
   method: "GET" | "POST";
   path: string;
-  capability: "local.workspace.manage" | "local.provider.manage";
+  capability: "local.workspace.manage" | "local.provider.manage" | "local.filesystem.manage";
 }>;
 
 export const NETWORK_API_ROUTES: readonly NetworkApiRoute[] = [
@@ -118,6 +129,7 @@ export const NETWORK_API_ROUTES: readonly NetworkApiRoute[] = [
 export const LOCAL_SHELL_API_ROUTES: readonly LocalShellApiRoute[] = [
   { id: "local.health", method: "GET", path: "/local/v1/health", capability: "local.workspace.manage" },
   { id: "local.catalog", method: "GET", path: "/local/v1/catalog", capability: "local.workspace.manage" },
+  { id: "local.notes.backup", method: "POST", path: "/local/v1/notes/backup", capability: "local.filesystem.manage" },
   { id: "local.companion.pairing.challenge", method: "POST", path: "/local/v1/companion/pairing-challenge", capability: "local.workspace.manage" },
   { id: "local.notebook.create", method: "POST", path: "/local/v1/notebooks", capability: "local.workspace.manage" },
   { id: "local.session.create", method: "POST", path: "/local/v1/sessions", capability: "local.workspace.manage" },
@@ -126,16 +138,26 @@ export const LOCAL_SHELL_API_ROUTES: readonly LocalShellApiRoute[] = [
   { id: "local.session.block.save", method: "POST", path: "/local/v1/session/block", capability: "local.workspace.manage" },
   { id: "local.session.markdown.append", method: "POST", path: "/local/v1/session/markdown", capability: "local.workspace.manage" },
   { id: "local.session.block.lock", method: "POST", path: "/local/v1/session/block/lock", capability: "local.workspace.manage" },
+  { id: "local.session.block.span.protect", method: "POST", path: "/local/v1/session/block/span/protect", capability: "local.workspace.manage" },
+  { id: "local.session.block.span.unlock", method: "POST", path: "/local/v1/session/block/span/unlock", capability: "local.workspace.manage" },
   { id: "local.session.markdown.preview", method: "POST", path: "/local/v1/session/markdown/preview", capability: "local.workspace.manage" },
   { id: "local.markdown.preview", method: "POST", path: "/local/v1/markdown/preview", capability: "local.workspace.manage" },
   { id: "local.session.blocks.reorder", method: "POST", path: "/local/v1/session/blocks/reorder", capability: "local.workspace.manage" },
   { id: "local.session.blocks.delete", method: "POST", path: "/local/v1/session/blocks/delete", capability: "local.workspace.manage" },
+  { id: "local.session.blocks.restore", method: "POST", path: "/local/v1/session/blocks/restore", capability: "local.workspace.manage" },
   { id: "local.session.blocks.transfer", method: "POST", path: "/local/v1/session/blocks/transfer", capability: "local.workspace.manage" },
   { id: "local.session.conflicts", method: "GET", path: "/local/v1/session/conflicts", capability: "local.workspace.manage" },
   { id: "local.session.conflict", method: "GET", path: "/local/v1/session/conflict", capability: "local.workspace.manage" },
   { id: "local.session.conflict.resolve", method: "POST", path: "/local/v1/session/conflict/resolve", capability: "local.workspace.manage" },
   { id: "local.session.image.import", method: "POST", path: "/local/v1/session/image", capability: "local.workspace.manage" },
+  { id: "local.session.image.edit", method: "POST", path: "/local/v1/session/image/edit", capability: "local.workspace.manage" },
   { id: "local.session.pdf.import", method: "POST", path: "/local/v1/session/pdf", capability: "local.workspace.manage" },
+  { id: "local.session.pdf-recognition.page", method: "POST", path: "/local/v1/session/pdf-recognition/page", capability: "local.workspace.manage" },
+  { id: "local.session.pdf-recognition.start", method: "POST", path: "/local/v1/session/pdf-recognition/start", capability: "local.workspace.manage" },
+  { id: "local.session.pdf-recognition.status", method: "GET", path: "/local/v1/session/pdf-recognition", capability: "local.workspace.manage" },
+  { id: "local.session.pdf-recognition.pause", method: "POST", path: "/local/v1/session/pdf-recognition/pause", capability: "local.workspace.manage" },
+  { id: "local.session.pdf-recognition.resume", method: "POST", path: "/local/v1/session/pdf-recognition/resume", capability: "local.workspace.manage" },
+  { id: "local.session.pdf-recognition.cancel", method: "POST", path: "/local/v1/session/pdf-recognition/cancel", capability: "local.workspace.manage" },
   { id: "local.session.recognition.start", method: "POST", path: "/local/v1/session/recognition", capability: "local.workspace.manage" },
   { id: "local.session.recognition.status", method: "GET", path: "/local/v1/session/recognition", capability: "local.workspace.manage" },
   { id: "local.session.recognition.events", method: "GET", path: "/local/v1/session/recognition/events", capability: "local.workspace.manage" },

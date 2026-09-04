@@ -73,6 +73,29 @@ enum TailscaleServeInspection: Equatable, Sendable {
     }
 }
 
+enum TailscaleIPv4Inspection {
+    static func inspect(_ data: Data) throws -> String {
+        let candidates = String(decoding: data, as: UTF8.self)
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        guard let address = candidates.first,
+              candidates.count == 1,
+              isTailnetIPv4(address) else {
+            throw CompanionHostAutomationError.invalidTailnetAddress
+        }
+        return address
+    }
+
+    static func isTailnetIPv4(_ address: String) -> Bool {
+        let octets = address.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4,
+              octets.allSatisfy({ (0...255).contains($0) }) else {
+            return false
+        }
+        return octets[0] == 100 && (64...127).contains(octets[1])
+    }
+}
+
 struct TailscaleServeCoordinator: Sendable {
     static let expectedProxy = "http://127.0.0.1:1051"
     let executableURL: URL
@@ -95,7 +118,7 @@ struct TailscaleServeCoordinator: Sendable {
         return Self(executableURL: URL(fileURLWithPath: path))
     }
 
-    func ensureServing() async throws -> String {
+    func inspectServing(expectedProxy: String) async throws -> String? {
         try await Task.detached {
             let status = try Self.run(executableURL, arguments: ["serve", "status", "--json"])
             guard status.exitCode == 0 else {
@@ -103,32 +126,25 @@ struct TailscaleServeCoordinator: Sendable {
             }
             switch try TailscaleServeInspection.inspect(
                 status.stdout,
-                expectedProxy: Self.expectedProxy
+                expectedProxy: expectedProxy
             ) {
             case let .ready(origin):
                 return origin
             case .conflict:
                 throw CompanionHostAutomationError.serveConflict
             case .unconfigured:
-                let configured = try Self.run(
-                    executableURL,
-                    arguments: ["serve", "--bg", Self.expectedProxy]
-                )
-                guard configured.exitCode == 0 else {
-                    throw CompanionHostAutomationError.commandFailed(Self.detail(from: configured))
-                }
-                let refreshed = try Self.run(executableURL, arguments: ["serve", "status", "--json"])
-                guard refreshed.exitCode == 0 else {
-                    throw CompanionHostAutomationError.commandFailed(Self.detail(from: refreshed))
-                }
-                guard case let .ready(origin) = try TailscaleServeInspection.inspect(
-                    refreshed.stdout,
-                    expectedProxy: Self.expectedProxy
-                ) else {
-                    throw CompanionHostAutomationError.invalidServeStatus
-                }
-                return origin
+                return nil
             }
+        }.value
+    }
+
+    func readIPv4Address() async throws -> String {
+        try await Task.detached {
+            let result = try Self.run(executableURL, arguments: ["ip", "-4"])
+            guard result.exitCode == 0 else {
+                throw CompanionHostAutomationError.commandFailed(Self.detail(from: result))
+            }
+            return try TailscaleIPv4Inspection.inspect(result.stdout)
         }.value
     }
 
@@ -209,6 +225,7 @@ enum CompanionHostAutomationError: LocalizedError {
     case tailscaleMissing
     case serveConflict
     case invalidServeStatus
+    case invalidTailnetAddress
     case commandFailed(String)
     case commandTimedOut
     case invalidTokenLength
@@ -223,8 +240,10 @@ enum CompanionHostAutomationError: LocalizedError {
             "Tailscale 443 端口已有其他 Serve 或 Funnel 配置；MathNotes 没有覆盖它。"
         case .invalidServeStatus:
             "Tailscale Serve 已运行，但返回了 MathNotes 无法确认的状态。"
+        case .invalidTailnetAddress:
+            "没有读取到可用的 Tailscale IPv4 地址。请确认 Mac 已登录并连接 Tailscale。"
         case let .commandFailed(detail):
-            "Tailscale Serve 配置失败：\(detail)"
+            "Tailscale 命令执行失败：\(detail)"
         case .commandTimedOut:
             "Tailscale Serve 响应超时；MathNotes 没有继续修改网络。"
         case .invalidTokenLength:

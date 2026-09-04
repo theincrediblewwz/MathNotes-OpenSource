@@ -51,14 +51,17 @@ describe("Core API capability policy", () => {
     expect(authorizeCoreApiCapability("trusted-local-host", "pairing.challenge")).toBe(true);
     expect(authorizeCoreApiCapability("paired-device", "local.workspace.manage")).toBe(false);
     expect(authorizeCoreApiCapability("paired-device", "local.provider.manage")).toBe(false);
+    expect(authorizeCoreApiCapability("paired-device", "local.filesystem.manage")).toBe(false);
     expect(authorizeCoreApiCapability("trusted-local-host", "local.workspace.manage")).toBe(true);
     expect(authorizeCoreApiCapability("trusted-local-host", "local.provider.manage")).toBe(true);
+    expect(authorizeCoreApiCapability("trusted-local-host", "local.filesystem.manage")).toBe(true);
   });
 
   it("keeps local shell routes on a separate inventory", () => {
     expect(LOCAL_SHELL_API_ROUTES.map((route) => route.id)).toEqual([
       "local.health",
       "local.catalog",
+      "local.notes.backup",
       "local.companion.pairing.challenge",
       "local.notebook.create",
       "local.session.create",
@@ -67,16 +70,26 @@ describe("Core API capability policy", () => {
       "local.session.block.save",
       "local.session.markdown.append",
       "local.session.block.lock",
+      "local.session.block.span.protect",
+      "local.session.block.span.unlock",
       "local.session.markdown.preview",
       "local.markdown.preview",
       "local.session.blocks.reorder",
       "local.session.blocks.delete",
+      "local.session.blocks.restore",
       "local.session.blocks.transfer",
       "local.session.conflicts",
       "local.session.conflict",
       "local.session.conflict.resolve",
       "local.session.image.import",
+      "local.session.image.edit",
       "local.session.pdf.import",
+      "local.session.pdf-recognition.page",
+      "local.session.pdf-recognition.start",
+      "local.session.pdf-recognition.status",
+      "local.session.pdf-recognition.pause",
+      "local.session.pdf-recognition.resume",
+      "local.session.pdf-recognition.cancel",
       "local.session.recognition.start",
       "local.session.recognition.status",
       "local.session.recognition.events",
@@ -111,6 +124,8 @@ describe("Core API capability policy", () => {
     ]);
     expect(resolveLocalShellApiRoute("GET", "/local/v1/health")?.capability).toBe("local.workspace.manage");
     expect(resolveLocalShellApiRoute("GET", "/local/v1/catalog")?.capability).toBe("local.workspace.manage");
+    expect(resolveLocalShellApiRoute("POST", "/local/v1/notes/backup")?.capability)
+      .toBe("local.filesystem.manage");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/companion/pairing-challenge")?.id)
       .toBe("local.companion.pairing.challenge");
     expect(resolveLocalShellApiRoute("GET", "/local/v1/session/manifest")?.capability).toBe("local.workspace.manage");
@@ -120,6 +135,8 @@ describe("Core API capability policy", () => {
       .toBe("local.session.blocks.reorder");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/blocks/delete")?.id)
       .toBe("local.session.blocks.delete");
+    expect(resolveLocalShellApiRoute("POST", "/local/v1/session/blocks/restore")?.id)
+      .toBe("local.session.blocks.restore");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/markdown/preview")?.id)
       .toBe("local.session.markdown.preview");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/markdown")?.id)
@@ -129,7 +146,16 @@ describe("Core API capability policy", () => {
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/blocks/transfer")?.id)
       .toBe("local.session.blocks.transfer");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/image")?.id).toBe("local.session.image.import");
+    expect(resolveLocalShellApiRoute("POST", "/local/v1/session/image/edit")?.id).toBe("local.session.image.edit");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/pdf")?.id).toBe("local.session.pdf.import");
+    expect(resolveLocalShellApiRoute("POST", "/local/v1/session/pdf-recognition/page")?.id)
+      .toBe("local.session.pdf-recognition.page");
+    expect(resolveLocalShellApiRoute("POST", "/local/v1/session/pdf-recognition/start")?.id)
+      .toBe("local.session.pdf-recognition.start");
+    expect(resolveLocalShellApiRoute("GET", "/local/v1/session/pdf-recognition")?.id)
+      .toBe("local.session.pdf-recognition.status");
+    expect(resolveLocalShellApiRoute("POST", "/local/v1/session/pdf-recognition/pause")?.id)
+      .toBe("local.session.pdf-recognition.pause");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/recognition")?.id).toBe("local.session.recognition.start");
     expect(resolveLocalShellApiRoute("GET", "/local/v1/session/recognition/events")?.id).toBe("local.session.recognition.events");
     expect(resolveLocalShellApiRoute("POST", "/local/v1/session/recognition/rerun")?.id)

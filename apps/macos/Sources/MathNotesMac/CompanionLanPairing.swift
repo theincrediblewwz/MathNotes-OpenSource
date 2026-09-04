@@ -5,6 +5,11 @@ import Darwin
 import Foundation
 import Network
 
+enum CompanionPairingTransport: String, Equatable, Sendable {
+    case privateHTTP = "private_http"
+    case tailnetHTTP = "tailnet_http"
+}
+
 struct CompanionLanAddress: Equatable, Identifiable, Sendable {
     let interfaceName: String
     let address: String
@@ -122,7 +127,12 @@ final class CompanionLanAddressMonitor: ObservableObject {
 }
 
 extension CompanionPairingChallenge {
-    func pairingLink(host: String, port: Int, alternateHosts: [String]) -> String {
+    func pairingLink(
+        host: String,
+        port: Int,
+        alternateHosts: [String],
+        transport: CompanionPairingTransport = .privateHTTP
+    ) -> String {
         var components = URLComponents()
         components.scheme = "mathnotes"
         components.host = "pair"
@@ -133,7 +143,7 @@ extension CompanionPairingChallenge {
             URLQueryItem(name: "challenge", value: challengeId),
             URLQueryItem(name: "code", value: userCode),
             URLQueryItem(name: "expires", value: expiresAt),
-            URLQueryItem(name: "transport", value: "private_http")
+            URLQueryItem(name: "transport", value: transport.rawValue)
         ]
         let alternates = alternateHosts.filter { $0 != host }.prefix(5)
         if !alternates.isEmpty {
