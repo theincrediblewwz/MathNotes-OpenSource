@@ -29,7 +29,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:headless",
-    "build:headless": "esbuild src/headless/networkNodeCli.ts --bundle --platform=node --format=cjs --outfile=dist/headless/networkNodeCli.cjs",
+    "build:headless": "npm exec -- esbuild src/headless/networkNodeCli.ts --bundle --platform=node --format=cjs --outfile=dist/headless/networkNodeCli.cjs",
     "test": "vitest run"
   },
   "dependencies": {
