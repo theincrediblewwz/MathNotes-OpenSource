@@ -234,16 +234,19 @@ try {
   const selectedHeading = (await page.evaluate(() => window.getSelection()?.toString() ?? "")).trim();
   assert.match(selectedHeading, /^## 泛函分析 第 3 讲$/, "The real editor must expose the exact selected heading");
   await selectionEditor.click({ button: "right", position: { x: 48, y: 10 } });
-  await page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).click();
-  const selectionWorkspace = page.getByTestId("assistant-workspace");
-  await selectionWorkspace.waitFor({ state: "visible", timeout: 3000 });
+  let assistantSurface = await openAssistantWindow(
+    app,
+    () => page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).click(),
+    rendererDiagnostics
+  );
+  let selectionWorkspace = assistantSurface.workspace;
   assert.match(await selectionWorkspace.innerText(), /原文[\s\S]*泛函分析 第 3 讲/);
   assert.match(await selectionWorkspace.innerText(), /仅修改未锁定内容/);
   await selectionWorkspace.getByRole("textbox", { name: "告诉 AI 怎样修改" }).fill("把标题改得更清楚，保留数学含义");
   await selectionWorkspace.getByRole("button", { name: "生成修改", exact: true }).click();
   await selectionWorkspace.getByText("Mock 学习助手", { exact: false }).waitFor({ state: "visible", timeout: 5000 });
   assert.doesNotMatch(await selectionEditor.innerText(), /Mock 学习助手/, "Generating a candidate must not mutate the editor");
-  await page.screenshot({ path: path.join(outDir, "electron-selection-edit-candidate.png"), fullPage: false });
+  await assistantSurface.page.screenshot({ path: path.join(outDir, "electron-selection-edit-candidate.png"), fullPage: false });
   await selectionWorkspace.getByRole("button", { name: "应用修改", exact: true }).click();
   await selectionWorkspace.locator(".assistant-edit-card").first().waitFor({ state: "detached", timeout: 5000 });
   await page.waitForFunction(
@@ -251,8 +254,7 @@ try {
     selectionTargetId,
     { timeout: 5000 }
   );
-  await selectionWorkspace.getByRole("button", { name: "关闭与笔记对话", exact: true }).click();
-  await selectionWorkspace.waitFor({ state: "detached", timeout: 3000 });
+  await closeAssistantWindow(assistantSurface);
   await selectionEditor.click();
   await page.keyboard.press("Control+z");
   await page.waitForFunction(
@@ -264,7 +266,7 @@ try {
     { timeout: 5000 }
   );
 
-  console.log("[electron smoke] whole-block lock disables AI selection editing");
+  console.log("[electron smoke] whole-block lock pauses AI editing and offers an explicit unlock path");
   await selectionTarget.getByTestId("source-block-header").click();
   await page.getByTestId("block-lock-button").click();
   await page.waitForFunction(
@@ -283,12 +285,21 @@ try {
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Shift+End");
   await selectionEditor.click({ button: "right", position: { x: 48, y: 10 } });
+  const lockedSelectionEditAction = page.getByRole("button", { name: "用 AI 修改选中文字", exact: true });
   assert.equal(
-    await page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).isDisabled(),
-    true,
-    "A locked block must disable AI selection editing in the real context menu"
+    await lockedSelectionEditAction.isDisabled(),
+    false,
+    "A locked block must keep the AI edit action available so the app can explain the lock"
   );
-  await page.keyboard.press("Escape");
+  assistantSurface = await openAssistantWindow(app, () => lockedSelectionEditAction.click(), rendererDiagnostics);
+  selectionWorkspace = assistantSurface.workspace;
+  assert.match(await selectionWorkspace.getByRole("alert").innerText(), /已经固定|写入锁/);
+  const unlockPrompt = assistantSurface.page.getByTestId("selection-unlock-prompt");
+  await unlockPrompt.waitFor({ state: "visible", timeout: 5_000 });
+  assert.match(await unlockPrompt.innerText(), /AI 无权取消固定/);
+  const lockAssistantClosed = assistantSurface.page.waitForEvent("close", { timeout: 5_000 });
+  await unlockPrompt.getByRole("button", { name: "去解除固定", exact: true }).click();
+  await lockAssistantClosed;
   await selectionTarget.getByTestId("source-block-header").click();
   await page.getByTestId("block-lock-button").click();
   await page.waitForFunction(
@@ -308,8 +319,12 @@ try {
   await page.keyboard.press("Control+Home");
   await page.keyboard.press("Shift+End");
   await selectionEditor.click({ button: "right", position: { x: 48, y: 10 } });
-  await page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).click();
-  await selectionWorkspace.waitFor({ state: "visible", timeout: 3000 });
+  assistantSurface = await openAssistantWindow(
+    app,
+    () => page.getByRole("button", { name: "用 AI 修改选中文字", exact: true }).click(),
+    rendererDiagnostics
+  );
+  selectionWorkspace = assistantSurface.workspace;
   await selectionWorkspace.getByRole("textbox", { name: "告诉 AI 怎样修改" }).fill("生成一个会发生版本冲突的候选");
   await selectionWorkspace.getByRole("button", { name: "生成修改", exact: true }).click();
   await selectionWorkspace.getByText("Mock 学习助手", { exact: false }).waitFor({ state: "visible", timeout: 5000 });
@@ -331,49 +346,42 @@ try {
   assert.match(await selectionWorkspace.innerText(), /Mock 学习助手/, "A conflict must retain the candidate preview");
   await selectionWorkspace.getByRole("button", { name: "取消", exact: true }).click();
   await selectionWorkspace.locator(".assistant-edit-card").first().waitFor({ state: "detached", timeout: 3000 });
-  await selectionWorkspace.getByRole("button", { name: "关闭与笔记对话", exact: true }).click();
-  await selectionWorkspace.waitFor({ state: "detached", timeout: 3000 });
+  await closeAssistantWindow(assistantSurface);
 
-  console.log("[electron smoke] assistant stays in the main window and supports anchored resizing");
-  await page.getByRole("button", { name: "AI 学习助手", exact: true }).click();
-  await selectionWorkspace.waitFor({ state: "visible", timeout: 5000 });
+  console.log("[electron smoke] assistant uses an independent resizable taskbar window and restores after minimizing");
+  assistantSurface = await openAssistantWindow(
+    app,
+    () => page.getByRole("button", { name: "AI 学习助手", exact: true }).click(),
+    rendererDiagnostics
+  );
+  selectionWorkspace = assistantSurface.workspace;
+  assert.equal(await page.getByTestId("assistant-workspace").count(), 0, "The assistant must not remain inside the main window document");
   assert.equal(
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
-    1,
-    "Assistant must not create a developer-style auxiliary native window"
+    2,
+    "Assistant must create one independent native window beside the main window"
   );
-  const assistantBoundsBeforeResize = await selectionWorkspace.boundingBox();
-  const westResizeHandle = await selectionWorkspace.getByTestId("assistant-resize-w").boundingBox();
-  assert.ok(assistantBoundsBeforeResize && westResizeHandle);
-  await page.mouse.move(westResizeHandle.x + westResizeHandle.width / 2, westResizeHandle.y + westResizeHandle.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(westResizeHandle.x - 70, westResizeHandle.y + westResizeHandle.height / 2, { steps: 7 });
-  await page.mouse.up();
-  const assistantBoundsAfterResize = await selectionWorkspace.boundingBox();
-  assert.ok(assistantBoundsAfterResize);
-  assert.ok(assistantBoundsAfterResize.width - assistantBoundsBeforeResize.width > 55, "West edge should widen the assistant");
-  assert.ok(
-    Math.abs(
-      assistantBoundsAfterResize.x + assistantBoundsAfterResize.width
-      - (assistantBoundsBeforeResize.x + assistantBoundsBeforeResize.width)
-    ) <= 2,
-    "Dragging one assistant edge must keep the opposite edge anchored"
-  );
-  const assistantHeader = await selectionWorkspace.locator(".assistant-workspace-header").boundingBox();
-  assert.ok(assistantHeader);
-  await page.mouse.move(assistantHeader.x + assistantHeader.width * 0.45, assistantHeader.y + assistantHeader.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(assistantHeader.x + assistantHeader.width * 0.45 - 36, assistantHeader.y + assistantHeader.height / 2 + 24, { steps: 6 });
-  await page.mouse.up();
-  const assistantBoundsAfterDrag = await selectionWorkspace.boundingBox();
-  assert.ok(assistantBoundsAfterDrag);
-  assert.ok(
-    assistantBoundsAfterDrag.x < assistantBoundsAfterResize.x - 20
-    && assistantBoundsAfterDrag.y > assistantBoundsAfterResize.y + 12,
-    "Dragging the assistant header should move the internal panel"
-  );
-  await selectionWorkspace.getByRole("button", { name: "关闭与笔记对话", exact: true }).click();
-  await selectionWorkspace.waitFor({ state: "detached", timeout: 3000 });
+  const assistantNativeState = await waitForAssistantWindowState(app, (state) => state !== null);
+  assert.equal(assistantNativeState.resizable, true, "The independent assistant window must keep native edge resizing enabled");
+  assert.deepEqual(assistantNativeState.minimumSize, [420, 480]);
+  assert.match(assistantNativeState.title, /与笔记对话|学习助手/);
+  const assistantHeaderDragRegion = await selectionWorkspace.locator(".assistant-workspace-header").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return style.getPropertyValue("-webkit-app-region") || style.getPropertyValue("app-region");
+  });
+  assert.equal(assistantHeaderDragRegion.trim(), "drag", "The assistant header must remain a native window drag surface");
+  const assistantControlDragRegion = await selectionWorkspace.getByRole("button", { name: "最小化对话窗口", exact: true }).evaluate((element) => {
+    const style = getComputedStyle(element);
+    return style.getPropertyValue("-webkit-app-region") || style.getPropertyValue("app-region");
+  });
+  assert.equal(assistantControlDragRegion.trim(), "no-drag", "Assistant window controls must remain clickable inside the drag header");
+
+  await selectionWorkspace.getByRole("button", { name: "最小化对话窗口", exact: true }).click();
+  await waitForAssistantWindowState(app, (state) => state?.minimized === true);
+  await page.getByRole("button", { name: "AI 学习助手", exact: true }).click();
+  const restoredAssistantState = await waitForAssistantWindowState(app, (state) => state?.minimized === false && state.visible === true);
+  assert.equal(restoredAssistantState.visible, true, "The main-window AI button must restore a minimized assistant window");
+  await closeAssistantWindow(assistantSurface);
 
   console.log("[electron smoke] recognition status stays in the unified task center");
   const recognitionAuxiliaryTitles = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
@@ -389,8 +397,8 @@ try {
   firstIngestIdentity = { port: ingestState.port, token: ingestState.token };
   const health = await fetch(`http://127.0.0.1:${ingestState.port}/api/v1/health`).then((response) => response.json());
   assert.equal(health.ok, true);
-  const drawerOverflow = await page.locator(".left-drawer").evaluate((element) => getComputedStyle(element).overflowY);
-  assert.equal(drawerOverflow, "auto", "Notebook/session drawer must remain scrollable when its list grows");
+  const drawerOverflow = await page.locator(".recent-reading-list").evaluate((element) => getComputedStyle(element).overflowY);
+  assert.equal(drawerOverflow, "auto", "The recent-reading list must remain scrollable while its fixed actions stay visible");
 
   const importResult = await page.evaluate((filePath) =>
     window.mathNotes.importLocalPhoto({
@@ -1076,4 +1084,41 @@ function observeRendererDiagnostics(page, diagnostics) {
     if (request.url().includes(expectedMissingAssetFileName)) return;
     diagnostics.resources.push(`${request.failure()?.errorText ?? "request failed"} ${request.url()}`);
   });
+}
+
+async function openAssistantWindow(app, trigger, diagnostics) {
+  const assistantPagePromise = app.waitForEvent("window", { timeout: 10_000 });
+  await trigger();
+  const assistantPage = await assistantPagePromise;
+  observeRendererDiagnostics(assistantPage, diagnostics);
+  const workspace = assistantPage.getByTestId("assistant-workspace");
+  await workspace.waitFor({ state: "visible", timeout: 10_000 });
+  return { page: assistantPage, workspace };
+}
+
+async function closeAssistantWindow(surface) {
+  const closed = surface.page.waitForEvent("close", { timeout: 5_000 });
+  await surface.workspace.getByRole("button", { name: "关闭与笔记对话", exact: true }).click();
+  await closed;
+}
+
+async function waitForAssistantWindowState(app, predicate, timeout = 5_000) {
+  const deadline = Date.now() + timeout;
+  let lastState = null;
+  while (Date.now() < deadline) {
+    lastState = await app.evaluate(({ BrowserWindow }) => {
+      const assistant = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL() === "about:blank");
+      if (!assistant) return null;
+      return {
+        minimized: assistant.isMinimized(),
+        minimumSize: assistant.getMinimumSize(),
+        resizable: assistant.isResizable(),
+        title: assistant.getTitle(),
+        visible: assistant.isVisible()
+      };
+    });
+    if (predicate(lastState)) return lastState;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for assistant native-window state: ${JSON.stringify(lastState)}`);
 }
