@@ -14,12 +14,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("mobile mode ownership", () => {
-  it("defaults to phone standalone and only changes mode after an explicit click", async () => {
+  it("keeps an explicit legacy standalone workspace until the user reconnects", async () => {
+    localStorage.setItem("mathnotes:mobile-mode:v1", "standalone");
     render(<MobileModeApp />);
     await waitFor(() => expect(screen.getByText("手机独立", { selector: "strong" })).toBeTruthy());
     expect(screen.getByText(/无需电脑地址、配对码或 Tailscale/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "连接电脑" }));
-    expect(screen.getByRole("button", { name: "切换到手机独立" })).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("连接你的 MathNotes")).toBeTruthy());
     expect(localStorage.getItem("mathnotes:mobile-mode:v1")).toBe("companion");
   });
 });

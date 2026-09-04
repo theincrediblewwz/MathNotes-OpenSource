@@ -94,4 +94,31 @@ describe("image transform contract", () => {
       annotations: [{ id: "pen-1", type: "pen", points: [{ x: -0.1, y: 0.2 }, { x: 0.4, y: 0.5 }], color: "green", width: 0.006 }]
     })).toThrow();
   });
+
+  it("rejects malformed runtime operation shapes instead of relying on TypeScript types", () => {
+    const base = {
+      version: 1 as const,
+      sourceAsset: "assets/photos/original.jpg",
+      sourceSha256: "a".repeat(64),
+      outputMimeType: "image/png" as const,
+      createdAt: "2026-07-15T00:00:00.000Z"
+    };
+    expect(() => assertValidImageTransformSidecar({
+      ...base,
+      operations: [{ type: "rotate", quarterTurns: 4 } as never]
+    })).toThrow(/quarter turns/);
+    expect(() => assertValidImageTransformSidecar({
+      ...base,
+      operations: [{ type: "perspective", corners: [{ x: 0, y: 0 }] } as never]
+    })).toThrow(/four corners/);
+    expect(() => assertValidImageTransformSidecar({
+      ...base,
+      operations: [{
+        type: "lasso",
+        points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0.5, y: 1 }],
+        boundingBox: { x: 0, y: 0, width: 1, height: 1 },
+        outsideFill: "transparent"
+      } as never]
+    })).toThrow(/outside fill/);
+  });
 });

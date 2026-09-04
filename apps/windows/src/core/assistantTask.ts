@@ -11,7 +11,13 @@ import {
   type BlockRef
 } from "@mathnotes/shared";
 import type { BlockStore } from "./blockStore";
-import { AssistantRemarkStore, type AssistantRemark, type AssistantRemarkFocus } from "./assistantRemarkStore";
+import { searchAssistantKnowledge } from "@mathnotes/core-server";
+import {
+  AssistantRemarkStore,
+  type AssistantRemark,
+  type AssistantRemarkFocus,
+  type AssistantRemarkRelatedSource
+} from "./assistantRemarkStore";
 
 export type AssistantTaskInput = {
   taskId: string;
@@ -36,6 +42,7 @@ export type AssistantTaskSummary = {
   providerName: string;
   contextUsage: AssistantContextUsage;
   imageCount: number;
+  relatedSources: AssistantRemarkRelatedSource[];
   error?: string;
 };
 
@@ -75,6 +82,13 @@ export async function runAssistantTask(args: {
     )
   );
   const focus = buildFocus(args.input, focusBlocks, markdownByBlockId);
+  const relatedKnowledge = await searchAssistantKnowledge({
+    rootDir: args.store.getRootDir(),
+    query: [args.input.question, focus.excerpt].filter(Boolean).join("\n"),
+    currentNotebookId: args.input.notebookId,
+    currentSessionId: args.input.sessionId
+  });
+  const relatedSources = relatedKnowledge.references.map(toRemarkRelatedSource);
   const contextPacket = buildAssistantContextPacket({
     focus,
     question: args.input.question,
@@ -82,7 +96,8 @@ export async function runAssistantTask(args: {
       id: block.id,
       source: block.source,
       markdown: markdownByBlockId.get(block.id) ?? ""
-    }))
+    })),
+    relatedSources: relatedKnowledge.references
   });
   const imagePaths = await collectImagePaths({
     store: args.store,
@@ -130,6 +145,7 @@ export async function runAssistantTask(args: {
       markdown: result.markdown.trim(),
       providerName: args.provider.name,
       sourceBlockIds: focusBlocks.map((block) => block.id),
+      relatedSources,
       createdAt,
       updatedAt: createdAt
     };
@@ -154,7 +170,8 @@ export async function runAssistantTask(args: {
       remarkId: remark.id,
       providerName: args.provider.name,
       contextUsage: contextPacket.usage,
-      imageCount: imagePaths.length
+      imageCount: imagePaths.length,
+      relatedSources
     };
   } catch (error) {
     const cancelled = args.input.abortSignal?.aborted ?? false;
@@ -174,9 +191,22 @@ export async function runAssistantTask(args: {
       providerName: args.provider.name,
       contextUsage: contextPacket.usage,
       imageCount: imagePaths.length,
+      relatedSources,
       error: message
     };
   }
+}
+
+function toRemarkRelatedSource(reference: Awaited<ReturnType<typeof searchAssistantKnowledge>>["references"][number]): AssistantRemarkRelatedSource {
+  return {
+    refId: reference.refId,
+    notebookId: reference.notebookId,
+    notebookTitle: reference.notebookTitle,
+    sessionId: reference.sessionId,
+    sessionTitle: reference.sessionTitle,
+    blockId: reference.blockId,
+    locked: reference.locked
+  };
 }
 
 function selectFocusBlocks(blocks: BlockRef[], input: AssistantTaskInput): BlockRef[] {

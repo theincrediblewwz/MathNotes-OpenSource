@@ -1,19 +1,15 @@
-import { Archive, Download, FileCheck2, FolderOpen, Plus, Settings, X } from "lucide-react";
+import { Archive, Check, Clock3, ExternalLink, FolderOpen, Plus, Settings as SettingsIcon, X } from "lucide-react";
 import QRCode from "qrcode";
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { PROVIDER_CATALOG, type ProviderDescriptor } from "@mathnotes/shared";
 import type {
   ConnectionDiagnosticReport,
   IngestServerState,
-  NotebookSessionSummary,
-  NotebookSummary,
+  RecentSessionSummary,
   NotationPreviewInput,
   NotationProfileConfig,
   NotationPromptPreview,
-  ExportUserDiagnosticReportResult,
-  PickImageForAnnotationResult,
   PromptTemplateConfig,
-  ProviderSelfTestResult,
   ProviderHealthReport,
   AssistantProviderConfig,
   AssistantProviderConfigInput,
@@ -25,6 +21,11 @@ import type {
 import { defaultAssistantFontFamily, defaultPreviewFontFamily, defaultSourceFontFamily } from "../../common/defaultUserSettings";
 import { defaultLocaleId, defaultThemeId, localeOptions, themeOptions } from "../../common/appearanceSettings";
 import { DEFAULT_PREVIEW_FOLLOW_SHORTCUT, normalizeKeyboardShortcutFromEvent } from "../../common/keyboardShortcuts";
+import {
+  MATHNOTES_AUTHOR_GITHUB_LABEL,
+  MATHNOTES_AUTHOR_GITHUB_URL,
+  MATHNOTES_AUTHOR_ID
+} from "../../common/authorIdentity";
 import { defaultMathPromptTemplate, type PromptTemplate } from "../../common/promptTemplates";
 import { createEmptyNotationProfileConfig, type NotationProfile, type NotationRule } from "../../common/notationProfiles";
 import { getRecognitionProviderCapability } from "../providerCapabilities";
@@ -36,7 +37,8 @@ type DrawerProps = {
 
 type DirectoryPicker = (args: { currentPath: string; title: string }) => Promise<string | undefined>;
 
-const contextMenuWidth = 154;
+const authorAvatarUrl = new URL("../../assets/wwz-sysu-avatar.jpg", import.meta.url).href;
+
 const fontOptions = [
   { label: "Cascadia Mono", value: defaultSourceFontFamily },
   { label: "Consolas", value: 'Consolas, "SFMono-Regular", monospace' },
@@ -48,156 +50,79 @@ const fontOptions = [
 ];
 
 type NotebookDrawerProps = DrawerProps & {
-  notebookId?: string;
-  notebookTitle?: string;
-  sessionTitle?: string;
-  sessionId?: string;
-  sessions?: NotebookSessionSummary[];
-  notebooks?: NotebookSummary[];
-  onCreateNotebook?: () => void;
-  onCreateSession?: () => void;
-  onDeleteSession?: (session: NotebookSessionSummary) => void;
-  onOpenSession?: (session: NotebookSessionSummary) => void;
-  onOpenNotebook?: (notebook: NotebookSummary) => void;
-  onRenameSession?: (session: NotebookSessionSummary) => void;
+  recentSessions?: RecentSessionSummary[];
+  onOpenRecentSession?: (session: RecentSessionSummary) => void;
+  onOpenNotebooks?: () => void;
   onOpenSettings?: () => void;
 };
 
 export function NotebookDrawer({
   openLayer,
   onClose,
-  notebookId = "functional_analysis",
-  notebookTitle = "数学笔记",
-  sessionTitle = "当前 Session",
-  sessionId = "",
-  sessions = [],
-  notebooks = [],
-  onCreateNotebook,
-  onCreateSession,
-  onDeleteSession,
-  onOpenSession,
-  onOpenNotebook,
-  onRenameSession,
+  recentSessions = [],
+  onOpenRecentSession,
+  onOpenNotebooks,
   onOpenSettings
 }: NotebookDrawerProps) {
-  const [contextMenu, setContextMenu] = useState<{ session: NotebookSessionSummary; x: number; y: number } | null>(null);
-  const drawerRef = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    if (openLayer !== "notebook") {
-      setContextMenu(null);
-    }
-  }, [openLayer]);
-  const visibleSessions =
-    sessions.length > 0
-      ? sessions
-      : [
-          {
-            notebookId: notebookTitle,
-            sessionId,
-            title: sessionTitle,
-            status: "draft" as const,
-            createdAt: "",
-            updatedAt: ""
-          }
-        ];
-
   return (
     <aside
-      aria-label="笔记目录"
-      className={`drawer left-drawer ${openLayer === "notebook" ? "open" : ""}`}
+      aria-label="最近阅读"
+      className={`drawer left-drawer recent-reading-drawer ${openLayer === "notebook" ? "open" : ""}`}
       data-testid={openLayer === "notebook" ? "notebook-drawer" : undefined}
-      ref={drawerRef}
     >
       <div className="drawer-head">
         <div>
-          <span className="eyebrow">Notebook</span>
-          <h2>{notebookTitle}</h2>
+          <span className="eyebrow">MathNotes</span>
+          <h2>最近阅读</h2>
         </div>
-        <button aria-label="关闭笔记目录" className="plain-icon" onClick={onClose} type="button">
+        <button aria-label="关闭最近阅读" className="plain-icon" onClick={onClose} type="button">
           <X />
         </button>
       </div>
-      <button className="drawer-action" onClick={onCreateNotebook} type="button">
-        <Plus /> 新建 Notebook
-      </button>
-      <button className="drawer-secondary-action" onClick={onCreateSession} type="button">
-        <Plus /> 新建 Session
-      </button>
-      <button className="drawer-secondary-action" onClick={onOpenSettings} type="button">
-        <Settings /> 设置
-      </button>
-      <div className="drawer-section">
-        <h3>Notebooks</h3>
-        {notebooks.map((notebook) => (
+      <div className="recent-reading-list">
+        {recentSessions.length > 0 ? recentSessions.slice(0, 4).map((session) => (
           <button
-            className={`notebook-row ${notebook.notebookId === notebookId ? "active" : ""}`}
-            key={notebook.notebookId}
-            onClick={() => onOpenNotebook?.(notebook)}
+            className="recent-reading-row"
+            key={`${session.notebookId}/${session.sessionId}`}
+            onClick={() => onOpenRecentSession?.(session)}
             type="button"
           >
-            <FolderOpen />
+            <Clock3 aria-hidden="true" />
             <span>
-              <strong>{notebook.title}</strong>
-              <small>{notebook.sessionCount} 个 Session</small>
+              <strong>{session.title || "未命名"}</strong>
+              <small>{session.notebookTitle}</small>
             </span>
+            <time dateTime={session.openedAt}>{formatRecentReadingTime(session.openedAt)}</time>
           </button>
-        ))}
+        )) : (
+          <div className="recent-reading-empty">
+            <Clock3 aria-hidden="true" />
+            <strong>还没有最近阅读</strong>
+            <span>打开一篇笔记后，它会出现在这里。</span>
+          </div>
+        )}
       </div>
-      <div className="drawer-section">
-        <h3>当前 Notebook 的 Sessions</h3>
-        {visibleSessions.map((session) => (
-          <button
-            className={`session-row ${session.sessionId === sessionId ? "active" : ""}`}
-            key={session.sessionId}
-            onClick={() => onOpenSession?.(session)}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              const drawerRect = drawerRef.current?.getBoundingClientRect();
-              const localX = drawerRect ? event.clientX - drawerRect.left : event.clientX;
-              const localY = drawerRect ? event.clientY - drawerRect.top : event.clientY;
-              const maxX = drawerRect ? drawerRect.width - contextMenuWidth - 8 : window.innerWidth - contextMenuWidth - 8;
-              const maxY = drawerRect ? drawerRect.height - 48 : window.innerHeight - 48;
-              setContextMenu({
-                session,
-                x: Math.max(8, Math.min(localX, maxX)),
-                y: Math.max(8, Math.min(localY, maxY))
-              });
-            }}
-            title="右键管理 Session"
-            type="button"
-          >
-            <span>{session.title || "未命名"}</span>
-            <small>{session.sessionId || "draft"}</small>
-          </button>
-        ))}
+      <div className="recent-reading-actions">
+        <button className="recent-reading-settings" onClick={onOpenSettings} type="button">
+          <SettingsIcon /> 设置
+        </button>
+        <button className="drawer-action recent-reading-open" onClick={onOpenNotebooks} type="button">
+          <FolderOpen /> 打开 Notebooks
+        </button>
       </div>
-      {contextMenu ? (
-        <div className="drawer-context-menu" data-testid="session-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
-          <button
-            onClick={() => {
-              onRenameSession?.(contextMenu.session);
-              setContextMenu(null);
-            }}
-            role="menuitem"
-            type="button"
-          >
-            重命名 Session
-          </button>
-          <button
-            className="danger-menuitem"
-            onClick={() => {
-              onDeleteSession?.(contextMenu.session);
-              setContextMenu(null);
-            }}
-            role="menuitem"
-            type="button"
-          >
-            删除 Session
-          </button>
-        </div>
-      ) : null}
     </aside>
   );
+}
+
+export function formatRecentReadingTime(openedAt: string, now = Date.now()): string {
+  const timestamp = Date.parse(openedAt);
+  if (!Number.isFinite(timestamp)) return "最近";
+  const elapsed = Math.max(0, now - timestamp);
+  if (elapsed < 60_000) return "刚刚";
+  if (elapsed < 60 * 60_000) return `${Math.floor(elapsed / 60_000)} 分钟前`;
+  if (elapsed < 24 * 60 * 60_000) return `${Math.floor(elapsed / (60 * 60_000))} 小时前`;
+  if (elapsed < 7 * 24 * 60 * 60_000) return `${Math.floor(elapsed / (24 * 60 * 60_000))} 天前`;
+  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(timestamp);
 }
 
 type MoreDrawerProps = DrawerProps & {
@@ -503,9 +428,6 @@ export function SettingsModal({
   onSaveNotationConfig,
   onUpdatePairingToken,
   onPreviewNotation,
-  onPickProviderSelfTestImage,
-  onRunProviderSelfTest,
-  onExportDiagnosticReport,
   onSave,
   open,
   providerConfig,
@@ -527,9 +449,6 @@ export function SettingsModal({
   onSaveNotationConfig?: (input: NotationProfileConfig) => void;
   onUpdatePairingToken?: (input: UpdatePairingTokenInput) => Promise<void>;
   onPreviewNotation?: (input: NotationPreviewInput) => Promise<NotationPromptPreview>;
-  onPickProviderSelfTestImage?: () => Promise<PickImageForAnnotationResult>;
-  onRunProviderSelfTest?: (input: { imagePath: string; confirmedExternalCall: boolean }) => Promise<ProviderSelfTestResult>;
-  onExportDiagnosticReport?: () => Promise<ExportUserDiagnosticReportResult>;
   onSave?: (settings: UserSettings) => void;
   open: boolean;
   providerConfig?: RecognitionProviderConfig | null;
@@ -563,9 +482,6 @@ export function SettingsModal({
           onSaveNotationConfig={onSaveNotationConfig}
           onUpdatePairingToken={onUpdatePairingToken}
           onPreviewNotation={onPreviewNotation}
-          onPickProviderSelfTestImage={onPickProviderSelfTestImage}
-          onRunProviderSelfTest={onRunProviderSelfTest}
-          onExportDiagnosticReport={onExportDiagnosticReport}
           settings={settings}
           onSave={onSave}
           providerConfig={providerConfig}
@@ -593,9 +509,6 @@ export function UserSettingsForm({
   onSaveNotationConfig,
   onUpdatePairingToken,
   onPreviewNotation,
-  onPickProviderSelfTestImage,
-  onRunProviderSelfTest,
-  onExportDiagnosticReport,
   onSaveProviderConfig,
   onSaveAssistantProviderConfig,
   providerConfig,
@@ -615,9 +528,6 @@ export function UserSettingsForm({
   onSaveNotationConfig?: (input: NotationProfileConfig) => void;
   onUpdatePairingToken?: (input: UpdatePairingTokenInput) => Promise<void>;
   onPreviewNotation?: (input: NotationPreviewInput) => Promise<NotationPromptPreview>;
-  onPickProviderSelfTestImage?: () => Promise<PickImageForAnnotationResult>;
-  onRunProviderSelfTest?: (input: { imagePath: string; confirmedExternalCall: boolean }) => Promise<ProviderSelfTestResult>;
-  onExportDiagnosticReport?: () => Promise<ExportUserDiagnosticReportResult>;
   onSaveProviderConfig?: (input: RecognitionProviderConfigInput) => void;
   onSaveAssistantProviderConfig?: (input: AssistantProviderConfigInput | null) => void;
   providerConfig?: RecognitionProviderConfig | null;
@@ -681,8 +591,32 @@ export function UserSettingsForm({
     setPreviewShortcutIsInvalid(false);
   }
 
+  function saveDraft(): void {
+    onSave?.({
+      ...draft,
+      previewFollowShortcut: draft.previewFollowShortcut ?? DEFAULT_PREVIEW_FOLLOW_SHORTCUT
+    });
+  }
+
   return (
     <div className="settings-form" data-testid="user-settings">
+      <a
+        aria-label={`打开 ${MATHNOTES_AUTHOR_ID} 的 GitHub 主页`}
+        className="settings-owner-card"
+        href={MATHNOTES_AUTHOR_GITHUB_URL}
+        rel="noreferrer"
+        target="_blank"
+      >
+        <img alt={`${MATHNOTES_AUTHOR_ID} 头像`} className="settings-owner-avatar" src={authorAvatarUrl} />
+        <span className="settings-owner-copy">
+          <span className="settings-owner-eyebrow">作者</span>
+          <strong>{MATHNOTES_AUTHOR_ID}</strong>
+          <span className="settings-owner-link">
+            {MATHNOTES_AUTHOR_GITHUB_LABEL}
+            <ExternalLink aria-hidden="true" />
+          </span>
+        </span>
+      </a>
       <section className="settings-section">
         <div>
           <h3>文件位置</h3>
@@ -774,6 +708,17 @@ export function UserSettingsForm({
             onSizeChange={(assistantFontSize) => setDraft({ ...draft, assistantFontSize })}
             previewTestId="assistant-font-preview"
           />
+        </div>
+        <div className="typography-apply-row">
+          <span>无需滚动到底部，立即应用当前字体与字号。</span>
+          <button
+            className="typography-apply-action"
+            disabled={!onSave}
+            onClick={saveDraft}
+            type="button"
+          >
+            <Check /> 一键应用
+          </button>
         </div>
       </section>
       <section className="settings-section compact-settings-section shortcut-settings-section">
@@ -881,19 +826,6 @@ export function UserSettingsForm({
           onSave={onSaveNotationConfig}
         />
       </section>
-      <section className="settings-section diagnostics-settings-section">
-        <div>
-          <h3>诊断与自检</h3>
-          <p>检查本机配置、显式运行一次单图完整管线，并导出不含密钥和配对凭据的报告。</p>
-        </div>
-        <UserDiagnosticsForm
-          hasNativeApi={hasNativeApi}
-          onExport={onExportDiagnosticReport}
-          onPickImage={onPickProviderSelfTestImage}
-          onRun={onRunProviderSelfTest}
-          providerConfig={providerConfig}
-        />
-      </section>
       <section className="settings-section compact-settings-section assistant-settings-section">
         <div>
           <h3>学习助手</h3>
@@ -913,10 +845,10 @@ export function UserSettingsForm({
         <button
           className="drawer-action"
           disabled={!hasNativeApi}
-          onClick={() => onSave?.({ ...draft, previewFollowShortcut: draft.previewFollowShortcut ?? DEFAULT_PREVIEW_FOLLOW_SHORTCUT })}
+          onClick={saveDraft}
           type="button"
         >
-          保存设置
+          保存全部设置
         </button>
       </div>
     </div>
@@ -1400,104 +1332,6 @@ function NotationProfileForm({
 
 function splitList(value: string): string[] {
   return value.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
-}
-
-function UserDiagnosticsForm({
-  hasNativeApi,
-  onExport,
-  onPickImage,
-  onRun,
-  providerConfig
-}: {
-  hasNativeApi: boolean;
-  onExport?: () => Promise<ExportUserDiagnosticReportResult>;
-  onPickImage?: () => Promise<PickImageForAnnotationResult>;
-  onRun?: (input: { imagePath: string; confirmedExternalCall: boolean }) => Promise<ProviderSelfTestResult>;
-  providerConfig?: RecognitionProviderConfig | null;
-}) {
-  const [selectedImage, setSelectedImage] = useState<{ fileName: string; sourcePath: string } | null>(null);
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<ProviderSelfTestResult | null>(null);
-  const [message, setMessage] = useState("");
-  const capability = getRecognitionProviderCapability(providerConfig?.providerId);
-  const externalCall = capability.providerId !== "mock";
-
-  async function chooseImage(): Promise<void> {
-    if (!onPickImage) return;
-    setMessage("");
-    const picked = await onPickImage();
-    if (picked.cancelled) return;
-    setSelectedImage({ fileName: picked.fileName, sourcePath: picked.sourcePath });
-    setResult(null);
-  }
-
-  async function runSelfTest(): Promise<void> {
-    if (!selectedImage || !onRun) return;
-    setRunning(true);
-    setMessage("");
-    try {
-      const nextResult = await onRun({
-        imagePath: selectedImage.sourcePath,
-        confirmedExternalCall: externalCall
-      });
-      setResult(nextResult);
-      setMessage(nextResult.status === "succeeded" ? "单图完整管线已通过。" : `自检结束：${nextResult.status}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  async function exportReport(): Promise<void> {
-    if (!onExport) return;
-    setMessage("");
-    try {
-      const exported = await onExport();
-      if (!exported.cancelled) setMessage(`诊断报告已导出：${exported.outputPath}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  return (
-    <div className="user-diagnostics" data-testid="user-diagnostics">
-      <div className="diagnostic-self-test-summary">
-        <strong>当前服务：{capability.label}</strong>
-        <span>配置检查不会调用模型；单图自检会验证识别、草稿、导出和报告链路。</span>
-      </div>
-      <div className="diagnostic-self-test-actions">
-        <button disabled={!hasNativeApi || !onPickImage || running} onClick={() => void chooseImage()} type="button">
-          <FileCheck2 /> {selectedImage ? "更换自检图片" : "选择自检图片"}
-        </button>
-        {selectedImage ? <span className="diagnostic-selected-file" title={selectedImage.sourcePath}>{selectedImage.fileName}</span> : null}
-      </div>
-      {selectedImage ? (
-        <div className={`diagnostic-confirmation ${externalCall ? "attention" : "local"}`}>
-          <p>{externalCall
-            ? `确认后将调用 ${capability.label} 1 次；不会自动重复，也不会把自检结果写入你的 Notebook。`
-            : "假识别服务只运行本地管线，不调用外部模型。"}</p>
-          <button className="drawer-action" disabled={!hasNativeApi || !onRun || running} onClick={() => void runSelfTest()} type="button">
-            {running ? "自检运行中" : externalCall ? "确认并运行 1 次" : "运行本地自检"}
-          </button>
-        </div>
-      ) : null}
-      {result ? (
-        <div className={`diagnostic-self-test-result ${result.status === "succeeded" ? "ok" : "attention"}`} data-testid="provider-self-test-result">
-          <strong>{result.providerLabel} · {result.status === "succeeded" ? "通过" : "未通过"}</strong>
-          <span>{result.elapsedMs} ms · {result.eventCount} 条事件 · {result.warningCount} 条警告</span>
-        </div>
-      ) : null}
-      <button className="drawer-secondary-action" disabled={!hasNativeApi || !onExport || running} onClick={() => void exportReport()} type="button">
-        <Download /> 导出脱敏诊断报告
-      </button>
-      {message ? <p className="diagnostic-user-message" role="status">{message}</p> : null}
-      <details className="diagnostic-advanced-notes">
-        <summary>高级与开发边界</summary>
-        <p>Mock 只用于本地管线验证；Gold benchmark、全量单元测试、构建和 Harness 验证仍由 CLI/CI 执行。任何多次付费 benchmark 必须另行显示预计调用次数并再次确认。</p>
-      </details>
-    </div>
-  );
 }
 
 function ProviderConfigForm({

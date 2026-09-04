@@ -60,13 +60,68 @@ describe("SessionAssistantService", () => {
     const preview = await service.preview(input);
     const remark = await service.run({ ...input, mode: "explain" });
 
-    expect(capturedContext).toContain("## 第 2 块 · stable ID 0002");
+    expect(capturedContext).toContain("## 第 2 块");
+    expect(capturedContext).not.toContain("stable ID");
     expect(Array.from(capturedContext)).toHaveLength(preview.usage.textCharacters);
     expect(remark.usage).toEqual(preview.usage);
     expect(remark.html).toContain("<!doctype html>");
     expect((await service.list(input))).toHaveLength(1);
     const index = JSON.parse(await readFile(join(sessionDir, "assistant", "index.json"), "utf8"));
     expect(index).toMatchObject({ version: 1, remarks: [{ id: remark.id }] });
+  });
+
+  it("uses the same cross-note read-only grounding contract as the desktop assistant", async () => {
+    const notebookDir = join(root, "notebooks", "references");
+    const relatedDir = join(notebookDir, "sessions", "uniform-boundedness");
+    await mkdir(join(relatedDir, "blocks"), { recursive: true });
+    await writeFile(join(notebookDir, "notebook.json"), JSON.stringify({
+      id: "references",
+      title: "定理索引",
+      createdAt: "2026-07-27T00:00:00.000Z",
+      updatedAt: "2026-07-27T00:00:00.000Z"
+    }));
+    await writeFile(join(relatedDir, "blocks", "0009.md"), "一致有界原理：逐点有界蕴含一致有界。\n");
+    const relatedSession = createSessionRecord({
+      id: "uniform-boundedness",
+      title: "一致有界原理",
+      createdAt: "2026-07-27T00:00:00.000Z"
+    });
+    const relatedBlock = createBlockRef({
+      id: "0009",
+      type: "markdown",
+      path: "blocks/0009.md",
+      source: "user",
+      createdAt: relatedSession.createdAt
+    });
+    relatedBlock.status = "locked";
+    relatedSession.blocks = [relatedBlock];
+    relatedSession.locks = [{
+      id: "lock-0009",
+      blockId: "0009",
+      kind: "block",
+      contentHash: "a".repeat(64),
+      createdAt: relatedSession.createdAt,
+      createdBy: "user",
+      aiEditable: false
+    }];
+    await writeFile(join(relatedDir, "session.json"), JSON.stringify(relatedSession));
+
+    const service = new SessionAssistantService(root, async () => provider());
+    const input = {
+      notebookId: "analysis",
+      sessionId: "lecture",
+      scope: "session" as const,
+      question: "一致有界原理是什么？"
+    };
+    const preview = await service.preview(input);
+    const remark = await service.run({ ...input, mode: "explain" });
+
+    expect(capturedContext).toContain("Notebook：定理索引 / Session：一致有界原理");
+    expect(capturedContext).not.toContain("[R1]");
+    expect(capturedContext).not.toContain("notebook=references; session=uniform-boundedness; block=0009");
+    expect(capturedContext).toContain("权限：只读；内容已锁定");
+    expect(preview.relatedSources).toEqual([expect.objectContaining({ refId: "R1", blockId: "0009", locked: true })]);
+    expect(remark.relatedSources).toEqual(preview.relatedSources);
   });
 
   it("requires explicit selection text and only promotes after an explicit command", async () => {

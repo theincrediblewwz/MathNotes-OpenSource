@@ -33,9 +33,18 @@ private data class MathNotesPalette(
 )
 
 private val defaultPalette = MathNotesPalette(
-    Color(0xFFFBFAF7), Color(0xFFFFFEFD), Color(0xFF24231F), Color(0xFF7F7B72), Color(0x1A1F201D),
-    Color(0xFF267A5A), Color(0xFFE9F5EF), Color(0xFF9A4D52), Color(0xFFF0A63C), Color(0xFFB84A3F),
-    Color(0xFF2BB673), Color(0xFFF5F3EE)
+    background = Color(0xFFFBF9F7),
+    paper = Color(0xFFFCFBF9),
+    ink = Color(0xFF232421),
+    muted = Color(0xFF7A7B76),
+    line = Color(0xFFE8E5DF),
+    accent = Color(0xFF237958),
+    accentSoft = Color(0xFFEEF3EF),
+    sourceRed = Color(0xFF9A4D52),
+    warning = Color(0xFFD48B35),
+    error = Color(0xFFCF4B48),
+    success = Color(0xFF237958),
+    subtle = Color(0xFFF3F1ED)
 )
 
 private fun paletteFor(themeId: MathNotesThemeId): MathNotesPalette = when (themeId) {
@@ -66,7 +75,7 @@ internal fun systemBarAppearanceFor(
 ): MathNotesSystemBarAppearance = if (mediaPreviewOpen) {
     MathNotesSystemBarAppearance(0xFF171816.toInt(), false)
 } else when (themeId) {
-    MathNotesThemeId.DEFAULT_LIGHT -> MathNotesSystemBarAppearance(0xFFFBFAF7.toInt(), true)
+    MathNotesThemeId.DEFAULT_LIGHT -> MathNotesSystemBarAppearance(0xFFFBF9F7.toInt(), true)
     MathNotesThemeId.READING -> MathNotesSystemBarAppearance(0xFFF7F6F2.toInt(), true)
     MathNotesThemeId.HIGH_CONTRAST -> MathNotesSystemBarAppearance(0xFFFFFFFF.toInt(), true)
     MathNotesThemeId.DARK -> MathNotesSystemBarAppearance(0xFF171916.toInt(), false)
@@ -99,79 +108,87 @@ private fun mathNotesColorScheme(dark: Boolean) = if (dark) darkColorScheme(
     onPrimaryContainer = MathNotesColors.Ink, secondary = MathNotesColors.Muted, background = MathNotesColors.Background,
     onBackground = MathNotesColors.Ink, surface = MathNotesColors.Paper, onSurface = MathNotesColors.Ink,
     surfaceVariant = MathNotesColors.Subtle, onSurfaceVariant = MathNotesColors.Muted, outline = MathNotesColors.Muted,
-    outlineVariant = MathNotesColors.Line, error = MathNotesColors.Error, onError = Color.White
+    outlineVariant = MathNotesColors.Line, error = MathNotesColors.Error, onError = Color.White,
+    surfaceBright = MathNotesColors.Paper, surfaceDim = MathNotesColors.Background,
+    surfaceContainerLowest = MathNotesColors.Paper, surfaceContainerLow = MathNotesColors.Subtle,
+    surfaceContainer = MathNotesColors.Subtle, surfaceContainerHigh = MathNotesColors.Subtle,
+    surfaceContainerHighest = MathNotesColors.Subtle, surfaceTint = Color.Transparent
 ) else lightColorScheme(
     primary = MathNotesColors.Accent, onPrimary = Color.White, primaryContainer = MathNotesColors.AccentSoft,
     onPrimaryContainer = Color(0xFF174F41), secondary = MathNotesColors.Muted, onSecondary = Color.White,
     secondaryContainer = MathNotesColors.Subtle, onSecondaryContainer = MathNotesColors.Ink,
     background = MathNotesColors.Background, onBackground = MathNotesColors.Ink, surface = MathNotesColors.Paper,
     onSurface = MathNotesColors.Ink, surfaceVariant = MathNotesColors.Subtle, onSurfaceVariant = MathNotesColors.Muted,
-    outline = Color(0xFFD9D6CF), outlineVariant = MathNotesColors.Line, error = MathNotesColors.Error, onError = Color.White
+    outline = Color(0xFFD9D6CF), outlineVariant = MathNotesColors.Line, error = MathNotesColors.Error, onError = Color.White,
+    surfaceBright = MathNotesColors.Paper, surfaceDim = MathNotesColors.Subtle,
+    surfaceContainerLowest = MathNotesColors.Paper, surfaceContainerLow = MathNotesColors.Paper,
+    surfaceContainer = MathNotesColors.Paper, surfaceContainerHigh = MathNotesColors.Paper,
+    surfaceContainerHighest = MathNotesColors.Subtle, surfaceTint = Color.Transparent
 )
 
 private val MathNotesTypography = Typography(
     headlineLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 27.sp,
-        lineHeight = 34.sp
+        fontSize = 28.sp,
+        lineHeight = 35.sp
     ),
     headlineMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 23.sp,
-        lineHeight = 30.sp
+        fontSize = 22.sp,
+        lineHeight = 29.sp
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 19.sp,
-        lineHeight = 26.sp
+        fontSize = 18.sp,
+        lineHeight = 24.sp
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp,
-        lineHeight = 22.sp
+        fontSize = 15.sp,
+        lineHeight = 21.sp
     ),
     bodyLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
-        lineHeight = 25.sp
+        lineHeight = 24.sp
     ),
     bodyMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
-        lineHeight = 21.sp
+        lineHeight = 20.sp
     ),
     bodySmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 12.sp,
-        lineHeight = 17.sp
+        lineHeight = 16.sp
     ),
     labelLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 14.sp,
-        lineHeight = 18.sp
+        lineHeight = 19.sp
     ),
     labelMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
-        fontSize = 12.sp,
-        lineHeight = 16.sp
+        fontSize = 11.sp,
+        lineHeight = 15.sp
     )
 )
 
 private val MathNotesShapes = Shapes(
-    extraSmall = RoundedCornerShape(4.dp),
-    small = RoundedCornerShape(7.dp),
-    medium = RoundedCornerShape(10.dp),
-    large = RoundedCornerShape(14.dp),
-    extraLarge = RoundedCornerShape(18.dp)
+    extraSmall = RoundedCornerShape(6.dp),
+    small = RoundedCornerShape(10.dp),
+    medium = RoundedCornerShape(14.dp),
+    large = RoundedCornerShape(18.dp),
+    extraLarge = RoundedCornerShape(24.dp)
 )
 
 @Composable

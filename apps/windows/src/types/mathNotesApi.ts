@@ -14,12 +14,15 @@ import type {
 import type { AssistantMode, BlockRef, ImageAnnotationObject, ImageTransformOperation, LockMeta } from "@mathnotes/shared";
 import type { AssistantTaskSummary } from "../core/assistantTask";
 import type { AssistantRemark } from "../core/assistantRemarkStore";
+import type { RecentSessionSummary } from "../core/recentReadingStore";
 import type { RecognitionProviderId as CoreRecognitionProviderId } from "../core/providerConfigStore";
-import type { SelectionEditProposal } from "@mathnotes/core-server";
+import type { ReadonlySessionPreview, SelectionEditProposal } from "@mathnotes/core-server";
 
 export type {
   NotebookSessionSummary,
   NotebookSummary,
+  RecentSessionSummary,
+  ReadonlySessionPreview,
   NotationPreviewInput,
   NotationProfileConfig,
   NotationPromptPreview,
@@ -234,6 +237,8 @@ export type SelectionEditProposalCommand = {
   notebookId: string;
   sessionId: string;
   proposalId: string;
+  replacementMarkdown?: string;
+  retryAfterUnlock?: boolean;
 };
 
 export type SaveSessionSourceInput = {
@@ -558,7 +563,7 @@ export type CancelAssistantTaskInput = {
   taskId: string;
 };
 
-export type WindowControlAction = "minimize" | "toggleMaximize" | "close";
+export type WindowControlAction = "minimize" | "toggleMaximize" | "restore" | "close";
 
 export type WindowDragInput = {
   screenX: number;
@@ -570,6 +575,8 @@ export type MathNotesApi = {
   loadCurrentSession(): Promise<SessionDocument>;
   loadNotebooks(): Promise<NotebookSummary[]>;
   loadNotebookSessions(input: { notebookId: string }): Promise<NotebookSessionSummary[]>;
+  loadRecentSessions(): Promise<RecentSessionSummary[]>;
+  previewSession(input: { notebookId: string; sessionId: string }): Promise<ReadonlySessionPreview>;
   openSession(input: OpenSessionInput): Promise<SessionDocument>;
   renameSession(input: RenameSessionInput): Promise<SessionDocument>;
   deleteSession(input: DeleteSessionInput): Promise<DeleteSessionResult>;
@@ -628,6 +635,7 @@ export type MathNotesApi = {
   pickImageForAnnotation(input?: PickImageForAnnotationInput): Promise<PickImageForAnnotationResult>;
   saveAnnotatedImage(input: SaveAnnotatedImageInput): Promise<SaveAnnotatedImageResult>;
   windowControl(action: WindowControlAction): Promise<{ action: WindowControlAction; maximized?: boolean }>;
+  assistantWindowControl(action: WindowControlAction): Promise<{ action: WindowControlAction; maximized?: boolean }>;
   onWindowCloseRequested(callback: () => void): () => void;
   beginWindowDrag(input: WindowDragInput): Promise<void>;
   updateWindowDrag(input: WindowDragInput): Promise<void>;

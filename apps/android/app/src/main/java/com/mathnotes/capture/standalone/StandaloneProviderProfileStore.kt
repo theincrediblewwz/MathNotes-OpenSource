@@ -1,7 +1,6 @@
 package com.mathnotes.capture.standalone
 
 import android.content.Context
-import android.net.Uri
 
 data class StandaloneProviderProfile(
     val providerId: String,
@@ -30,17 +29,24 @@ internal class StandaloneProviderProfileStore(context: Context) {
     }
 
     fun save(destination: String, model: String, apiKey: String): StandaloneProviderProfile {
-        val normalizedDestination = normalizeDestination(destination)
-        val normalizedModel = model.trim().also { require(it.isNotBlank()) { "模型名称不能为空" } }
-        require(apiKey.isNotBlank()) { "API Key 不能为空" }
-        secrets.save(normalizedDestination, PROVIDER_ID, normalizedModel, apiKey.trim())
+        return save(PROVIDER_ID, destination, model, apiKey)
+    }
+
+    fun save(providerId: String, baseUrl: String, model: String, apiKey: String): StandaloneProviderProfile {
+        val normalizedDestination = StandaloneProviderCatalog.destination(providerId, baseUrl)
+        val normalizedModel = StandaloneProviderCatalog.normalizeModel(providerId, model)
+        val normalizedKey = apiKey.trim().ifBlank {
+            secrets.load(normalizedDestination, providerId, normalizedModel)
+                ?: throw IllegalArgumentException("API Key 不能为空")
+        }
+        secrets.save(normalizedDestination, providerId, normalizedModel, normalizedKey)
         preferences.edit()
-            .putString("providerId", PROVIDER_ID)
+            .putString("providerId", providerId)
             .putString("destination", normalizedDestination)
             .putString("model", normalizedModel)
             .putBoolean("enabled", true)
             .apply()
-        return StandaloneProviderProfile(PROVIDER_ID, normalizedDestination, normalizedModel, true, true)
+        return StandaloneProviderProfile(providerId, normalizedDestination, normalizedModel, true, true)
     }
 
     fun useFake() {
@@ -53,16 +59,8 @@ internal class StandaloneProviderProfileStore(context: Context) {
     companion object {
         const val PROVIDER_ID = "custom_openai_compatible"
 
-        fun normalizeDestination(value: String): String {
-            val trimmed = value.trim().trimEnd('/')
-            require(trimmed.isNotBlank()) { "Endpoint 不能为空" }
-            val uri = Uri.parse(trimmed)
-            val loopback = uri.host == "127.0.0.1" || uri.host == "localhost" || uri.host == "10.0.2.2"
-            require(uri.scheme == "https" || (uri.scheme == "http" && loopback)) {
-                "真实 Provider 必须使用 HTTPS；HTTP 仅允许本机测试地址"
-            }
-            return if (trimmed.endsWith("/chat/completions", ignoreCase = true)) trimmed else "$trimmed/chat/completions"
-        }
+        fun normalizeDestination(value: String): String =
+            StandaloneProviderCatalog.destination(PROVIDER_ID, value)
 
         private const val PREFERENCES = "mathnotes_standalone_provider_profile_v1"
     }

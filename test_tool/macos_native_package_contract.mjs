@@ -8,16 +8,36 @@ const configuration = await readFile(
   "utf8"
 );
 const packager = await readFile("test_tool/package_macos_native.mjs", "utf8");
+const appLaunchSmoke = await readFile("test_tool/macos_native_app_launch_smoke.swift", "utf8");
+const workflow = await readFile(".github/workflows/package-macos-native.yml", "utf8");
 
 assert.equal(
   rootPackage.scripts["package:macos:native"],
   "node test_tool/package_macos_native.mjs"
 );
+assert.match(rootPackage.scripts["test:macos:app-launch"], /macos-native-app\.png local/);
+assert.match(rootPackage.scripts["test:macos:app-launch"], /macos-native-app-remote-error\.png companion/);
+assert.match(rootPackage.scripts["test:macos:app-launch"], /macos-native-phone-connection\.png phone/);
+assert.match(appLaunchSmoke, /launchArguments = \["-mathnotes\.workspace\.source\.v1", workspaceSource\]/);
+assert.match(appLaunchSmoke, /launchArguments\.append\("-mathnotes\.open-phone-connection"\)/);
+assert.match(appLaunchSmoke, /sourceMode == "phone" \? 18 : sourceMode == "companion" \? 3 : 0\.5/);
+assert.match(appLaunchSmoke, /production supervisor has a 15 second startup deadline/);
+assert.match(appLaunchSmoke, /did not present the focused phone connection sheet/);
+assert.match(appLaunchSmoke, /server\.listen\(1051, '0\.0\.0\.0'/);
+assert.match(appLaunchSmoke, /tailscaleFixtureAddress = "100\.88\.42\.7"/);
+assert.match(appLaunchSmoke, /MATHNOTES_TAILSCALE_CLI/);
+assert.match(appLaunchSmoke, /owner\.contains\("securityagent"\)/);
+assert.match(workflow, /security add-generic-password -U -s com\.mathnotes\.companion-host -a pairing-token/);
+assert.match(workflow, /security add-generic-password -U -s com\.mathnotes\.provider-api-key -a recognition:mimo_2_5/);
+assert.match(workflow, /defaults write com\.mathnotes\.native mathnotes\.provider\.settings\.v1 -data/);
 assert.match(configuration, /Bundle\.main\.resourceURL/);
 assert.match(configuration, /MathNotesRuntime/);
 assert.match(configuration, /MathNotesPWA/);
 assert.match(configuration, /MATHNOTES_PWA_STATIC_ROOT_DIR/);
 assert.match(configuration, /MATHNOTES_NODE_EXECUTABLE/);
+assert.match(configuration, /CompanionHostTokenStore\(environment: environment\)\.loadOrCreate\(\)/);
+assert.match(configuration, /\.posixPermissions: 0o600/);
+assert.doesNotMatch(configuration, /CompanionHostCredential|KeychainCredentialStore/);
 assert.match(packager, /MACOS_HOST_REQUIRED/);
 assert.match(packager, /core-server\.mjs/);
 assert.match(packager, /run\("npm", \["run", "build:pwa"\]\)/);

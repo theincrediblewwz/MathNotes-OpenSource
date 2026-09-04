@@ -8,21 +8,28 @@ import { chromium } from "playwright";
 const executable = path.resolve(process.argv[2] ?? "");
 if (!process.argv[2]) throw new Error("Usage: node test_tool/windows_portable_smoke.mjs <MathNotes.exe>");
 
-const userDataDir = await mkdtemp(path.join(os.tmpdir(), "mathnotes-portable-smoke-"));
+const smokeTempRoot = process.env.MATHNOTES_SMOKE_TEMP_ROOT
+  ? path.resolve(process.env.MATHNOTES_SMOKE_TEMP_ROOT)
+  : os.tmpdir();
+const userDataDir = await mkdtemp(path.join(smokeTempRoot, "mathnotes-portable-smoke-"));
 const pdfPath = path.join(userDataDir, "portable-pdf-runtime-smoke.pdf");
 await writeFile(pdfPath, createMinimalPdf());
 await assertReleaseFiles(path.dirname(executable));
 const port = await reservePort();
-const child = spawn(executable, [`--user-data-dir=${userDataDir}`, `--remote-debugging-port=${port}`], {
+const launchArgs = [`--user-data-dir=${userDataDir}`, `--remote-debugging-port=${port}`];
+const child = spawn(executable, launchArgs, {
   cwd: path.dirname(executable),
   windowsHide: true,
-  stdio: "ignore"
+  stdio: ["ignore", "pipe", "pipe"]
 });
+let childOutput = "";
+child.stdout?.on("data", (chunk) => { childOutput += chunk.toString(); });
+child.stderr?.on("data", (chunk) => { childOutput += chunk.toString(); });
 
 let browser;
 try {
-  browser = await connectWithRetry(port, child);
-  const page = await waitForRendererPage(browser, child);
+  browser = await connectWithRetry(port, child, () => childOutput);
+  const page = await waitForRendererPage(browser, child, () => childOutput);
   await page.waitForLoadState("domcontentloaded");
   const title = await page.title();
   const body = await page.locator("body").innerText();
@@ -47,10 +54,14 @@ try {
   if (!serviceWorkerResponse.ok || !serviceWorker.includes("skipWaiting")) {
     throw new Error("Packaged phone host is missing the production service worker");
   }
+  await page.evaluate(() => window.mathNotes.windowControl("close")).catch(() => undefined);
+  await waitForChildExit(child, 10_000);
   console.log(`WINDOWS_PORTABLE_SMOKE_OK title=${JSON.stringify(title)} pid=${child.pid}`);
 } finally {
-  await browser?.close().catch(() => undefined);
-  if (child.pid) spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+  await closeBrowserWithTimeout(browser, 2_000);
+  if (child.exitCode === null && child.pid) {
+    spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+  }
   await removeWithRetry(userDataDir);
 }
 
@@ -77,10 +88,12 @@ function reservePort() {
   });
 }
 
-async function connectWithRetry(port, child) {
+async function connectWithRetry(port, child, output) {
   let lastError;
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`Packaged app exited early with ${child.exitCode}`);
+    if (child.exitCode !== null) {
+      throw new Error(`Packaged app exited early with ${child.exitCode}\n${output()}`);
+    }
     try {
       return await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     } catch (error) {
@@ -91,9 +104,11 @@ async function connectWithRetry(port, child) {
   throw lastError;
 }
 
-async function waitForRendererPage(browser, child) {
+async function waitForRendererPage(browser, child, output) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`Packaged app exited early with ${child.exitCode}`);
+    if (child.exitCode !== null) {
+      throw new Error(`Packaged app exited early with ${child.exitCode}\n${output()}`);
+    }
     const page = browser.contexts().flatMap((context) => context.pages())[0];
     if (page) return page;
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -115,13 +130,38 @@ async function removeWithRetry(target) {
   throw lastError;
 }
 
+async function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null) return;
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`Packaged app did not exit cleanly within ${timeoutMs}ms`)), timeoutMs);
+    const onExit = () => {
+      clearTimeout(timeout);
+      resolve(undefined);
+    };
+    child.once("exit", onExit);
+    if (child.exitCode !== null) {
+      child.off("exit", onExit);
+      clearTimeout(timeout);
+      resolve(undefined);
+    }
+  });
+}
+
+async function closeBrowserWithTimeout(browser, timeoutMs) {
+  if (!browser?.isConnected()) return;
+  await Promise.race([
+    browser.close().catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs))
+  ]);
+}
+
 async function assertReleaseFiles(packagedRoot) {
   const required = [
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "SECURITY.md",
-    "首次运行说明.txt",
+    "README-FIRST.txt",
     "windows-sbom.cdx.json",
     "third-party-licenses.json",
     "release-manifest.json",

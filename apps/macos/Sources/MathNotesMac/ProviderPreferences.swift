@@ -88,6 +88,14 @@ enum ProviderPreferences {
 
 enum ProviderSettingsError: LocalizedError {
     case missingAPIKey
+    case notConfigured(ProviderPurpose)
 
-    var errorDescription: String? { "请填写 API 密钥。" }
+    var errorDescription: String? {
+        switch self {
+        case .missingAPIKey:
+            "请填写 API 密钥。"
+        case let .notConfigured(purpose):
+            "尚未配置\(purpose.label)，请先在 AI 服务设置中保存。"
+        }
+    }
 }

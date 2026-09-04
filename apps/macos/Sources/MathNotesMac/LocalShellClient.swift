@@ -92,6 +92,41 @@ struct LocalShellClient {
         return try JSONDecoder().decode(CreateSessionResponse.self, from: data).session
     }
 
+    func createNotesBackup(
+        ready: SidecarReadyMessage,
+        token: String,
+        destinationParentDir: String
+    ) async throws -> NotesBackupResult {
+        let body = try JSONEncoder().encode(NotesBackupRequest(destinationParentDir: destinationParentDir))
+        let (data, response) = try await request(
+            path: "local/v1/notes/backup",
+            ready: ready,
+            token: token,
+            timeout: 120,
+            method: "POST",
+            body: body
+        )
+        guard response.statusCode == 201 else {
+            let payload = try? JSONDecoder().decode(LocalShellErrorPayload.self, from: data)
+            let message: String
+            switch payload?.error {
+            case "backup_unavailable": message = "笔记备份服务尚未准备好，请稍后重试。"
+            case "invalid_backup_body": message = "请选择一个有效的备份文件夹。"
+            case let error? where error.contains("不能位于当前笔记目录内部"):
+                message = "备份位置不能放在当前笔记目录里面，请选择其他文件夹。"
+            case let error? where error.contains("符号链接"):
+                message = "笔记中包含不安全的文件链接，备份已停止。"
+            default: message = "备份没有完成，请检查所选文件夹后重试。"
+            }
+            throw NSError(
+                domain: "MathNotes.NotesBackup",
+                code: response.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+        }
+        return try JSONDecoder().decode(NotesBackupResponse.self, from: data).backup
+    }
+
     func providerStatus(ready: SidecarReadyMessage, token: String, purpose: ProviderPurpose = .recognition) async throws -> RuntimeProviderStatus {
         let (data, response) = try await request(
             path: "local/v1/provider",
@@ -339,9 +374,15 @@ struct LocalShellClient {
         token: String,
         notebookId: String,
         sessionId: String,
-        proposalId: String
+        proposalId: String,
+        replacementMarkdown: String? = nil,
+        retryAfterUnlock: Bool = false
     ) async throws -> ApplySelectionEditResponse {
-        let body = try JSONEncoder().encode(SelectionEditCommandRequest(proposalId: proposalId))
+        let body = try JSONEncoder().encode(SelectionEditCommandRequest(
+            proposalId: proposalId,
+            replacementMarkdown: replacementMarkdown,
+            retryAfterUnlock: retryAfterUnlock ? true : nil
+        ))
         let (data, response) = try await request(
             path: "local/v1/session/selection-edit/apply",
             queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
@@ -358,7 +399,11 @@ struct LocalShellClient {
         sessionId: String,
         proposalId: String
     ) async throws -> SelectionEditProposal {
-        let body = try JSONEncoder().encode(SelectionEditCommandRequest(proposalId: proposalId))
+        let body = try JSONEncoder().encode(SelectionEditCommandRequest(
+            proposalId: proposalId,
+            replacementMarkdown: nil,
+            retryAfterUnlock: nil
+        ))
         let (data, response) = try await request(
             path: "local/v1/session/selection-edit/cancel",
             queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
@@ -445,6 +490,82 @@ struct LocalShellClient {
         return try JSONDecoder().decode(SetMarkdownBlockLockResponse.self, from: data).block
     }
 
+    func protectMarkdownSelection(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        blockId: String,
+        baseRevision: String,
+        selection: SelectionEditTextRange
+    ) async throws -> UpdateMarkdownProtectedSpanResponse {
+        try await updateMarkdownProtectedSpan(
+            action: "protect",
+            ready: ready,
+            token: token,
+            notebookId: notebookId,
+            sessionId: sessionId,
+            blockId: blockId,
+            baseRevision: baseRevision,
+            selection: selection
+        )
+    }
+
+    func unlockMarkdownProtectedSelection(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        blockId: String,
+        baseRevision: String,
+        selection: SelectionEditTextRange
+    ) async throws -> UpdateMarkdownProtectedSpanResponse {
+        try await updateMarkdownProtectedSpan(
+            action: "unlock",
+            ready: ready,
+            token: token,
+            notebookId: notebookId,
+            sessionId: sessionId,
+            blockId: blockId,
+            baseRevision: baseRevision,
+            selection: selection
+        )
+    }
+
+    private func updateMarkdownProtectedSpan(
+        action: String,
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        blockId: String,
+        baseRevision: String,
+        selection: SelectionEditTextRange
+    ) async throws -> UpdateMarkdownProtectedSpanResponse {
+        var query = sessionQuery(notebookId: notebookId, sessionId: sessionId)
+        query.append(URLQueryItem(name: "blockId", value: blockId))
+        let body = try JSONEncoder().encode(UpdateMarkdownProtectedSpanRequest(
+            baseRevision: baseRevision,
+            from: selection.from,
+            to: selection.to,
+            selectedText: selection.selectedText
+        ))
+        let (data, response) = try await request(
+            path: "local/v1/session/block/span/\(action)",
+            queryItems: query,
+            ready: ready,
+            token: token,
+            timeout: 10,
+            method: "POST",
+            body: body
+        )
+        guard response.statusCode == 200 else {
+            let payload = try? JSONDecoder().decode(LocalShellErrorPayload.self, from: data)
+            throw SidecarProtocolError.saveRejected(response.statusCode, payload?.error ?? "unknown", nil)
+        }
+        return try JSONDecoder().decode(UpdateMarkdownProtectedSpanResponse.self, from: data)
+    }
+
     func reorderSessionBlocks(
         ready: SidecarReadyMessage,
         token: String,
@@ -510,9 +631,13 @@ struct LocalShellClient {
         token: String,
         notebookId: String,
         sessionId: String,
-        blockIds: [String]
-    ) async throws -> ReadonlySessionManifest {
-        let body = try JSONEncoder().encode(DeleteSessionBlocksRequest(blockIds: blockIds))
+        blockIds: [String],
+        baseRevision: String
+    ) async throws -> DeleteSessionBlocksResponse {
+        let body = try JSONEncoder().encode(DeleteSessionBlocksRequest(
+            blockIds: blockIds,
+            baseRevision: baseRevision
+        ))
         let (data, response) = try await request(
             path: "local/v1/session/blocks/delete",
             queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
@@ -527,7 +652,36 @@ struct LocalShellClient {
         }
         let result = try JSONDecoder().decode(DeleteSessionBlocksResponse.self, from: data)
         guard result.deleted else { throw SidecarProtocolError.sessionRejected(response.statusCode) }
-        return result.manifest
+        return result
+    }
+
+    func restoreSessionBlocks(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        deletionId: String,
+        baseRevision: String
+    ) async throws -> RestoreSessionBlocksResponse {
+        let body = try JSONEncoder().encode(RestoreSessionBlocksRequest(
+            deletionId: deletionId,
+            baseRevision: baseRevision
+        ))
+        let (data, response) = try await request(
+            path: "local/v1/session/blocks/restore",
+            queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
+            ready: ready,
+            token: token,
+            timeout: 10,
+            method: "POST",
+            body: body
+        )
+        guard response.statusCode == 200 else {
+            throw organizeError(data: data, status: response.statusCode)
+        }
+        let result = try JSONDecoder().decode(RestoreSessionBlocksResponse.self, from: data)
+        guard result.restored else { throw SidecarProtocolError.sessionRejected(response.statusCode) }
+        return result
     }
 
     func sessionConflict(
@@ -608,6 +762,153 @@ struct LocalShellClient {
         return result
     }
 
+    func importSessionEditedImage(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        fileName: String,
+        sourceBytes: Data,
+        outputPngBytes: Data,
+        baseRevision: String,
+        operations: [MacImageTransformOperation],
+        annotations: [MacImageAnnotationObject]
+    ) async throws -> ImportSessionEditedImageResponse {
+        let maximumImageBytes = 25 * 1024 * 1024
+        guard !sourceBytes.isEmpty, !outputPngBytes.isEmpty,
+              sourceBytes.count <= maximumImageBytes, outputPngBytes.count <= maximumImageBytes else {
+            throw SidecarProtocolError.imageEditRejected(413, "image_too_large")
+        }
+        let multipart = try imageEditMultipartBody(
+            fileName: fileName,
+            sourceBytes: sourceBytes,
+            outputPngBytes: outputPngBytes,
+            baseRevision: baseRevision,
+            metadata: MacImageEditMetadata(operations: operations, annotations: annotations)
+        )
+        let (data, response) = try await request(
+            path: "local/v1/session/image/edit",
+            queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
+            ready: ready,
+            token: token,
+            timeout: 60,
+            method: "POST",
+            body: multipart.body,
+            contentType: "multipart/form-data; boundary=\(multipart.boundary)"
+        )
+        guard response.statusCode == 200 else {
+            let code = (try? JSONDecoder().decode(LocalShellErrorPayload.self, from: data).error) ?? "unknown"
+            throw SidecarProtocolError.imageEditRejected(response.statusCode, code)
+        }
+        let result = try JSONDecoder().decode(ImportSessionEditedImageResponse.self, from: data)
+        guard result.imported, result.edited else {
+            throw SidecarProtocolError.imageEditRejected(response.statusCode, "not_imported")
+        }
+        return result
+    }
+
+    func stagePdfRecognitionPage(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        pdfBlockId: String,
+        pageNumber: Int,
+        baseRevision: String,
+        bytes: Data
+    ) async throws -> StagedPdfRecognitionPage {
+        var query = sessionQuery(notebookId: notebookId, sessionId: sessionId)
+        query.append(URLQueryItem(name: "pdfBlockId", value: pdfBlockId))
+        query.append(URLQueryItem(name: "pageNumber", value: String(pageNumber)))
+        query.append(URLQueryItem(name: "baseRevision", value: baseRevision))
+        let (data, response) = try await request(
+            path: "local/v1/session/pdf-recognition/page",
+            queryItems: query,
+            ready: ready,
+            token: token,
+            timeout: 60,
+            method: "POST",
+            body: bytes,
+            contentType: "image/png"
+        )
+        guard response.statusCode == 201 else { throw pdfRecognitionError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(PdfRecognitionPageResponse.self, from: data).page
+    }
+
+    func startPdfRecognitionBatch(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        pdfBlockId: String,
+        pdfAssetPath: String,
+        pageCount: Int,
+        concurrency: Int,
+        baseRevision: String,
+        pages: [StagedPdfRecognitionPage]
+    ) async throws -> PdfRecognitionBatch {
+        let body = try JSONEncoder().encode(StartPdfRecognitionBatchRequest(
+            pdfBlockId: pdfBlockId,
+            pdfAssetPath: pdfAssetPath,
+            pageCount: pageCount,
+            concurrency: concurrency,
+            baseRevision: baseRevision,
+            pages: pages.map {
+                StartPdfRecognitionBatchRequest.Page(pageNumber: $0.pageNumber, assetPath: $0.assetPath)
+            }
+        ))
+        let (data, response) = try await request(
+            path: "local/v1/session/pdf-recognition/start",
+            queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
+            ready: ready,
+            token: token,
+            timeout: 30,
+            method: "POST",
+            body: body
+        )
+        guard response.statusCode == 202 else { throw pdfRecognitionError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(PdfRecognitionBatchResponse.self, from: data).batch
+    }
+
+    func pdfRecognitionBatches(
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String
+    ) async throws -> [PdfRecognitionBatch] {
+        let (data, response) = try await request(
+            path: "local/v1/session/pdf-recognition",
+            queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId),
+            ready: ready,
+            token: token,
+            timeout: 10
+        )
+        guard response.statusCode == 200 else { throw pdfRecognitionError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(PdfRecognitionBatchesResponse.self, from: data).batches
+    }
+
+    func controlPdfRecognitionBatch(
+        _ action: String,
+        ready: SidecarReadyMessage,
+        token: String,
+        notebookId: String,
+        sessionId: String,
+        batchId: String
+    ) async throws -> PdfRecognitionBatch {
+        var query = sessionQuery(notebookId: notebookId, sessionId: sessionId)
+        query.append(URLQueryItem(name: "batchId", value: batchId))
+        let (data, response) = try await request(
+            path: "local/v1/session/pdf-recognition/\(action)",
+            queryItems: query,
+            ready: ready,
+            token: token,
+            timeout: 15,
+            method: "POST"
+        )
+        guard response.statusCode == 200 else { throw pdfRecognitionError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(PdfRecognitionBatchResponse.self, from: data).batch
+    }
+
     func importSessionPdf(
         ready: SidecarReadyMessage,
         token: String,
@@ -615,11 +916,13 @@ struct LocalShellClient {
         sessionId: String,
         fileName: String,
         bytes: Data,
-        baseRevision: String
+        baseRevision: String,
+        pageCount: Int
     ) async throws -> ImportSessionPdfResponse {
         var query = sessionQuery(notebookId: notebookId, sessionId: sessionId)
         query.append(URLQueryItem(name: "fileName", value: fileName))
         query.append(URLQueryItem(name: "baseRevision", value: baseRevision))
+        query.append(URLQueryItem(name: "pageCount", value: String(pageCount)))
         let (data, response) = try await request(
             path: "local/v1/session/pdf",
             queryItems: query,
@@ -998,6 +1301,11 @@ struct LocalShellClient {
         return .recognitionRejected(status, code)
     }
 
+    private func pdfRecognitionError(data: Data, status: Int) -> SidecarProtocolError {
+        let code = (try? JSONDecoder().decode(LocalShellErrorPayload.self, from: data).error) ?? "unknown"
+        return .pdfRecognitionRejected(status, code)
+    }
+
     private func exportError(data: Data, status: Int) -> SidecarProtocolError {
         let code = (try? JSONDecoder().decode(LocalShellErrorPayload.self, from: data).error) ?? "unknown"
         return .exportRejected(status, code)
@@ -1070,6 +1378,43 @@ struct LocalShellClient {
         return (data, http)
     }
 
+    private func imageEditMultipartBody(
+        fileName: String,
+        sourceBytes: Data,
+        outputPngBytes: Data,
+        baseRevision: String,
+        metadata: MacImageEditMetadata
+    ) throws -> (body: Data, boundary: String) {
+        let boundary = "MathNotes-ImageEdit-\(UUID().uuidString)"
+        var body = Data()
+        func append(_ string: String) { body.append(contentsOf: string.utf8) }
+        func appendField(_ name: String, _ value: String) {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
+            append(value)
+            append("\r\n")
+        }
+        func appendFile(_ field: String, _ name: String, _ mimeType: String, _ bytes: Data) {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"\(field)\"; filename=\"\(name)\"\r\n")
+            append("Content-Type: \(mimeType)\r\n\r\n")
+            body.append(bytes)
+            append("\r\n")
+        }
+
+        let safeFileName = fileName
+            .replacingOccurrences(of: "\u{0000}", with: "")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+        appendField("fileName", String(safeFileName.prefix(240)))
+        appendField("baseRevision", baseRevision)
+        appendField("metadata", String(decoding: try JSONEncoder().encode(metadata), as: UTF8.self))
+        appendFile("source", "source.bin", "application/octet-stream", sourceBytes)
+        appendFile("output", "edited.png", "image/png", outputPngBytes)
+        append("--\(boundary)--\r\n")
+        return (body, boundary)
+    }
+
     private func sessionQuery(notebookId: String, sessionId: String) -> [URLQueryItem] {
         [
             URLQueryItem(name: "notebookId", value: notebookId),
@@ -1114,6 +1459,17 @@ private struct ProposeSelectionEditRequest: Encodable {
 
 private struct SelectionEditCommandRequest: Encodable {
     let proposalId: String
+    let replacementMarkdown: String?
+    let retryAfterUnlock: Bool?
+}
+
+private struct NotesBackupRequest: Encodable {
+    let destinationParentDir: String
+}
+
+private struct NotesBackupResponse: Decodable {
+    let version: Int
+    let backup: NotesBackupResult
 }
 
 private struct ReorderSessionBlocksRequest: Encodable {
@@ -1123,6 +1479,12 @@ private struct ReorderSessionBlocksRequest: Encodable {
 
 private struct DeleteSessionBlocksRequest: Encodable {
     let blockIds: [String]
+    let baseRevision: String
+}
+
+private struct RestoreSessionBlocksRequest: Encodable {
+    let deletionId: String
+    let baseRevision: String
 }
 
 private struct TransferSessionBlocksRequest: Encodable {
@@ -1140,6 +1502,35 @@ private struct ResolveConflictRequest: Encodable {
 
 private struct StartRecognitionRequest: Encodable {
     let imageBlockId: String
+}
+
+private struct StartPdfRecognitionBatchRequest: Encodable {
+    struct Page: Encodable {
+        let pageNumber: Int
+        let assetPath: String
+    }
+
+    let pdfBlockId: String
+    let pdfAssetPath: String
+    let pageCount: Int
+    let concurrency: Int
+    let baseRevision: String
+    let pages: [Page]
+}
+
+private struct PdfRecognitionPageResponse: Decodable {
+    let version: Int
+    let page: StagedPdfRecognitionPage
+}
+
+private struct PdfRecognitionBatchResponse: Decodable {
+    let version: Int
+    let batch: PdfRecognitionBatch
+}
+
+private struct PdfRecognitionBatchesResponse: Decodable {
+    let version: Int
+    let batches: [PdfRecognitionBatch]
 }
 
 private struct RerunRecognitionRequest: Encodable {

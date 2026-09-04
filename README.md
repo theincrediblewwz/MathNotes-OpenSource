@@ -2,7 +2,7 @@
 
 MathNotes 是一个 GPLv3、本地优先的数学笔记项目，包含 Windows、macOS、Android 与 PWA。它围绕“图片/PDF → 忠实 Markdown 草稿 → 人工校订与锁定 → 连续阅读与导出”工作。
 
-当前开发版本：`0.2.0 alpha`；最新公开安装包仍为 `v0.1.11-alpha.1`。源码可以使用和修改，但自动测试不能替代真实 Windows、Apple silicon Mac、Android 与 iPhone 验收。
+当前开发版本：`0.3.1 alpha`；最新公开预发布为 `v0.3.1-alpha.1`。源码可以使用和修改，但自动测试不能替代真实 Windows、Apple silicon Mac、Android 与 iPhone 验收。
 
 ## 核心闭环
 
@@ -101,7 +101,7 @@ Notebook 包含多个 Session；Session 由按序 block 组成。PDF 保持原�
 - PWA：可自行部署；同域 Worker 方案要求在托管平台安全配置 Provider secret。
 - 尚不可宣称：稳定版、商店上架、已完成所有真机矩阵或无安全漏洞。
 
-本仓库不会提供 API key、配对 token、签名密钥或第三方服务额度。`v0.1.11-alpha.1` 发布时完整 `npm audit` 为 0 vulnerabilities，GitHub open Dependabot alerts 为 0；依赖安全状态会随时间变化，请以当前 Security 页面和本地审计结果为准。
+本仓库不会提供 API key、配对 token、签名密钥或第三方服务额度。发布时的依赖安全证据只是时间点快照；依赖安全状态会随时间变化，请以当前 Security 页面和本地审计结果为准。
 
 ## 许可证
 

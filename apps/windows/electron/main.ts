@@ -4,6 +4,7 @@ import {
   DeviceIdentityService,
   readWorkspaceContext,
   RevisionEventLog,
+  readReadonlySessionPreview,
   SessionBlockOrganizeService,
   SessionEditService,
   SessionSelectionEditService,
@@ -48,9 +49,11 @@ import { recognitionJobToTaskSummary, upsertRecognitionJob } from "../src/core/r
 import { readRecognitionTaskSummaries } from "../src/core/uploadTaskLog";
 import { compactSessionDocumentForRenderer, loadSessionDocumentFromStore } from "../src/core/sessionDocumentStore";
 import { createNotebook, deleteNotebookSession, listNotebooks, listNotebookSessions, renameSessionTitle } from "../src/core/sessionCatalog";
+import { listRecentSessions, recordRecentSession } from "../src/core/recentReadingStore";
 import { readUserSettings, writeUserSettings, type UserSettings } from "../src/core/userSettingsStore";
 import { createNotesBackup } from "../src/core/notesBackup";
 import { isTrustedRendererUrl } from "../src/core/electronSecurity";
+import { isMathNotesAuthorGithubUrl, MATHNOTES_AUTHOR_GITHUB_URL } from "../src/common/authorIdentity";
 import { decodePngDataUrl, markdownForEmbeddedAsset } from "../src/core/imageAnnotation";
 import { imagePathToDataUrl } from "../src/core/imageDataUrl";
 import { readPdfDocumentInfo } from "../src/core/pdfDocumentInfo";
@@ -147,6 +150,7 @@ const ipcMain = {
 
 let ingestServer: IngestServer | undefined;
 let mainWindow: BrowserWindow | undefined;
+let assistantWindow: BrowserWindow | undefined;
 let appIsQuitting = false;
 let deviceIdentityService: DeviceIdentityService | undefined;
 let activeDevicePairingChallenge: PairingChallenge | undefined;
@@ -270,6 +274,10 @@ function createWindow() {
   let shouldFallbackFromDevServer = Boolean(devServerUrl);
 
   window.webContents.setWindowOpenHandler((details) => {
+    if (isMathNotesAuthorGithubUrl(details.url)) {
+      void shell.openExternal(MATHNOTES_AUTHOR_GITHUB_URL).catch(() => undefined);
+      return { action: "deny" };
+    }
     if (details.frameName === "mathnotes-assistant" && details.url === "about:blank") {
       return {
         action: "allow",
@@ -281,6 +289,7 @@ function createWindow() {
           title: "MathNotes 学习助手",
           frame: false,
           resizable: true,
+          skipTaskbar: false,
           alwaysOnTop: false,
           autoHideMenuBar: true,
           backgroundColor: "#fbfaf7",
@@ -293,6 +302,17 @@ function createWindow() {
       };
     }
     return { action: "deny" };
+  });
+  window.webContents.on("did-create-window", (createdWindow, details) => {
+    if (details.frameName !== "mathnotes-assistant") return;
+    assistantWindow = createdWindow;
+    createdWindow.setSkipTaskbar(false);
+    createdWindow.setMenuBarVisibility(false);
+    createdWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    createdWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+    createdWindow.on("closed", () => {
+      if (assistantWindow === createdWindow) assistantWindow = undefined;
+    });
   });
   mainWindow = window;
   window.webContents.on("will-navigate", (event, targetUrl) => {
@@ -449,6 +469,7 @@ function registerIpcHandlers() {
       notebookId: currentNotebookId,
       sessionId: currentSessionId
     });
+    await rememberSessionRead(currentNotebookId, currentSessionId);
     return compactSessionDocumentForRenderer(document);
   });
 
@@ -465,16 +486,36 @@ function registerIpcHandlers() {
     });
   });
 
+  ipcMain.handle("mathnotes:load-recent-sessions", async () => {
+    await ensureDefaultStore();
+    return listRecentSessions({
+      userDataDir: app.getPath("userData"),
+      rootDir: notesRootDir(),
+      limit: 4
+    });
+  });
+
+  ipcMain.handle("mathnotes:preview-session", async (_event, input: { notebookId: string; sessionId: string }) => {
+    await ensureDefaultStore();
+    return readReadonlySessionPreview({
+      rootDir: notesRootDir(),
+      notebookId: input.notebookId,
+      sessionId: input.sessionId
+    });
+  });
+
   ipcMain.handle("mathnotes:open-session", async (_event, input: OpenSessionInput) => {
     const store = await ensureDefaultStore();
-    currentNotebookId = input.notebookId;
-    currentSessionId = input.sessionId;
-    await persistCurrentWorkspaceContext();
-    return loadSessionDocumentFromStore({
+    const document = await loadSessionDocumentFromStore({
       store,
       notebookId: input.notebookId,
       sessionId: input.sessionId
     });
+    currentNotebookId = input.notebookId;
+    currentSessionId = input.sessionId;
+    await persistCurrentWorkspaceContext();
+    await rememberSessionRead(input.notebookId, input.sessionId);
+    return document;
   });
 
   ipcMain.handle("mathnotes:rename-session", async (_event, input: RenameSessionInput) => {
@@ -770,11 +811,13 @@ function registerIpcHandlers() {
     currentSessionId = sessionId;
     await persistCurrentWorkspaceContext();
     ingestServer?.publishCompanionCatalogChange("created", notebookId, sessionId);
-    return loadSessionDocumentFromStore({
+    const document = await loadSessionDocumentFromStore({
       store,
       notebookId,
       sessionId
     });
+    await rememberSessionRead(notebookId, sessionId);
+    return document;
   });
 
   ipcMain.handle("mathnotes:run-assistant-task", async (_event, input: RunAssistantTaskInput) => {
@@ -860,7 +903,9 @@ function registerIpcHandlers() {
     currentSessionId = sessionId;
     await persistCurrentWorkspaceContext();
     ingestServer?.publishCompanionCatalogChange("created", notebookId, sessionId);
-    return loadSessionDocumentFromStore({ store, notebookId, sessionId });
+    const document = await loadSessionDocumentFromStore({ store, notebookId, sessionId });
+    await rememberSessionRead(notebookId, sessionId);
+    return document;
   });
 
   ipcMain.handle("mathnotes:create-markdown-block", async (_event, input: CreateMarkdownBlockInput) => {
@@ -1099,6 +1144,13 @@ function registerIpcHandlers() {
       return { action, maximized: window.isMaximized() };
     }
 
+    if (action === "restore") {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+      return { action };
+    }
+
     if (action === "close") {
       approvedWindowCloses.add(window);
       window.close();
@@ -1106,6 +1158,41 @@ function registerIpcHandlers() {
     }
 
     throw new Error(`Unsupported window control action: ${action}`);
+  });
+
+  ipcMain.handle("mathnotes:assistant-window-control", (_event, action: WindowControlAction) => {
+    const window = assistantWindow;
+    if (!window || window.isDestroyed()) {
+      throw new Error("The assistant window is not open");
+    }
+
+    if (action === "minimize") {
+      window.minimize();
+      return { action };
+    }
+
+    if (action === "toggleMaximize") {
+      if (window.isMaximized()) {
+        window.unmaximize();
+      } else {
+        window.maximize();
+      }
+      return { action, maximized: window.isMaximized() };
+    }
+
+    if (action === "restore") {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+      return { action };
+    }
+
+    if (action === "close") {
+      window.close();
+      return { action };
+    }
+
+    throw new Error(`Unsupported assistant window control action: ${action}`);
   });
 
   ipcMain.handle("mathnotes:begin-window-drag", (event, input: WindowDragInput) => {
@@ -2105,6 +2192,18 @@ async function persistCurrentWorkspaceContext(): Promise<void> {
 
 function notesRootDir(): string {
   return process.env.MATHNOTES_ROOT ?? cachedUserSettings?.notesRootDir ?? defaultNotesRootDir();
+}
+
+async function rememberSessionRead(notebookId: string, sessionId: string): Promise<void> {
+  try {
+    await recordRecentSession({
+      userDataDir: app.getPath("userData"),
+      notebookId,
+      sessionId
+    });
+  } catch (error) {
+    console.warn("Unable to update optional recent-reading metadata", error);
+  }
 }
 
 function ensureBlockOrganizeService(): SessionBlockOrganizeService {

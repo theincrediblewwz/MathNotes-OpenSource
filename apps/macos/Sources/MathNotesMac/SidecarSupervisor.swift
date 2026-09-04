@@ -18,6 +18,7 @@ final class SidecarSupervisor: ObservableObject {
 
     private var process: Process?
     private var launchTask: Task<Void, Never>?
+    private var launchDeadlineTask: Task<Void, Never>?
     private var companionServeTask: Task<Void, Never>?
     private let client = LocalShellClient()
     private var activeReady: SidecarReadyMessage?
@@ -42,6 +43,8 @@ final class SidecarSupervisor: ObservableObject {
                 let configuration = try SidecarConfiguration.development(notesRootURL: notesRootURL)
                 let ready = try await self.launch(configuration)
                 _ = try await self.client.health(ready: ready, token: configuration.token)
+                self.launchDeadlineTask?.cancel()
+                self.launchDeadlineTask = nil
                 self.activeReady = ready
                 self.activeToken = configuration.token
                 self.companionHost = ready.companionHost
@@ -50,16 +53,33 @@ final class SidecarSupervisor: ObservableObject {
                     instanceId: ready.instanceId,
                     endpoint: ready.endpoint?.absoluteString ?? ""
                 )
-                self.reconcileCompanionServe()
-                await self.restoreProviderConfiguration(ready: ready, token: configuration.token)
                 await self.loadCatalog(ready: ready, token: configuration.token)
             } catch is CancellationError {
-                self.state = .idle
+                self.launchDeadlineTask?.cancel()
+                self.launchDeadlineTask = nil
+                if case .starting = self.state { self.state = .idle }
             } catch {
+                self.launchDeadlineTask?.cancel()
+                self.launchDeadlineTask = nil
                 self.process?.terminate()
                 self.process = nil
-                self.state = .failed(error.localizedDescription)
+                if case .starting = self.state {
+                    self.state = .failed(error.localizedDescription)
+                }
             }
+        }
+        launchDeadlineTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(15))
+            } catch {
+                return
+            }
+            guard let self, case .starting = self.state else { return }
+            self.launchTask?.cancel()
+            let timedOutProcess = self.process
+            self.process = nil
+            if timedOutProcess?.isRunning == true { timedOutProcess?.terminate() }
+            self.state = .failed("本机连接服务启动超时。请重试；若仍失败，请打开更多连接设置查看状态。")
         }
     }
 
@@ -70,23 +90,19 @@ final class SidecarSupervisor: ObservableObject {
 
     func updateCompanionHostToken(_ token: String, confirmation: String) async throws {
         let normalized = try CompanionHostTokenPolicy.validate(token, confirmation: confirmation)
-        let store = KeychainCredentialStore(service: CompanionHostCredential.service)
-        let previous = try await Task.detached {
-            try store.read(account: CompanionHostCredential.account)
-        }.value
+        let store = CompanionHostTokenStore()
+        let previous = try await Task.detached { try store.read() }.value
         if previous == normalized { return }
-        try await Task.detached {
-            try store.write(normalized, account: CompanionHostCredential.account)
-        }.value
+        try await Task.detached { try store.write(normalized) }.value
         start()
         do {
             try await waitUntilReady()
         } catch {
             try? await Task.detached {
                 if let previous {
-                    try store.write(previous, account: CompanionHostCredential.account)
+                    try store.write(previous)
                 } else {
-                    try store.delete(account: CompanionHostCredential.account)
+                    try store.delete()
                 }
             }.value
             start()
@@ -140,13 +156,20 @@ final class SidecarSupervisor: ObservableObject {
         return session
     }
 
-    func hasSavedProviderKey(_ preset: ProviderPreset, purpose: ProviderPurpose = .recognition) async -> Bool {
-        let store = KeychainCredentialStore()
-        return await Task.detached {
-            let scoped = try? store.read(account: purpose.keychainAccount(for: preset))
-            if scoped?.isEmpty == false { return true }
-            return purpose == .recognition && (try? store.read(account: preset.rawValue))?.isEmpty == false
-        }.value
+    func createNotesBackup(destinationParentDir: String) async throws -> NotesBackupResult {
+        let connection = try activeConnection()
+        return try await client.createNotesBackup(
+            ready: connection.ready,
+            token: connection.token,
+            destinationParentDir: destinationParentDir
+        )
+    }
+
+    func hasSavedProviderConfiguration(
+        _ preset: ProviderPreset,
+        purpose: ProviderPurpose = .recognition
+    ) -> Bool {
+        ProviderPreferences.load(purpose)?.providerId == preset
     }
 
     func configureProvider(
@@ -220,7 +243,7 @@ final class SidecarSupervisor: ObservableObject {
     }
 
     func testProviderConnection(purpose: ProviderPurpose = .recognition) async throws -> ProviderConnectionTestResult {
-        let connection = try activeConnection()
+        let connection = try await providerConnection(purpose)
         return try await client.testProvider(
             ready: connection.ready,
             token: connection.token,
@@ -348,6 +371,105 @@ final class SidecarSupervisor: ObservableObject {
         )
     }
 
+    func importSessionEditedImage(
+        _ session: SessionCatalogItem,
+        fileName: String,
+        sourceBytes: Data,
+        outputPngBytes: Data,
+        baseRevision: String,
+        operations: [MacImageTransformOperation],
+        annotations: [MacImageAnnotationObject]
+    ) async throws -> ImportSessionEditedImageResponse {
+        let connection = try activeConnection()
+        return try await client.importSessionEditedImage(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            fileName: fileName,
+            sourceBytes: sourceBytes,
+            outputPngBytes: outputPngBytes,
+            baseRevision: baseRevision,
+            operations: operations,
+            annotations: annotations
+        )
+    }
+
+    func stagePdfRecognitionPage(
+        _ session: SessionCatalogItem,
+        pdfBlockId: String,
+        pageNumber: Int,
+        baseRevision: String,
+        bytes: Data
+    ) async throws -> StagedPdfRecognitionPage {
+        let connection = try activeConnection()
+        return try await client.stagePdfRecognitionPage(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            pdfBlockId: pdfBlockId,
+            pageNumber: pageNumber,
+            baseRevision: baseRevision,
+            bytes: bytes
+        )
+    }
+
+    func startPdfRecognitionBatch(
+        _ session: SessionCatalogItem,
+        pdfBlockId: String,
+        pdfAssetPath: String,
+        pageCount: Int,
+        concurrency: Int,
+        baseRevision: String,
+        pages: [StagedPdfRecognitionPage]
+    ) async throws -> PdfRecognitionBatch {
+        let connection = try await providerConnection(.recognition)
+        return try await client.startPdfRecognitionBatch(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            pdfBlockId: pdfBlockId,
+            pdfAssetPath: pdfAssetPath,
+            pageCount: pageCount,
+            concurrency: concurrency,
+            baseRevision: baseRevision,
+            pages: pages
+        )
+    }
+
+    func pdfRecognitionBatches(_ session: SessionCatalogItem) async throws -> [PdfRecognitionBatch] {
+        let connection = try activeConnection()
+        return try await client.pdfRecognitionBatches(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId
+        )
+    }
+
+    func controlPdfRecognitionBatch(
+        _ action: String,
+        session: SessionCatalogItem,
+        batchId: String
+    ) async throws -> PdfRecognitionBatch {
+        let connection: (ready: SidecarReadyMessage, token: String)
+        if action == "resume" {
+            connection = try await providerConnection(.recognition)
+        } else {
+            connection = try activeConnection()
+        }
+        return try await client.controlPdfRecognitionBatch(
+            action,
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            batchId: batchId
+        )
+    }
+
     func previewStandaloneMarkdown(_ markdown: String) async throws -> String {
         let connection = try activeConnection()
         let response = try await client.previewStandaloneMarkdown(
@@ -379,7 +501,7 @@ final class SidecarSupervisor: ObservableObject {
         selectedText: String,
         instruction: String
     ) async throws -> SelectionEditProposal {
-        let connection = try activeConnection()
+        let connection = try await providerConnection(.assistant)
         return try await client.proposeSelectionEdit(
             ready: connection.ready,
             token: connection.token,
@@ -394,7 +516,9 @@ final class SidecarSupervisor: ObservableObject {
 
     func applySelectionEdit(
         _ session: SessionCatalogItem,
-        proposalId: String
+        proposalId: String,
+        replacementMarkdown: String? = nil,
+        retryAfterUnlock: Bool = false
     ) async throws -> ApplySelectionEditResponse {
         let connection = try activeConnection()
         return try await client.applySelectionEdit(
@@ -402,7 +526,9 @@ final class SidecarSupervisor: ObservableObject {
             token: connection.token,
             notebookId: session.notebookId,
             sessionId: session.sessionId,
-            proposalId: proposalId
+            proposalId: proposalId,
+            replacementMarkdown: replacementMarkdown,
+            retryAfterUnlock: retryAfterUnlock
         )
     }
 
@@ -433,6 +559,42 @@ final class SidecarSupervisor: ObservableObject {
             sessionId: session.sessionId,
             blockId: blockId,
             locked: locked
+        )
+    }
+
+    func protectMarkdownSelection(
+        _ session: SessionCatalogItem,
+        blockId: String,
+        baseRevision: String,
+        selection: SelectionEditTextRange
+    ) async throws -> UpdateMarkdownProtectedSpanResponse {
+        let connection = try activeConnection()
+        return try await client.protectMarkdownSelection(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            blockId: blockId,
+            baseRevision: baseRevision,
+            selection: selection
+        )
+    }
+
+    func unlockMarkdownProtectedSelection(
+        _ session: SessionCatalogItem,
+        blockId: String,
+        baseRevision: String,
+        selection: SelectionEditTextRange
+    ) async throws -> UpdateMarkdownProtectedSpanResponse {
+        let connection = try activeConnection()
+        return try await client.unlockMarkdownProtectedSelection(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            blockId: blockId,
+            baseRevision: baseRevision,
+            selection: selection
         )
     }
 
@@ -494,25 +656,46 @@ final class SidecarSupervisor: ObservableObject {
 
     func deleteSessionBlocks(
         _ session: SessionCatalogItem,
-        blockIds: [String]
-    ) async throws -> ReadonlySessionManifest {
+        blockIds: [String],
+        baseRevision: String
+    ) async throws -> DeleteSessionBlocksResponse {
         let connection = try activeConnection()
-        let manifest = try await client.deleteSessionBlocks(
+        let response = try await client.deleteSessionBlocks(
             ready: connection.ready,
             token: connection.token,
             notebookId: session.notebookId,
             sessionId: session.sessionId,
-            blockIds: blockIds
+            blockIds: blockIds,
+            baseRevision: baseRevision
         )
         await loadCatalog(ready: connection.ready, token: connection.token)
-        return manifest
+        return response
+    }
+
+    func restoreSessionBlocks(
+        _ session: SessionCatalogItem,
+        deletionId: String,
+        baseRevision: String
+    ) async throws -> RestoreSessionBlocksResponse {
+        let connection = try activeConnection()
+        let response = try await client.restoreSessionBlocks(
+            ready: connection.ready,
+            token: connection.token,
+            notebookId: session.notebookId,
+            sessionId: session.sessionId,
+            deletionId: deletionId,
+            baseRevision: baseRevision
+        )
+        await loadCatalog(ready: connection.ready, token: connection.token)
+        return response
     }
 
     func importSessionPdf(
         _ session: SessionCatalogItem,
         fileName: String,
         bytes: Data,
-        baseRevision: String
+        baseRevision: String,
+        pageCount: Int
     ) async throws -> ImportSessionPdfResponse {
         let connection = try activeConnection()
         return try await client.importSessionPdf(
@@ -522,12 +705,13 @@ final class SidecarSupervisor: ObservableObject {
             sessionId: session.sessionId,
             fileName: fileName,
             bytes: bytes,
-            baseRevision: baseRevision
+            baseRevision: baseRevision,
+            pageCount: pageCount
         )
     }
 
     func startRecognition(_ session: SessionCatalogItem, imageBlockId: String) async throws -> SessionRecognitionTask {
-        let connection = try activeConnection()
+        let connection = try await providerConnection(.recognition)
         return try await client.startRecognition(
             ready: connection.ready, token: connection.token,
             notebookId: session.notebookId, sessionId: session.sessionId, imageBlockId: imageBlockId
@@ -535,7 +719,7 @@ final class SidecarSupervisor: ObservableObject {
     }
 
     func rerunRecognition(_ session: SessionCatalogItem, transcriptBlockId: String) async throws -> SessionRecognitionTask {
-        let connection = try activeConnection()
+        let connection = try await providerConnection(.recognition)
         return try await client.rerunRecognition(
             ready: connection.ready, token: connection.token,
             notebookId: session.notebookId, sessionId: session.sessionId,
@@ -558,7 +742,7 @@ final class SidecarSupervisor: ObservableObject {
         _ session: SessionCatalogItem,
         input: SessionAssistantRequest
     ) async throws -> SessionAssistantRemark {
-        let connection = try activeConnection()
+        let connection = try await providerConnection(.assistant)
         return try await client.runSessionAssistant(
             ready: connection.ready, token: connection.token,
             notebookId: session.notebookId, sessionId: session.sessionId, input: input
@@ -569,7 +753,7 @@ final class SidecarSupervisor: ObservableObject {
         _ session: SessionCatalogItem,
         input: SessionAssistantRequest
     ) async throws -> SessionAssistantTask {
-        let connection = try activeConnection()
+        let connection = try await providerConnection(.assistant)
         return try await client.startSessionAssistant(
             ready: connection.ready, token: connection.token,
             notebookId: session.notebookId, sessionId: session.sessionId, input: input
@@ -693,7 +877,7 @@ final class SidecarSupervisor: ObservableObject {
     }
 
     func retryRecognition(_ session: SessionCatalogItem, taskId: String) async throws -> SessionRecognitionTask {
-        let connection = try activeConnection()
+        let connection = try await providerConnection(.recognition)
         return try await client.retryRecognition(
             ready: connection.ready, token: connection.token,
             notebookId: session.notebookId, sessionId: session.sessionId, taskId: taskId
@@ -730,6 +914,8 @@ final class SidecarSupervisor: ObservableObject {
     func stop() {
         launchTask?.cancel()
         launchTask = nil
+        launchDeadlineTask?.cancel()
+        launchDeadlineTask = nil
         companionServeTask?.cancel()
         companionServeTask = nil
         activeReady = nil
@@ -756,14 +942,25 @@ final class SidecarSupervisor: ObservableObject {
         state = .idle
     }
 
-    private func reconcileCompanionServe() {
+    func inspectCompanionServe() {
+        guard let port = companionHost?.port else {
+            tailscaleServeState = .failed(message: "请先等待本机设备连接服务就绪。")
+            return
+        }
         companionServeTask?.cancel()
         tailscaleServeState = .checking
         companionServeTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let coordinator = try TailscaleServeCoordinator.locate()
-                let origin = try await coordinator.ensureServing()
+                guard let origin = try await coordinator.inspectServing(
+                    expectedProxy: "http://127.0.0.1:\(port)"
+                ) else {
+                    self.tailscaleServeState = .failed(
+                        message: "没有检测到指向当前 MathNotes 的 Tailscale Serve；软件不会自动修改它。"
+                    )
+                    return
+                }
                 _ = try CompanionHostAddressPreferences.save(origin)
                 self.companionPublicOrigin = origin
                 self.tailscaleServeState = .ready(origin: origin)
@@ -785,11 +982,6 @@ final class SidecarSupervisor: ObservableObject {
         } catch {
             catalogState = .failed(error.localizedDescription)
         }
-    }
-
-    private func restoreProviderConfiguration(ready: SidecarReadyMessage, token: String) async {
-        await restoreProviderConfiguration(.recognition, ready: ready, token: token)
-        await restoreProviderConfiguration(.assistant, ready: ready, token: token)
     }
 
     private func restoreProviderConfiguration(
@@ -870,6 +1062,43 @@ final class SidecarSupervisor: ObservableObject {
         return (activeReady, activeToken)
     }
 
+    private func providerConnection(
+        _ purpose: ProviderPurpose
+    ) async throws -> (ready: SidecarReadyMessage, token: String) {
+        let connection = try activeConnection()
+        try await ensureProviderConfiguration(
+            purpose,
+            ready: connection.ready,
+            token: connection.token
+        )
+        return connection
+    }
+
+    private func ensureProviderConfiguration(
+        _ purpose: ProviderPurpose,
+        ready: SidecarReadyMessage,
+        token: String
+    ) async throws {
+        let currentStatus = purpose == .recognition ? providerStatus : assistantProviderStatus
+        if currentStatus.configured { return }
+
+        if purpose == .assistant,
+           ProviderPreferences.load(.assistant) == nil,
+           ProviderPreferences.load(.recognition) != nil {
+            try await ensureProviderConfiguration(.recognition, ready: ready, token: token)
+        }
+
+        await restoreProviderConfiguration(purpose, ready: ready, token: token)
+        let restoredStatus = purpose == .recognition ? providerStatus : assistantProviderStatus
+        if restoredStatus.configured { return }
+
+        let restorationError = purpose == .recognition
+            ? providerRestorationError
+            : assistantProviderRestorationError
+        if let restorationError { throw restorationError }
+        throw ProviderSettingsError.notConfigured(purpose)
+    }
+
     private func waitUntilReady() async throws {
         for _ in 0..<100 {
             switch state {
@@ -899,7 +1128,7 @@ final class SidecarSupervisor: ObservableObject {
                 if case .stopping = self.state {
                     self.state = .idle
                 } else if case .ready = self.state {
-                    self.state = .failed("Sidecar 已意外退出，可点击重试。")
+                    self.state = .failed("本机连接服务已意外退出，请重试。")
                 }
             }
         }

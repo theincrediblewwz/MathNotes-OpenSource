@@ -135,12 +135,17 @@ export function normalizeImageTransformOperations(
 }
 
 export function assertValidImageTransformSidecar(sidecar: ImageTransformSidecar): void {
+  if (!sidecar || typeof sidecar !== "object") throw new Error("Image transform sidecar must be an object.");
   if (sidecar.version !== IMAGE_TRANSFORM_VERSION) throw new Error("Unsupported image transform version.");
   assertPortableAssetPath(sidecar.sourceAsset, "sourceAsset");
   if (sidecar.outputAsset) assertPortableAssetPath(sidecar.outputAsset, "outputAsset");
   if (!/^[a-f0-9]{64}$/i.test(sidecar.sourceSha256)) throw new Error("sourceSha256 must be a SHA-256 hex digest.");
   if (sidecar.outputMimeType !== "image/png") throw new Error("Image transform output must be PNG.");
 
+  if (!Array.isArray(sidecar.operations) || sidecar.operations.length > 128) {
+    throw new Error("Image transform operations are invalid.");
+  }
+  sidecar.operations.forEach(assertValidOperationShape);
   const normalized = normalizeImageTransformOperations(sidecar.operations);
   if (JSON.stringify(normalized) !== JSON.stringify(sidecar.operations)) {
     throw new Error("Image transform operations are not normalized or ordered.");
@@ -160,7 +165,14 @@ export function assertValidImageTransformSidecar(sidecar: ImageTransformSidecar)
       }
     }
   }
+  if (sidecar.annotations !== undefined && (!Array.isArray(sidecar.annotations) || sidecar.annotations.length > 1_024)) {
+    throw new Error("Image annotations are invalid.");
+  }
+  let annotationPointCount = 0;
   for (const annotation of sidecar.annotations ?? []) {
+    if (!annotation || typeof annotation !== "object" || (annotation.type !== "pen" && annotation.type !== "arrow")) {
+      throw new Error("Annotation type is invalid.");
+    }
     if (!/^[A-Za-z0-9._-]{1,80}$/.test(annotation.id)) throw new Error("Annotation id is invalid.");
     if (!/^#[0-9a-f]{6}$/i.test(annotation.color)) throw new Error("Annotation color must be a six-digit hex value.");
     if (!Number.isFinite(annotation.width) || annotation.width < 0.001 || annotation.width > 0.1) {
@@ -168,14 +180,59 @@ export function assertValidImageTransformSidecar(sidecar: ImageTransformSidecar)
     }
     if (annotation.type === "pen") {
       if (annotation.points.length < 2) throw new Error("Pen annotation requires at least two points.");
+      annotationPointCount += annotation.points.length;
       annotation.points.forEach(assertNormalizedPoint);
     } else {
+      annotationPointCount += 2;
       assertNormalizedPoint(annotation.start);
       assertNormalizedPoint(annotation.end);
       if (Math.hypot(annotation.end.x - annotation.start.x, annotation.end.y - annotation.start.y) < 0.002) {
         throw new Error("Arrow annotation is too short.");
       }
     }
+  }
+  if (annotationPointCount > 20_000) throw new Error("Image annotations contain too many points.");
+}
+
+function assertValidOperationShape(operation: ImageTransformOperation): void {
+  if (!operation || typeof operation !== "object") throw new Error("Image transform operation must be an object.");
+  switch (operation.type) {
+    case "rotate":
+      if (operation.quarterTurns !== 1 && operation.quarterTurns !== 2 && operation.quarterTurns !== 3) {
+        throw new Error("Rotation must use one, two, or three quarter turns.");
+      }
+      return;
+    case "perspective":
+      if (!Array.isArray(operation.corners) || operation.corners.length !== 4) {
+        throw new Error("Perspective correction requires four corners.");
+      }
+      operation.corners.forEach(assertNormalizedPoint);
+      return;
+    case "crop":
+      if (!operation.rect || typeof operation.rect !== "object") throw new Error("Crop rectangle is invalid.");
+      assertNormalizedRect(operation.rect);
+      return;
+    case "lasso":
+      if (!Array.isArray(operation.points) || operation.points.length < 3 || operation.points.length > 20_000) {
+        throw new Error("Lasso points are invalid.");
+      }
+      operation.points.forEach(assertNormalizedPoint);
+      if (!operation.boundingBox || typeof operation.boundingBox !== "object") {
+        throw new Error("Lasso bounding box is invalid.");
+      }
+      assertNormalizedRect(operation.boundingBox);
+      if (operation.outsideFill !== IMAGE_TRANSFORM_OUTSIDE_FILL) throw new Error("Lasso outside fill is invalid.");
+      return;
+    default:
+      throw new Error("Image transform operation type is invalid.");
+  }
+}
+
+function assertNormalizedRect(rect: NormalizedRect): void {
+  assertNormalizedPoint(rect);
+  if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width < 0 || rect.height < 0 ||
+      rect.x + rect.width > 1 || rect.y + rect.height > 1) {
+    throw new Error("Image rectangle must use normalized coordinates.");
   }
 }
 

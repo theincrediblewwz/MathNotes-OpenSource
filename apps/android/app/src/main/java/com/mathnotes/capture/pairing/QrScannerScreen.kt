@@ -36,6 +36,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -99,7 +100,7 @@ fun QrScannerScreen(onResult: (String) -> Boolean, onCancel: () -> Unit) {
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 Surface(
-                    modifier = Modifier.clickable(onClick = onCancel),
+                    modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onCancel),
                     shape = RoundedCornerShape(14.dp),
                     color = Color(0xE6FFFEFD),
                     border = BorderStroke(1.dp, MathNotesColors.Line),

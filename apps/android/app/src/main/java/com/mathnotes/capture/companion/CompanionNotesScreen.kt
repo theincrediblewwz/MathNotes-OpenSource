@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -42,6 +44,7 @@ import com.mathnotes.capture.ui.MathNotesColors
 import com.mathnotes.capture.ui.MathNotesThemeId
 import com.mathnotes.capture.ui.MathNotesPageHeader
 import com.mathnotes.capture.ui.MathNotesPaper
+import com.mathnotes.capture.ui.MathNotesSecondaryButton
 import java.io.FileInputStream
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
@@ -58,7 +61,10 @@ fun CompanionNotesScreen(
     targets: List<PairingTarget>,
     themeId: MathNotesThemeId = MathNotesThemeId.DEFAULT_LIGHT,
     endpointCandidates: List<PairingConfig> = emptyList(),
-    onPairingVerified: (PairingConfig, List<PairingTarget>) -> Unit = { _, _ -> }
+    onPairingVerified: (PairingConfig, List<PairingTarget>) -> Unit = { _, _ -> },
+    onExit: (() -> Unit)? = null,
+    libraryHeader: (@Composable () -> Unit)? = null,
+    libraryQuery: String = ""
 ) {
     val context = LocalContext.current
     val markdownMirror = remember(context) { CompanionMarkdownMirror(context.applicationContext) }
@@ -85,7 +91,9 @@ fun CompanionNotesScreen(
     var expandedNotebooks by remember(pairing?.profileId) { mutableStateOf(emptySet<String>()) }
     var verifiedPairing by remember(pairing?.profileId) { mutableStateOf(pairing) }
 
-    BackHandler(enabled = selected != null) { selected = null }
+    BackHandler(enabled = selected != null || onExit != null) {
+        if (selected != null) selected = null else onExit?.invoke()
+    }
 
     LaunchedEffect(targets) {
         if (targets.isNotEmpty()) catalogTargets = targets
@@ -186,7 +194,10 @@ fun CompanionNotesScreen(
     val offlineTargets = cached
         .filterNot { (it.notebookId to it.sessionId) in advertisedKeys }
         .map { PairingTarget(it.notebookId, it.sessionId, it.title) }
-    val visibleTargets = catalogTargets + offlineTargets
+    val visibleTargets = (catalogTargets + offlineTargets).filter { target ->
+        libraryQuery.isBlank() || target.notebookTitle.contains(libraryQuery, ignoreCase = true) ||
+            target.title.contains(libraryQuery, ignoreCase = true)
+    }
 
     PullToRefreshBox(
         isRefreshing = catalogSyncing,
@@ -197,13 +208,17 @@ fun CompanionNotesScreen(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(start = 22.dp, top = 28.dp, end = 22.dp, bottom = 112.dp)
+                .padding(start = 22.dp, top = 14.dp, end = 22.dp, bottom = 132.dp)
         ) {
-            MathNotesPageHeader(
-                eyebrow = "只读同步",
-                title = "我的笔记",
-                detail = "连接电脑时自动更新；离线时仍可阅读最近缓存。"
-            )
+            libraryHeader?.invoke()
+            if (libraryHeader != null) Spacer(Modifier.height(22.dp))
+            onExit?.let {
+                MathNotesSecondaryButton("返回笔记", it, Modifier.fillMaxWidth())
+                Spacer(Modifier.height(15.dp))
+            }
+            Text("Notebooks", style = MaterialTheme.typography.titleLarge, color = MathNotesColors.Ink)
+            Spacer(Modifier.height(6.dp))
+            Text("连接电脑时自动更新；离线时仍可阅读最近缓存。", style = MaterialTheme.typography.bodySmall, color = MathNotesColors.Muted)
             Spacer(Modifier.height(22.dp))
             catalogError?.let { message ->
                 MathNotesPaper(Modifier.fillMaxWidth().padding(bottom = 9.dp)) {
@@ -224,6 +239,7 @@ fun CompanionNotesScreen(
                     Modifier
                         .fillMaxWidth()
                         .padding(bottom = 9.dp)
+                        .clip(RoundedCornerShape(16.dp))
                         .clickable {
                             expandedNotebooks = if (expanded) {
                                 expandedNotebooks - notebookId
@@ -252,6 +268,7 @@ fun CompanionNotesScreen(
                         Modifier
                             .fillMaxWidth()
                             .padding(start = 14.dp, bottom = 9.dp)
+                            .clip(RoundedCornerShape(16.dp))
                             .clickable { selected = target }
                     ) {
                         Text(target.title, style = MaterialTheme.typography.titleMedium, color = MathNotesColors.Ink)
@@ -490,9 +507,9 @@ internal fun prepareCompanionReaderHtml(html: String, themeId: MathNotesThemeId)
         pre{max-width:100%!important;overflow-x:auto!important;white-space:pre-wrap!important;overflow-wrap:anywhere!important;background:var(--android-code)!important;color:var(--android-ink)!important}
         code{background:var(--android-code)!important;color:var(--android-ink)!important}
         .math-inline{display:inline-block!important;max-width:100%!important;vertical-align:-.12em!important}
-        .math-display,math[display="block"]{max-width:100%!important}.math-display{width:100%!important;overflow-x:auto!important;overflow-y:hidden!important;-webkit-overflow-scrolling:touch!important}.math-display math[display="block"]{display:block!important;width:max-content!important;min-width:100%!important;margin:0!important}
+        .math-display,math[display="block"]{max-width:100%!important}.math-display,.note-block .katex-display{display:block!important;width:100%!important;max-width:100%!important;overflow-x:auto!important;overflow-y:hidden!important;-webkit-overflow-scrolling:touch!important}.math-display math[display="block"]{display:block!important;width:max-content!important;min-width:100%!important;margin:0!important}
         .katex>.katex-html{display:inline-block!important}.math-display .katex>.katex-html,.katex-display>.katex>.katex-html{display:block!important}.katex>.katex-mathml{display:block!important;position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip-path:inset(50%)!important;border:0!important}
-        .math-display .katex-display,.math-display .katex-display>.katex,.math-display .katex-display>.katex>.katex-html{width:max-content!important;min-width:100%!important}
+        .math-display .katex-display,.math-display .katex-display>.katex,.math-display .katex-display>.katex>.katex-html,.note-block .katex-display>.katex,.note-block .katex-display>.katex>.katex-html{width:max-content!important;min-width:100%!important}
         @media(max-width:640px){.math-display .katex-display>.katex>.katex-html>.tag{position:sticky!important;right:0!important;display:block!important;width:max-content!important;min-width:3.5em!important;margin:.4em 0 0 auto!important;text-align:right!important}}
         table{display:block!important;width:100%!important;max-width:100%!important;overflow-x:auto!important;border-collapse:collapse!important;-webkit-overflow-scrolling:touch!important}
         img,svg,video,canvas{display:block!important;max-width:100%!important;height:auto!important;margin:12px auto!important}
@@ -510,8 +527,12 @@ internal fun prepareCompanionReaderHtml(html: String, themeId: MathNotesThemeId)
 internal fun companionReaderAssetResponse(context: Context, uri: Uri): WebResourceResponse? {
     if (uri.scheme != "https" || uri.host != "appassets.androidplatform.net") return null
     val assetPath = uri.path.orEmpty().removePrefix("/assets/")
-    if (!assetPath.startsWith("katex/") || assetPath.contains("..")) return null
+    if (assetPath.contains("..")) return null
+    val readerScript = assetPath == "reader/markdown-it.min.js"
+    val katexScript = assetPath == "katex/katex.min.js" || assetPath == "katex/contrib/auto-render.min.js"
+    if (!assetPath.startsWith("katex/") && !readerScript) return null
     val mimeType = when {
+        readerScript || katexScript -> "application/javascript"
         assetPath.endsWith(".css") -> "text/css"
         assetPath.endsWith(".woff2") -> "font/woff2"
         else -> return null

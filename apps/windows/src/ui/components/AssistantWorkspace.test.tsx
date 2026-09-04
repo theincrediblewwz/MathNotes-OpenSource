@@ -2,14 +2,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { assistantDragMime } from "../assistantDragPayload";
-import { AssistantWorkspace } from "./AssistantWorkspace";
+import { AssistantWorkspace, resizeAssistantRect } from "./AssistantWorkspace";
 
 function renderWorkspace(overrides: Partial<ComponentProps<typeof AssistantWorkspace>> = {}) {
   const props: ComponentProps<typeof AssistantWorkspace> = {
     open: true,
     running: false,
     onlineEnabled: true,
-    providerLabel: "Mimo v2.5",
     remarks: [],
     liveText: "",
     onClose: vi.fn(),
@@ -24,11 +23,13 @@ function renderWorkspace(overrides: Partial<ComponentProps<typeof AssistantWorks
 }
 
 describe("AssistantWorkspace", () => {
-  it("keeps provider failures visible inside the non-modal workspace", () => {
+  it("keeps provider failures visible without exposing provider or context-budget internals", () => {
     renderWorkspace({ error: "400 Param Incorrect" });
 
-    expect(screen.getByRole("alert").textContent).toContain("本次调用没有完成");
+    expect(screen.getByRole("alert").textContent).toContain("这次没有完成");
     expect(screen.getByRole("alert").textContent).toContain("400 Param Incorrect");
+    expect(screen.queryByText(/实际笔记上下文/)).toBeNull();
+    expect(screen.getByRole("textbox", { name: "与笔记对话" })).toBeTruthy();
   });
 
   it("accepts a copied editor selection as the next assistant focus", () => {
@@ -50,16 +51,15 @@ describe("AssistantWorkspace", () => {
 
     fireEvent.drop(screen.getByTestId("assistant-workspace"), { dataTransfer });
     expect(screen.getByTestId("assistant-focus-preview").textContent).toContain("一致有界原理");
-    fireEvent.click(screen.getByRole("button", { name: "修改选中文字" }));
+    fireEvent.click(screen.getByRole("button", { name: "修改这段文字" }));
     expect(onEditSelection).toHaveBeenCalledWith({
       blockId: "0007",
       from: 4,
       to: 10,
       selectedText: "一致有界原理"
     });
-    expect(screen.getByTestId("assistant-context-budget").textContent).toContain("实际笔记上下文");
-    fireEvent.change(screen.getByLabelText("向 AI 学习助手提问"), { target: { value: "为什么？" } });
-    fireEvent.click(screen.getByTitle("发送"));
+    fireEvent.change(screen.getByRole("textbox", { name: "与笔记对话" }), { target: { value: "为什么？" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(props.onSubmit).toHaveBeenCalledWith({
       mode: "explain",
@@ -72,29 +72,121 @@ describe("AssistantWorkspace", () => {
     });
   });
 
-  it("does not auto-promote remarks into the note", () => {
+  it("shows a conversational before-and-after edit and applies only after confirmation", () => {
+    const onSelectionApply = vi.fn();
+    const onSelectionReplacementChange = vi.fn();
+    renderWorkspace({
+      onSelectionApply,
+      onSelectionReplacementChange,
+      selectionEdit: {
+        blockId: "0007",
+        from: 2,
+        to: 8,
+        selectedText: "原始选区 $x$",
+        instruction: "写得更清楚，公式不要动",
+        replacementMarkdown: "修改候选 $x$",
+        proposal: {
+          id: "selection_1",
+          replacementMarkdown: "修改候选 $x$",
+          status: "proposed"
+        },
+        status: "idle"
+      }
+    });
+
+    expect(screen.getByText("仅修改未锁定内容")).toBeTruthy();
+    expect(screen.getByText("原文")).toBeTruthy();
+    expect(screen.getByText("修改后（可编辑）")).toBeTruthy();
+    expect(onSelectionApply).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /编辑/ }));
+    fireEvent.change(screen.getByLabelText("修改后的文字"), { target: { value: "用户调整后的候选" } });
+    expect(onSelectionReplacementChange).toHaveBeenCalledWith("用户调整后的候选");
+    fireEvent.click(screen.getByRole("button", { name: "应用修改" }));
+    expect(onSelectionApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the submitted user message immediately while the answer is still streaming", () => {
+    renderWorkspace({
+      running: true,
+      pendingQuestion: "请解释第三块",
+      liveText: "正在读取"
+    });
+
+    expect(screen.getByText("请解释第三块")).toBeTruthy();
+    expect(screen.getByText(/正在读取/)).toBeTruthy();
+  });
+
+  it("keeps a locked proposal visible and retries the same candidate after user unlock", () => {
+    const onSelectionApply = vi.fn();
+    const onSelectionRetry = vi.fn();
+    const onSelectionUnlock = vi.fn();
+    renderWorkspace({
+      onSelectionApply,
+      onSelectionRetry,
+      onSelectionUnlock,
+      selectionEdit: {
+        blockId: "0007",
+        from: 2,
+        to: 8,
+        selectedText: "原始选区",
+        instruction: "写得更清楚",
+        replacementMarkdown: "修改候选",
+        proposal: {
+          id: "selection_1",
+          replacementMarkdown: "修改候选",
+          status: "proposed"
+        },
+        status: "idle",
+        error: "这段内容已经被固定。修改候选已保留。",
+        requiresUnlock: true
+      }
+    });
+
+    expect(screen.getByText("修改后（可编辑）")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "去解锁" }));
+    expect(onSelectionUnlock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(onSelectionApply).toHaveBeenCalledTimes(1);
+    expect(onSelectionRetry).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-write assistant answers into the note", () => {
     const onPromoteRemark = vi.fn();
+    const onOpenRelatedSource = vi.fn();
     renderWorkspace({
       onPromoteRemark,
+      onOpenRelatedSource,
       remarks: [{
         id: "remark_1",
         mode: "teach",
-        focus: { kind: "session", label: "当前 Session" },
-        markdown: "## 旁注",
+        focus: { kind: "session", label: "当前笔记" },
+        question: "解释这个结论",
+        markdown: "## 回答",
         providerName: "Mimo v2.5",
         sourceBlockIds: ["0001"],
+        relatedSources: [{
+          refId: "R1",
+          notebookId: "analysis",
+          notebookTitle: "泛函分析",
+          sessionId: "principle",
+          sessionTitle: "一致有界原理",
+          blockId: "0007",
+          locked: true
+        }],
         createdAt: "2026-07-16T00:00:00.000Z",
         updatedAt: "2026-07-16T00:00:00.000Z"
       }]
     });
 
-    expect(screen.getByText("旁注")).toBeTruthy();
+    expect(screen.getByText("解释这个结论")).toBeTruthy();
     expect(onPromoteRemark).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "转为笔记块" }));
+    fireEvent.click(screen.getByRole("button", { name: "Notebook：泛函分析 · Session：一致有界原理" }));
+    expect(onOpenRelatedSource).toHaveBeenCalledWith(expect.objectContaining({ refId: "R1", blockId: "0007" }));
+    fireEvent.click(screen.getByRole("button", { name: "写入笔记" }));
     expect(onPromoteRemark).toHaveBeenCalledWith("remark_1");
   });
 
-  it("opens a stored remark in the dedicated reader without changing the note", () => {
+  it("opens a stored answer in focused reading without changing the note", () => {
     const onSelectedRemarkChange = vi.fn();
     renderWorkspace({
       onSelectedRemarkChange,
@@ -102,8 +194,8 @@ describe("AssistantWorkspace", () => {
       remarks: [{
         id: "remark_1",
         mode: "explain",
-        focus: { kind: "block", blockId: "0007", label: "block 0007" },
-        markdown: "## 一致有界原理\n\n这是独立旁注。",
+        focus: { kind: "block", blockId: "0007", label: "当前选区" },
+        markdown: "## 一致有界原理\n\n这是独立回答。",
         providerName: "Mimo v2.5",
         sourceBlockIds: ["0007"],
         createdAt: "2026-07-16T00:00:00.000Z",
@@ -111,28 +203,9 @@ describe("AssistantWorkspace", () => {
       }]
     });
 
-    expect(screen.getByLabelText("AI 旁注阅读器").textContent).toContain("这是独立旁注");
-    fireEvent.click(screen.getByRole("button", { name: "返回旁注列表" }));
+    expect(screen.getByText("这是独立回答。")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "返回对话" }));
     expect(onSelectedRemarkChange).toHaveBeenCalledWith(null);
-  });
-
-  it("shows the exact shared context budget and prioritizes question-named block ordinals", () => {
-    renderWorkspace({
-      contextBlocks: Array.from({ length: 42 }, (_, index) => ({
-        id: String(index + 1).padStart(4, "0"),
-        source: "user",
-        markdown: index === 41 ? "一致有界原理的精确内容" : `普通块 ${index + 1}`
-      }))
-    });
-
-    fireEvent.change(screen.getByLabelText("向 AI 学习助手提问"), {
-      target: { value: "第 42 块是什么？" }
-    });
-    const budget = screen.getByTestId("assistant-context-budget");
-    expect(budget.textContent).toContain("当前 42 块");
-    expect(budget.textContent).toContain("104,000 字符");
-    expect(budget.textContent).toContain("图片最多 8 张");
-    expect(budget.textContent).toContain("已优先包含第 42 块");
   });
 
   it("applies answer typography and exposes edge and corner resize handles", () => {
@@ -143,5 +216,46 @@ describe("AssistantWorkspace", () => {
     expect(screen.getByTestId("assistant-resize-n")).toBeTruthy();
     expect(screen.getByTestId("assistant-resize-e")).toBeTruthy();
     expect(screen.getByTestId("assistant-resize-se")).toBeTruthy();
+  });
+
+  it("uses native window controls and leaves resizing to the detached OS window", () => {
+    const onMinimizeWindow = vi.fn();
+    const onToggleMaximizeWindow = vi.fn(() => true);
+    renderWorkspace({ detached: true, onMinimizeWindow, onToggleMaximizeWindow });
+
+    const workspace = screen.getByTestId("assistant-workspace");
+    expect(workspace.classList.contains("detached")).toBe(true);
+    expect(workspace.style.left).toBe("");
+    expect(screen.queryByTestId("assistant-resize-n")).toBeNull();
+    expect(screen.queryByTestId("assistant-resize-se")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "最小化对话窗口" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开对话窗口" }));
+    expect(onMinimizeWindow).toHaveBeenCalledTimes(1);
+    expect(onToggleMaximizeWindow).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resizeAssistantRect", () => {
+  const start = { left: 300, top: 100, width: 500, height: 600 };
+  const viewport = { viewportWidth: 1400, viewportHeight: 1000 };
+
+  it("anchors the opposite horizontal edge", () => {
+    const west = resizeAssistantRect({ start, direction: "w", deltaX: 100, deltaY: 0, ...viewport });
+    expect(west.left + west.width).toBe(800);
+    expect(west).toEqual({ left: 380, top: 100, width: 420, height: 600 });
+
+    const east = resizeAssistantRect({ start, direction: "e", deltaX: 100, deltaY: 0, ...viewport });
+    expect(east.left).toBe(300);
+    expect(east.width).toBe(600);
+  });
+
+  it("anchors the opposite vertical edge and handles corners independently", () => {
+    const north = resizeAssistantRect({ start, direction: "n", deltaX: 0, deltaY: 80, ...viewport });
+    expect(north.top + north.height).toBe(700);
+    expect(north).toEqual({ left: 300, top: 180, width: 500, height: 520 });
+
+    const southEast = resizeAssistantRect({ start, direction: "se", deltaX: 120, deltaY: 100, ...viewport });
+    expect(southEast).toEqual({ left: 300, top: 100, width: 620, height: 700 });
   });
 });

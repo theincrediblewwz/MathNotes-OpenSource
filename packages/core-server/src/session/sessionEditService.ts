@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import {
@@ -83,6 +84,21 @@ export type ApplySelectionEditInput = Readonly<{
   baseRevision: string;
   selection: TextSelection;
   replacement: string;
+}>;
+
+export type UpdateMarkdownProtectedSpanInput = Readonly<{
+  notebookId: string;
+  sessionId: string;
+  blockId: string;
+  baseRevision: string;
+  selection: TextSelection;
+}>;
+
+export type UpdateMarkdownProtectedSpanResult = Readonly<{
+  version: 1;
+  protected: boolean;
+  spanId: string;
+  block: ReadonlySessionBlock;
 }>;
 
 export type SetMarkdownBlockLockInput = Readonly<{
@@ -188,6 +204,14 @@ export class SessionEditService {
 
   applySelectionEdit(input: ApplySelectionEditInput): Promise<SaveMarkdownBlockResult> {
     return this.coordinator.run(input.notebookId, input.sessionId, () => this.applySelectionEditSerial(input));
+  }
+
+  protectMarkdownSelection(input: UpdateMarkdownProtectedSpanInput): Promise<UpdateMarkdownProtectedSpanResult> {
+    return this.coordinator.run(input.notebookId, input.sessionId, () => this.protectMarkdownSelectionSerial(input));
+  }
+
+  unlockMarkdownProtectedSelection(input: UpdateMarkdownProtectedSpanInput): Promise<UpdateMarkdownProtectedSpanResult> {
+    return this.coordinator.run(input.notebookId, input.sessionId, () => this.unlockMarkdownProtectedSelectionSerial(input));
   }
 
   setMarkdownBlockLock(input: SetMarkdownBlockLockInput): Promise<SetMarkdownBlockLockResult> {
@@ -322,6 +346,145 @@ export class SessionEditService {
     return {
       version: 1,
       saved: true,
+      block: await readReadonlySessionBlock({
+        rootDir: this.rootDir,
+        notebookId: input.notebookId,
+        sessionId: input.sessionId,
+        blockId: input.blockId
+      })
+    };
+  }
+
+  private async protectMarkdownSelectionSerial(
+    input: UpdateMarkdownProtectedSpanInput
+  ): Promise<UpdateMarkdownProtectedSpanResult> {
+    const { session, sessionDir, sessionPath } = await readSession(
+      this.rootDir,
+      input.notebookId,
+      input.sessionId
+    );
+    const block = session.blocks.find((candidate) => candidate.id === input.blockId);
+    if (!block) throw new SessionEditError("block_not_found", 404);
+    if (block.type !== "markdown") throw new SessionEditError("not_markdown_block", 422);
+    if (block.status === "locked") throw new SessionEditError("block_locked", 423);
+    if (!isUserEditable(block)) throw new SessionEditError("block_not_editable", 423);
+
+    const blockPath = resolve(sessionDir, block.path);
+    assertInside(sessionDir, blockPath);
+    const beforeMarkdown = await readFile(blockPath, "utf8");
+    const locks = session.locks.filter((lock) => lock.blockId === block.id);
+    const currentRevision = markdownBlockRevision({ block, markdown: beforeMarkdown, locks });
+    if (input.baseRevision !== currentRevision) throw new SessionEditError("revision_conflict", 409);
+    if (/^[\r\n]|[\r\n]$/.test(input.selection.selectedText)) {
+      throw new SessionEditError("invalid_selection", 422);
+    }
+
+    const spanId = `lock_${randomUUID()}`;
+    const contentHash = sha256Text(input.selection.selectedText);
+    const marker = [
+      `<!-- lock:start id="${spanId}" hash="${contentHash}" -->`,
+      input.selection.selectedText,
+      `<!-- lock:end id="${spanId}" -->`
+    ].join("\n");
+    const replacement = replaceSelection({
+      markdown: beforeMarkdown,
+      selection: input.selection,
+      replacement: marker
+    });
+    if (!replacement.ok) {
+      if (replacement.reason === "invalid_range") throw new SessionEditError("invalid_selection", 422);
+      if (replacement.reason === "selection_stale") throw new SessionEditError("selection_stale", 409);
+      throw new SessionEditError("protected_selection", 423);
+    }
+
+    await validateLockedContent({ beforeMarkdown, afterMarkdown: replacement.markdown, locks });
+    const timestamp = this.now();
+    const nextBlock = { ...block, updatedAt: timestamp };
+    const nextSession: SessionRecord = {
+      ...session,
+      updatedAt: timestamp,
+      blocks: session.blocks.map((candidate) => candidate.id === block.id ? nextBlock : candidate),
+      locks: syncSpanLocks(session.locks, block.id, replacement.markdown, timestamp)
+    };
+    await writeFileAtomically(blockPath, replacement.markdown);
+    try {
+      await writeFileAtomically(sessionPath, `${JSON.stringify(nextSession, null, 2)}\n`);
+    } catch (error) {
+      await writeFileAtomically(blockPath, beforeMarkdown);
+      throw error;
+    }
+    return {
+      version: 1,
+      protected: true,
+      spanId,
+      block: await readReadonlySessionBlock({
+        rootDir: this.rootDir,
+        notebookId: input.notebookId,
+        sessionId: input.sessionId,
+        blockId: input.blockId
+      })
+    };
+  }
+
+  private async unlockMarkdownProtectedSelectionSerial(
+    input: UpdateMarkdownProtectedSpanInput
+  ): Promise<UpdateMarkdownProtectedSpanResult> {
+    const { session, sessionDir, sessionPath } = await readSession(
+      this.rootDir,
+      input.notebookId,
+      input.sessionId
+    );
+    const block = session.blocks.find((candidate) => candidate.id === input.blockId);
+    if (!block) throw new SessionEditError("block_not_found", 404);
+    if (block.type !== "markdown") throw new SessionEditError("not_markdown_block", 422);
+    if (block.status === "locked") throw new SessionEditError("block_locked", 423);
+    if (!isUserEditable(block)) throw new SessionEditError("block_not_editable", 423);
+
+    const blockPath = resolve(sessionDir, block.path);
+    assertInside(sessionDir, blockPath);
+    const beforeMarkdown = await readFile(blockPath, "utf8");
+    const locks = session.locks.filter((lock) => lock.blockId === block.id);
+    const currentRevision = markdownBlockRevision({ block, markdown: beforeMarkdown, locks });
+    if (input.baseRevision !== currentRevision) throw new SessionEditError("revision_conflict", 409);
+
+    const { from, to, selectedText } = input.selection;
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to <= from || to > beforeMarkdown.length) {
+      throw new SessionEditError("invalid_selection", 422);
+    }
+    if (beforeMarkdown.slice(from, to) !== selectedText) throw new SessionEditError("selection_stale", 409);
+    const span = parseProtectedSpans(beforeMarkdown).find(
+      (candidate) => from >= candidate.contentFrom && to <= candidate.contentTo
+    );
+    if (!span) throw new SessionEditError("protected_span_missing", 423);
+    const registeredLock = locks.find((lock) => lock.kind === "span" && lock.id === span.id);
+    if (!registeredLock) throw new SessionEditError("protected_span_missing", 423);
+    if (span.contentHash !== registeredLock.contentHash) {
+      throw new SessionEditError("protected_span_changed", 423);
+    }
+    if (span.declaredHash !== span.contentHash) throw new SessionEditError("invalid_protected_span", 422);
+
+    const afterMarkdown = `${beforeMarkdown.slice(0, span.from)}${span.content}${beforeMarkdown.slice(span.to)}`;
+    const remainingLocks = locks.filter((lock) => !(lock.kind === "span" && lock.id === span.id));
+    await validateLockedContent({ beforeMarkdown, afterMarkdown, locks: remainingLocks });
+    const timestamp = this.now();
+    const nextBlock = { ...block, updatedAt: timestamp };
+    const nextSession: SessionRecord = {
+      ...session,
+      updatedAt: timestamp,
+      blocks: session.blocks.map((candidate) => candidate.id === block.id ? nextBlock : candidate),
+      locks: syncSpanLocks(session.locks, block.id, afterMarkdown, timestamp)
+    };
+    await writeFileAtomically(blockPath, afterMarkdown);
+    try {
+      await writeFileAtomically(sessionPath, `${JSON.stringify(nextSession, null, 2)}\n`);
+    } catch (error) {
+      await writeFileAtomically(blockPath, beforeMarkdown);
+      throw error;
+    }
+    return {
+      version: 1,
+      protected: false,
+      spanId: span.id,
       block: await readReadonlySessionBlock({
         rootDir: this.rootDir,
         notebookId: input.notebookId,
@@ -609,15 +772,47 @@ async function validateLockedContent(args: {
   }
 }
 
-function parseProtectedSpans(markdown: string): Array<{ id: string; declaredHash: string; contentHash: string }> {
-  const spans: Array<{ id: string; declaredHash: string; contentHash: string }> = [];
+type ProtectedSpan = Readonly<{
+  id: string;
+  declaredHash: string;
+  contentHash: string;
+  content: string;
+  from: number;
+  to: number;
+  contentFrom: number;
+  contentTo: number;
+}>;
+
+function parseProtectedSpans(markdown: string): ProtectedSpan[] {
+  const spans: ProtectedSpan[] = [];
   const pattern = /<!-- lock:start id="(?<id>[^"]+)" hash="(?<hash>[a-f0-9]{64})" -->\r?\n?(?<content>[\s\S]*?)\r?\n?<!-- lock:end id="\k<id>" -->/g;
   for (const match of markdown.matchAll(pattern)) {
-    if (!match.groups) continue;
-    const content = match.groups.content.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
-    spans.push({ id: match.groups.id, declaredHash: match.groups.hash, contentHash: sha256Text(content) });
+    if (!match.groups || match.index === undefined) continue;
+    const rawContent = match.groups.content;
+    const content = trimOuterNewlines(rawContent);
+    const rawContentOffset = match[0].indexOf(rawContent);
+    const contentFrom = match.index + rawContentOffset + leadingNewlineLength(rawContent);
+    spans.push({
+      id: match.groups.id,
+      declaredHash: match.groups.hash,
+      contentHash: sha256Text(content),
+      content,
+      from: match.index,
+      to: match.index + match[0].length,
+      contentFrom,
+      contentTo: contentFrom + content.length
+    });
   }
   return spans;
+}
+
+function trimOuterNewlines(value: string): string {
+  return value.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+}
+
+function leadingNewlineLength(value: string): number {
+  if (value.startsWith("\r\n")) return 2;
+  return value.startsWith("\n") ? 1 : 0;
 }
 
 function syncSpanLocks(locks: readonly LockMeta[], blockId: string, markdown: string, now: string): LockMeta[] {

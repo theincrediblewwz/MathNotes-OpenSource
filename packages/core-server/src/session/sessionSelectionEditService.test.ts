@@ -74,6 +74,117 @@ describe("SessionSelectionEditService", () => {
       .rejects.toMatchObject({ code: "revision_conflict", statusCode: 409 });
   });
 
+  it("applies a user-refined candidate while preserving the proposal boundary", async () => {
+    const service = makeService("AI 候选");
+    const proposal = await service.propose({
+      notebookId: "book", sessionId: "lesson", blockId: "0001",
+      selection: { from: 0, to: 4, selectedText: "原句重复" }, instruction: "修改"
+    });
+
+    const applied = await service.apply({
+      notebookId: "book",
+      sessionId: "lesson",
+      proposalId: proposal.id,
+      replacementMarkdown: "用户确认后的候选"
+    });
+
+    expect(applied.proposal.replacementMarkdown).toBe("用户确认后的候选");
+    expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8"))
+      .toBe("用户确认后的候选；原句重复");
+  });
+
+  it("rechecks the lock at apply time and cannot use an earlier proposal to cross it", async () => {
+    const service = makeService("AI 候选");
+    const proposal = await service.propose({
+      notebookId: "book", sessionId: "lesson", blockId: "0001",
+      selection: { from: 0, to: 4, selectedText: "原句重复" }, instruction: "修改"
+    });
+    const sessionPath = join(sessionDir, "session.json");
+    const session = JSON.parse(await readFile(sessionPath, "utf8")) as SessionRecord;
+    session.blocks[0].status = "locked";
+    session.locks = [{
+      id: "block-lock",
+      blockId: "0001",
+      kind: "block",
+      contentHash: sha256Text("原句重复；原句重复"),
+      createdAt: "2026-08-13T04:10:00.000Z",
+      createdBy: "user",
+      aiEditable: false
+    }];
+    await writeFile(sessionPath, `${JSON.stringify(session, null, 2)}\n`);
+
+    await expect(service.apply({
+      notebookId: "book",
+      sessionId: "lesson",
+      proposalId: proposal.id,
+      replacementMarkdown: "试图越过锁定"
+    })).rejects.toMatchObject({ code: "block_locked", statusCode: 423 });
+    expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8")).toBe("原句重复；原句重复");
+  });
+
+  it("retries the same candidate after a user unlock only when the full Markdown is unchanged", async () => {
+    const service = makeService("AI 候选");
+    const editor = new SessionEditService(root);
+    const proposal = await service.propose({
+      notebookId: "book", sessionId: "lesson", blockId: "0001",
+      selection: { from: 0, to: 4, selectedText: "原句重复" }, instruction: "修改"
+    });
+    await editor.setMarkdownBlockLock({
+      notebookId: "book", sessionId: "lesson", blockId: "0001", locked: true
+    });
+    await expect(service.apply({
+      notebookId: "book", sessionId: "lesson", proposalId: proposal.id
+    })).rejects.toMatchObject({ code: "block_locked", statusCode: 423 });
+    await editor.setMarkdownBlockLock({
+      notebookId: "book", sessionId: "lesson", blockId: "0001", locked: false
+    });
+
+    const applied = await service.apply({
+      notebookId: "book",
+      sessionId: "lesson",
+      proposalId: proposal.id,
+      retryAfterUnlock: true
+    });
+
+    expect(applied.proposal.retriedAfterUnlockAt).toBeTruthy();
+    expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8")).toBe("AI 候选；原句重复");
+  });
+
+  it("does not use unlocked retry to cross a concurrent Markdown change", async () => {
+    const service = makeService("AI 候选");
+    const editor = new SessionEditService(root);
+    const proposal = await service.propose({
+      notebookId: "book", sessionId: "lesson", blockId: "0001",
+      selection: { from: 0, to: 4, selectedText: "原句重复" }, instruction: "修改"
+    });
+    await editor.setMarkdownBlockLock({
+      notebookId: "book", sessionId: "lesson", blockId: "0001", locked: true
+    });
+    await editor.setMarkdownBlockLock({
+      notebookId: "book", sessionId: "lesson", blockId: "0001", locked: false
+    });
+    const current = await readReadonlySessionBlock({
+      rootDir: root, notebookId: "book", sessionId: "lesson", blockId: "0001"
+    });
+    if (current.content.kind !== "markdown") throw new Error("expected markdown");
+    await editor.saveMarkdownBlock({
+      notebookId: "book",
+      sessionId: "lesson",
+      blockId: "0001",
+      markdown: `${current.content.markdown}（用户新增）`,
+      baseRevision: current.content.baseRevision
+    });
+
+    await expect(service.apply({
+      notebookId: "book",
+      sessionId: "lesson",
+      proposalId: proposal.id,
+      retryAfterUnlock: true
+    })).rejects.toMatchObject({ code: "selection_stale", statusCode: 409 });
+    expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8"))
+      .toBe("原句重复；原句重复（用户新增）");
+  });
+
   it("cancels a proposal without writing anything to the note", async () => {
     const service = makeService("候选");
     const markdown = await readFile(join(sessionDir, "blocks", "0001.md"), "utf8");

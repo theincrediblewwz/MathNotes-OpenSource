@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promis
 import { basename, dirname, posix, resolve, sep } from "node:path";
 import type { BlockRef, LockMeta, SessionRecord } from "@mathnotes/shared";
 import { SessionWriteCoordinator } from "./sessionWriteCoordinator";
+import { sessionManifestRevision } from "./sessionRevision";
 
 export type ReorderSessionBlocksInput = Readonly<{
   notebookId: string;
@@ -24,6 +25,36 @@ export type DeleteSessionBlocksInput = Readonly<{
   notebookId: string;
   sessionId: string;
   blockIds: readonly string[];
+  baseRevision?: string;
+}>;
+
+export type RestoreSessionBlocksInput = Readonly<{
+  notebookId: string;
+  sessionId: string;
+  deletionId: string;
+  baseRevision: string;
+}>;
+
+export type RecoverableDeleteReceipt = Readonly<{
+  version: 1;
+  deletionId: string;
+  deletedBlockIds: readonly string[];
+  deletedAt: string;
+}>;
+
+export type RecoverableDeleteResult = Readonly<{
+  session: SessionRecord;
+  undo: RecoverableDeleteReceipt;
+}>;
+
+type StoredDeleteSnapshot = Readonly<{
+  version: 1;
+  deletionId: string;
+  notebookId: string;
+  sessionId: string;
+  deletedAt: string;
+  blocks: ReadonlyArray<Readonly<{ block: BlockRef; index: number }>>;
+  locks: readonly LockMeta[];
 }>;
 
 export type TransferSessionBlocksResult = Readonly<{
@@ -41,6 +72,9 @@ export class SessionBlockOrganizeError extends Error {
       | "invalid_session"
       | "block_not_found"
       | "block_locked"
+      | "revision_conflict"
+      | "undo_not_found"
+      | "undo_conflict"
       | "same_session"
       | "path_outside_session",
     readonly statusCode: number
@@ -83,37 +117,138 @@ export class SessionBlockOrganizeService {
     });
   }
 
-  delete(input: DeleteSessionBlocksInput): Promise<SessionRecord> {
+  async delete(input: DeleteSessionBlocksInput): Promise<SessionRecord> {
+    return (await this.deleteRecoverable(input)).session;
+  }
+
+  deleteRecoverable(input: DeleteSessionBlocksInput): Promise<RecoverableDeleteResult> {
     return this.coordinator.run(input.notebookId, input.sessionId, async () => {
       const stored = await readSession(this.rootDir, input.notebookId, input.sessionId);
+      if (input.baseRevision && input.baseRevision !== sessionManifestRevision(stored.session)) {
+        throw new SessionBlockOrganizeError("revision_conflict", 409);
+      }
       const selected = requireSelectedBlocks(stored.session, input.blockIds);
       if (selected.size === 0) throw new SessionBlockOrganizeError("invalid_input", 400);
       assertNoLockedBlocks(stored.session, selected);
       const selectedBlocks = stored.session.blocks.filter((block) => selected.has(block.id));
-      const trashRoot = resolve(stored.sessionDir, ".mathnotes", "trash", randomUUID());
-      const movedFiles: Array<{ source: string; trash: string }> = [];
+      const deletionId = randomUUID();
+      const deletedAt = this.now();
+      const trashRoot = assertInside(
+        stored.sessionDir,
+        resolve(stored.sessionDir, ".mathnotes", "trash", deletionId)
+      );
+      const copiedFiles: Array<{ source: string; trash: string }> = [];
+      const snapshot: StoredDeleteSnapshot = {
+        version: 1,
+        deletionId,
+        notebookId: input.notebookId,
+        sessionId: input.sessionId,
+        deletedAt,
+        blocks: selectedBlocks.map((block) => ({
+          block,
+          index: stored.session.blocks.findIndex((candidate) => candidate.id === block.id)
+        })),
+        locks: stored.session.locks.filter((lock) => selected.has(lock.blockId))
+      };
       try {
+        await mkdir(trashRoot, { recursive: true });
         for (const block of selectedBlocks) {
           if (block.type !== "markdown") continue;
           const source = assertInside(stored.sessionDir, resolve(stored.sessionDir, block.path));
           const trash = assertInside(trashRoot, resolve(trashRoot, block.path));
           await mkdir(dirname(trash), { recursive: true });
-          await rename(source, trash);
-          movedFiles.push({ source, trash });
+          await copyFile(source, trash);
+          copiedFiles.push({ source, trash });
         }
+        await writeJsonAtomically(resolve(trashRoot, "delete.json"), snapshot);
         const next: SessionRecord = {
           ...stored.session,
           blocks: stored.session.blocks.filter((block) => !selected.has(block.id)),
           locks: stored.session.locks.filter((lock) => !selected.has(lock.blockId)),
+          updatedAt: deletedAt
+        };
+        await writeJsonAtomically(stored.sessionPath, next);
+        await Promise.all(copiedFiles.map((file) => rm(file.source, { force: true }).catch(() => undefined)));
+        return {
+          session: next,
+          undo: { version: 1, deletionId, deletedBlockIds: selectedBlocks.map((block) => block.id), deletedAt }
+        };
+      } catch (error) {
+        await rm(trashRoot, { recursive: true, force: true });
+        throw error;
+      }
+    });
+  }
+
+  restoreDeleted(input: RestoreSessionBlocksInput): Promise<SessionRecord> {
+    return this.coordinator.run(input.notebookId, input.sessionId, async () => {
+      assertSafeId(input.deletionId);
+      const stored = await readSession(this.rootDir, input.notebookId, input.sessionId);
+      if (input.baseRevision !== sessionManifestRevision(stored.session)) {
+        throw new SessionBlockOrganizeError("revision_conflict", 409);
+      }
+      const trashRoot = assertInside(
+        stored.sessionDir,
+        resolve(stored.sessionDir, ".mathnotes", "trash", input.deletionId)
+      );
+      const snapshot = await readDeleteSnapshot(trashRoot).catch((error) => {
+        if (isMissingFile(error)) throw new SessionBlockOrganizeError("undo_not_found", 404);
+        throw error;
+      });
+      if (snapshot.deletionId !== input.deletionId || snapshot.notebookId !== input.notebookId ||
+          snapshot.sessionId !== input.sessionId) {
+        throw new SessionBlockOrganizeError("undo_conflict", 409);
+      }
+
+      const restoredIds = new Set(snapshot.blocks.map((entry) => entry.block.id));
+      const existingPaths = new Set(stored.session.blocks.map((block) => normalizeRelativePath(block.path)));
+      if (stored.session.blocks.some((block) => restoredIds.has(block.id)) ||
+          snapshot.locks.some((lock) => stored.session.locks.some((candidate) => candidate.id === lock.id))) {
+        throw new SessionBlockOrganizeError("undo_conflict", 409);
+      }
+
+      const createdTargets: string[] = [];
+      try {
+        for (const entry of snapshot.blocks) {
+          if (entry.block.type !== "markdown") continue;
+          const relativePath = normalizeRelativePath(entry.block.path);
+          if (existingPaths.has(relativePath)) throw new SessionBlockOrganizeError("undo_conflict", 409);
+          const source = assertInside(trashRoot, resolve(trashRoot, relativePath));
+          const target = assertInside(stored.sessionDir, resolve(stored.sessionDir, relativePath));
+          await mkdir(dirname(target), { recursive: true });
+          let sourceBytes: Buffer;
+          try {
+            sourceBytes = await readFile(source);
+          } catch (error) {
+            if (isMissingFile(error)) throw new SessionBlockOrganizeError("undo_conflict", 409);
+            throw error;
+          }
+          try {
+            const targetBytes = await readFile(target);
+            if (!sourceBytes.equals(targetBytes)) throw new SessionBlockOrganizeError("undo_conflict", 409);
+          } catch (error) {
+            if (!isMissingFile(error)) throw error;
+            await copyFile(source, target);
+            createdTargets.push(target);
+          }
+        }
+
+        const blocks = [...stored.session.blocks];
+        for (const entry of [...snapshot.blocks].sort((left, right) => left.index - right.index)) {
+          const index = Math.max(0, Math.min(entry.index, blocks.length));
+          blocks.splice(index, 0, entry.block);
+        }
+        const next: SessionRecord = {
+          ...stored.session,
+          blocks,
+          locks: [...stored.session.locks, ...snapshot.locks],
           updatedAt: this.now()
         };
         await writeJsonAtomically(stored.sessionPath, next);
+        await rm(trashRoot, { recursive: true, force: true }).catch(() => undefined);
         return next;
       } catch (error) {
-        for (const file of [...movedFiles].reverse()) {
-          await mkdir(dirname(file.source), { recursive: true });
-          await rename(file.trash, file.source).catch(() => undefined);
-        }
+        await Promise.all(createdTargets.map((target) => rm(target, { force: true })));
         throw error;
       }
     });
@@ -257,6 +392,21 @@ async function readSession(rootDir: string, notebookId: string, sessionId: strin
   }
 }
 
+async function readDeleteSnapshot(trashRoot: string): Promise<StoredDeleteSnapshot> {
+  const value = JSON.parse(await readFile(assertInside(trashRoot, resolve(trashRoot, "delete.json")), "utf8")) as unknown;
+  if (!value || typeof value !== "object") throw new SessionBlockOrganizeError("undo_conflict", 409);
+  const snapshot = value as Partial<StoredDeleteSnapshot>;
+  if (snapshot.version !== 1 || typeof snapshot.deletionId !== "string" ||
+      typeof snapshot.notebookId !== "string" || typeof snapshot.sessionId !== "string" ||
+      typeof snapshot.deletedAt !== "string" || !Array.isArray(snapshot.blocks) || !Array.isArray(snapshot.locks) ||
+      snapshot.blocks.some((entry) => !entry || typeof entry !== "object" ||
+        typeof entry.index !== "number" || !Number.isSafeInteger(entry.index) || entry.index < 0 ||
+        !entry.block || typeof entry.block.id !== "string" || typeof entry.block.path !== "string")) {
+    throw new SessionBlockOrganizeError("undo_conflict", 409);
+  }
+  return snapshot as StoredDeleteSnapshot;
+}
+
 function requireSelectedBlocks(session: SessionRecord, ids: readonly string[]): Set<string> {
   const selected = new Set(ids.map((id) => id.trim()).filter(Boolean));
   const existing = new Set(session.blocks.map((block) => block.id));
@@ -378,7 +528,15 @@ function assertInside(root: string, candidate: string): string {
   return resolvedCandidate;
 }
 
-async function writeJsonAtomically(path: string, value: SessionRecord) {
+function normalizeRelativePath(value: string): string {
+  return value.replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+function isMissingFile(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+async function writeJsonAtomically(path: string, value: unknown) {
   const temporary = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   try {

@@ -1,6 +1,6 @@
 {
   "name": "readandanalysis",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "Local-first cross-platform mathematics notes with desktop, Android and PWA clients.",
   "private": true,
   "workspaces": [
@@ -39,7 +39,7 @@
     "test:macos:native-package": "node test_tool/macos_native_package_contract.mjs",
     "test:macos:native": "node test_tool/macos_native_contract.mjs",
     "test:macos:ui": "node test_tool/macos_ui_contract.mjs",
-    "test:macos:app-launch": "swift test_tool/macos_native_app_launch_smoke.swift output/macos-native/bundle/MathNotes.app output/playwright/macos-native-app.png",
+    "test:macos:app-launch": "swift test_tool/macos_native_app_launch_smoke.swift output/macos-native/bundle/MathNotes.app output/playwright/macos-native-phone-connection.png phone && swift test_tool/macos_native_app_launch_smoke.swift output/macos-native/bundle/MathNotes.app output/playwright/macos-native-app.png local && swift test_tool/macos_native_app_launch_smoke.swift output/macos-native/bundle/MathNotes.app output/playwright/macos-native-app-remote-error.png companion",
     "test:macos:long-session": "npm run build:macos:sidecar && node test_tool/macos_long_session_smoke.mjs",
     "fixture:macos:phase1d": "node test_tool/create_macos_phase1d_fixture.mjs",
     "test:macos:content": "npm run build:macos:sidecar && node test_tool/macos_phase1d_content_smoke.mjs",
@@ -82,6 +82,7 @@
     "test:windows-scroll-blank:many": "node test_tool/editor_ui_performance_lab.mjs --experiment=scroll-blank --shapes=80 --fixture-profile=heterogeneous --product-defaults=1 --scroll-direction-ms=300 --output=output/performance/windows-fast-scroll-heterogeneous-v2.json",
     "test:prototype": "node test_tool/prototype_smoke.mjs http://127.0.0.1:4173/",
     "test:windows-smoke": "node test_tool/windows_app_smoke.mjs http://127.0.0.1:5173/",
+    "test:desktop-minimal-visual": "node test_tool/desktop_minimal_library_visual.mjs http://127.0.0.1:4174/",
     "test:electron-smoke": "node test_tool/electron_app_smoke.mjs",
     "release:metadata": "node test_tool/generate_release_metadata.mjs",
     "release:metadata:windows": "node test_tool/generate_release_metadata.mjs --windows-only",
@@ -99,7 +100,7 @@
     "math-notes",
     "prototype"
   ],
-  "author": "",
+  "author": "WWZ SYSU (https://github.com/theincrediblewwz)",
   "license": "GPL-3.0-only",
   "type": "commonjs",
   "devDependencies": {

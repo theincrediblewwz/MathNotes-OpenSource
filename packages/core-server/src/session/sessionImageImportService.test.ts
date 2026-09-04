@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { SessionRecord } from "@mathnotes/shared";
+import { assertValidImageTransformSidecar, type ImageTransformSidecar, type SessionRecord } from "@mathnotes/shared";
 import { SessionEditService } from "./sessionEditService";
 import {
   MAX_LOCAL_IMAGE_BYTES,
@@ -106,6 +106,111 @@ describe("SessionImageImportService", () => {
     });
     expect(imported.manifest.blocks.map((item) => item.id)).toEqual(["0001", "0002"]);
     expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8")).toBe("## 已编辑\n");
+  });
+
+  it("preserves the original and atomically imports an edited PNG with an auditable sidecar", async () => {
+    const before = await manifest();
+    const output = Buffer.from([...PNG, 4, 5, 6]);
+    const result = await new SessionImageImportService(root, () => "2026-07-23T05:00:00.000Z").importEditedImage({
+      notebookId: "analysis",
+      sessionId: "lecture",
+      fileName: "课堂 黑板.jpg",
+      sourceBytes: JPEG,
+      outputPngBytes: output,
+      baseRevision: before.revision,
+      operations: [
+        { type: "crop", rect: { x: 0.1, y: 0.2, width: 0.7, height: 0.6 } },
+        { type: "rotate", quarterTurns: 1 }
+      ],
+      annotations: [{
+        id: "arrow-1",
+        type: "arrow",
+        start: { x: 0.2, y: 0.2 },
+        end: { x: 0.8, y: 0.7 },
+        color: "#187857",
+        width: 0.006
+      }]
+    });
+
+    expect(result).toMatchObject({ imported: true, edited: true, blockId: "0002" });
+    expect(result.sourceAssetPath).toMatch(/^assets\/photos\/.+\.jpg$/);
+    expect(result.assetPath).toMatch(/^assets\/embedded\/.+\.png$/);
+    expect(result.metadataPath).toMatch(/^assets\/embedded\/.+\.annotation\.json$/);
+    expect(await readFile(join(sessionDir, result.sourceAssetPath))).toEqual(JPEG);
+    expect(await readFile(join(sessionDir, result.assetPath))).toEqual(output);
+    const sidecar = JSON.parse(await readFile(join(sessionDir, result.metadataPath), "utf8")) as ImageTransformSidecar;
+    expect(() => assertValidImageTransformSidecar(sidecar)).not.toThrow();
+    expect(sidecar).toMatchObject({
+      sourceAsset: result.sourceAssetPath,
+      sourceSha256: result.sourceSha256,
+      outputAsset: result.assetPath,
+      outputMimeType: "image/png",
+      operations: [
+        { type: "rotate", quarterTurns: 1 },
+        { type: "crop", rect: { x: 0.1, y: 0.2, width: 0.7, height: 0.6 } }
+      ]
+    });
+    const stored = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+    expect(stored.blocks[1]).toMatchObject({
+      id: "0002",
+      type: "image",
+      path: result.assetPath,
+      fromAssets: [result.sourceAssetPath],
+      renderInNote: true
+    });
+  });
+
+  it("does not touch locked Markdown while adding an edited image block", async () => {
+    const lockedMarkdown = await readFile(join(sessionDir, "blocks", "0001.md"), "utf8");
+    const session = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+    session.blocks[0] = { ...session.blocks[0], status: "locked" };
+    session.locks = [{
+      id: "lock-0001",
+      blockId: "0001",
+      kind: "block",
+      contentHash: "a".repeat(64),
+      createdAt: "2026-07-23T04:30:00.000Z",
+      createdBy: "user",
+      aiEditable: false
+    }];
+    await writeFile(join(sessionDir, "session.json"), `${JSON.stringify(session, null, 2)}\n`);
+    const before = await manifest();
+
+    const result = await new SessionImageImportService(root).importEditedImage({
+      notebookId: "analysis", sessionId: "lecture", fileName: "board.jpg",
+      sourceBytes: JPEG, outputPngBytes: PNG, baseRevision: before.revision,
+      operations: [], annotations: []
+    });
+
+    expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8")).toBe(lockedMarkdown);
+    const after = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+    expect(after.blocks[0].status).toBe("locked");
+    expect(after.locks).toEqual(session.locks);
+    expect(result.manifest.blocks.map((block) => block.id)).toEqual(["0001", "0002"]);
+  });
+
+  it("rejects stale, malformed, non-PNG and oversized edited image input without residue", async () => {
+    const before = await manifest();
+    const service = new SessionImageImportService(root);
+    const common = {
+      notebookId: "analysis", sessionId: "lecture", fileName: "board.jpg",
+      sourceBytes: JPEG, outputPngBytes: PNG, baseRevision: before.revision,
+      operations: [], annotations: []
+    };
+
+    await expect(service.importEditedImage({ ...common, baseRevision: "f".repeat(64) }))
+      .rejects.toMatchObject({ code: "revision_conflict", statusCode: 409 });
+    await expect(service.importEditedImage({ ...common, outputPngBytes: JPEG }))
+      .rejects.toMatchObject({ code: "invalid_image_edit", statusCode: 400 });
+    await expect(service.importEditedImage({
+      ...common,
+      operations: [{ type: "rotate", quarterTurns: 4 } as never]
+    })).rejects.toMatchObject({ code: "invalid_image_edit", statusCode: 400 });
+    await expect(service.importEditedImage({ ...common, outputPngBytes: Buffer.alloc(MAX_LOCAL_IMAGE_BYTES + 1) }))
+      .rejects.toMatchObject({ code: "image_too_large", statusCode: 413 });
+
+    expect((await manifest()).blocks).toHaveLength(1);
+    await expect(readdir(join(sessionDir, "assets"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   async function manifest() {

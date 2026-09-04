@@ -1,20 +1,25 @@
 import { BookOpen, BrainCircuit, FileUp, ImagePlus, ListChecks, Menu, Minus, PanelLeftOpen, Plus, Save, Search, Smartphone, Square, Upload, X } from "lucide-react";
 import { startTransition, type FormEvent, type MouseEvent, type PointerEvent, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FloatingButton } from "./ui/components/FloatingButton";
 import { MoreDrawer, NotebookDrawer, SettingsModal } from "./ui/components/Drawers";
+import { NotebookBrowserDialog } from "./ui/components/NotebookBrowserDialog";
 import { ExportPopover, type ExportOptions, SearchPopover } from "./ui/components/Popovers";
-import { PreviewPane, type PreviewFocusRequest, type PreviewSourceLocationInput } from "./ui/components/PreviewPane";
+import { PreviewPane, renderMarkdownPreview, type PreviewFocusRequest, type PreviewSourceLocationInput } from "./ui/components/PreviewPane";
 import { SessionSourceEditor, type SourceCaretLocation, type SourceDocumentProjectionChange } from "./ui/components/SessionSourceEditor";
+import { createSourceBlockDisplays } from "./ui/components/sourceBlockDisplay";
 import { ImageAnnotationEditor, type ImageAnnotationConfirmInput, type ImageAnnotationDraft } from "./ui/components/ImageAnnotationEditor";
 import { PdfImportDialog, type PdfImportConfirmInput, type PdfImportDraft } from "./ui/components/PdfImportDialog";
 import { PdfDocumentPreview } from "./ui/components/PdfDocumentPreview";
 import { type AssistantWorkspaceSubmitInput } from "./ui/components/AssistantWorkspace";
 import { AssistantWorkspaceWithRuntime, TaskPopoverWithEvents } from "./ui/components/RuntimeEventConsumers";
 import { appendRecognitionRuntimeEvent, clearRecognitionRuntimeEvents } from "./ui/runtimeEventStore";
+import { openAssistantNativeWindow, type AssistantNativeWindow } from "./ui/assistantNativeWindow";
 import { RenderCommitProbe, useRenderCommitProbe } from "./ui/performance/RenderCommitProbe";
 import { recordRecognitionTimeline } from "./ui/performance/RecognitionTimelineProbe";
-import type { AssistantRemark } from "./core/assistantRemarkStore";
+import type { AssistantRemark, AssistantRemarkRelatedSource } from "./core/assistantRemarkStore";
 import type { SelectionEditProposal } from "@mathnotes/core-server";
+import { resolveAssistantBlockEditIntent } from "@mathnotes/shared";
 import { providerRuntimeProgressTitle, providerRuntimeStateForProvider } from "./ui/providerRuntimeState";
 import { type AssetPreviewReference, resolveSessionAssetPreview } from "./ui/assetReferences";
 import type { RenderBlock, SessionDocument } from "./common/sessionDocument";
@@ -39,6 +44,7 @@ import { DEFAULT_PREVIEW_FOLLOW_SHORTCUT, matchesKeyboardShortcut } from "./comm
 import { defaultLocaleId, defaultThemeId } from "./common/appearanceSettings";
 import { getRecognitionProviderCapability } from "./core/providerCapabilities";
 import { renderPdfPagesForRecognition } from "./ui/pdfRecognitionRenderer";
+import { findProtectedSpanRanges } from "./common/lockSpan";
 import type {
   ConnectionDiagnosticReport,
   CodexRuntimeState,
@@ -54,6 +60,7 @@ import type {
   ProviderRuntimeState,
   ProviderHealthReport,
   PromptTemplateConfig,
+  RecentSessionSummary,
   AssistantProviderConfig,
   RecognitionProviderConfig,
   RecognitionProviderConfigInput,
@@ -110,7 +117,11 @@ type AppUndoAction =
       sessionId: string;
       snapshot: DeletedMarkdownBlockSnapshot;
     };
-type LocateSourceRequest = PreviewSourceLocationInput & {
+type LocateSourceTarget = PreviewSourceLocationInput & {
+  selectionFrom?: number;
+  selectionTo?: number;
+};
+type LocateSourceRequest = LocateSourceTarget & {
   nonce: number;
 };
 type ScrollPositionSnapshot = {
@@ -136,8 +147,115 @@ export type SelectionEditDraft = {
   selectedText: string;
   instruction: string;
   proposal: SelectionEditProposal | null;
+  replacementMarkdown: string;
   status: "idle" | "generating" | "applying";
   error?: string;
+  requiresUnlock?: boolean;
+};
+
+const selectionEditLockErrorCodes = [
+  "block_locked",
+  "protected_selection",
+  "protected_span_changed",
+  "protected_span_missing"
+] as const;
+
+export function isSelectionEditLockError(error: unknown) {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code ?? "")
+    : "";
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return selectionEditLockErrorCodes.some((candidate) => code === candidate || message.includes(candidate));
+}
+
+export function selectionEditTargetsCurrentLock(
+  draft: Pick<SelectionEditDraft, "blockId" | "from" | "to" | "selectedText">,
+  document: SessionSourceDocument,
+  sourceText: string
+) {
+  const block = document.markdownBlocks.find((candidate) => candidate.blockId === draft.blockId);
+  if (block?.locked) return true;
+  const markdown = parseSessionSourceText(sourceText).find((candidate) => candidate.blockId === draft.blockId)?.markdown;
+  if (markdown === undefined) return false;
+  const from = Math.min(draft.from, draft.to);
+  const to = Math.max(draft.from, draft.to);
+  return findProtectedSpanRanges(markdown).some((span) => (
+    (from < span.contentTo && to > span.contentFrom) ||
+    (draft.selectedText.length > 0 && span.content.includes(draft.selectedText))
+  ));
+}
+
+const sampleRecentSessions: RecentSessionSummary[] = [
+  {
+    notebookId: "functional_analysis",
+    notebookTitle: "泛函分析",
+    sessionId: "lecture",
+    title: "泛函分析 第 3 讲",
+    status: "draft",
+    createdAt: "2026-08-28T06:00:00.000Z",
+    updatedAt: "2026-08-30T06:00:00.000Z",
+    openedAt: "2026-08-30T06:00:00.000Z"
+  },
+  {
+    notebookId: "functional_analysis",
+    notebookTitle: "泛函分析",
+    sessionId: "self-adjoint",
+    title: "谱定理与自伴算子",
+    status: "draft",
+    createdAt: "2026-08-26T02:00:00.000Z",
+    updatedAt: "2026-08-30T02:00:00.000Z",
+    openedAt: "2026-08-30T02:00:00.000Z"
+  },
+  {
+    notebookId: "functional_analysis",
+    notebookTitle: "泛函分析",
+    sessionId: "hilbert-spaces",
+    title: "Hilbert 空间基础",
+    status: "draft",
+    createdAt: "2026-08-25T12:14:00.000Z",
+    updatedAt: "2026-08-29T12:14:00.000Z",
+    openedAt: "2026-08-29T12:14:00.000Z"
+  },
+  {
+    notebookId: "functional_analysis",
+    notebookTitle: "泛函分析",
+    sessionId: "banach-completeness",
+    title: "Banach 空间的完备性",
+    status: "draft",
+    createdAt: "2026-08-24T04:00:00.000Z",
+    updatedAt: "2026-08-27T04:00:00.000Z",
+    openedAt: "2026-08-27T04:00:00.000Z"
+  }
+];
+
+const sampleNotebooks: NotebookSummary[] = [
+  { notebookId: "paper-reading", title: "论文阅读", sessionCount: 3, createdAt: "2026-08-10T08:00:00.000Z", updatedAt: "2026-08-28T14:36:00.000Z" },
+  { notebookId: "functional_analysis", title: "泛函分析", sessionCount: 7, createdAt: "2026-08-12T08:00:00.000Z", updatedAt: "2026-08-30T06:00:00.000Z" },
+  { notebookId: "meetings", title: "会议", sessionCount: 7, createdAt: "2026-08-15T08:00:00.000Z", updatedAt: "2026-08-26T11:00:00.000Z" },
+  { notebookId: "linear-algebra", title: "线性代数", sessionCount: 4, createdAt: "2026-08-18T08:00:00.000Z", updatedAt: "2026-08-24T09:00:00.000Z" }
+];
+
+const sampleNotebookSessions: Record<string, NotebookSessionSummary[]> = {
+  functional_analysis: [
+    sampleRecentSessions[0],
+    { ...sampleRecentSessions[1], sessionId: "measure-space", title: "赋范空间与度量空间", updatedAt: "2026-08-18T14:07:00.000Z" },
+    { ...sampleRecentSessions[2], sessionId: "linear-functionals", title: "连续线性泛函", updatedAt: "2026-08-23T09:41:00.000Z" },
+    { ...sampleRecentSessions[3], sessionId: "bounded-operators", title: "有界线性算子", updatedAt: "2026-08-28T14:36:00.000Z" },
+    { ...sampleRecentSessions[0], sessionId: "spectrum-intro", title: "谱理论初步", updatedAt: "2026-08-27T10:20:00.000Z" },
+    { ...sampleRecentSessions[1], sessionId: "fredholm", title: "紧算子与 Fredholm 算子", updatedAt: "2026-08-25T16:12:00.000Z" },
+    { ...sampleRecentSessions[2], sessionId: "adjoint-decomposition", title: "自伴算子与谱分解", updatedAt: "2026-08-29T08:42:00.000Z" }
+  ].map((session) => ({ ...session, notebookId: "functional_analysis" })),
+  "paper-reading": [
+    { ...sampleRecentSessions[0], notebookId: "paper-reading", sessionId: "paper-1", title: "泛函分析导论" },
+    { ...sampleRecentSessions[1], notebookId: "paper-reading", sessionId: "paper-2", title: "算子理论综述" },
+    { ...sampleRecentSessions[2], notebookId: "paper-reading", sessionId: "paper-3", title: "谱方法阅读札记" }
+  ],
+  meetings: [
+    { ...sampleRecentSessions[0], notebookId: "meetings", sessionId: "meeting-1", title: "研究讨论 8 月" }
+  ],
+  "linear-algebra": [
+    { ...sampleRecentSessions[0], notebookId: "linear-algebra", sessionId: "matrix", title: "矩阵与线性映射" }
+  ]
 };
 
 const previewProjectionLabStorageKey = "mathnotes:preview-projection-lab";
@@ -163,11 +281,16 @@ export function App() {
   const [currentSession, setCurrentSession] = useState({ notebookId: "functional_analysis", sessionId: "lecture", title: "泛函分析 第 3 讲" });
   const [nativeSessionLoaded, setNativeSessionLoaded] = useState(!hasNativeApi);
   const [previewSessionLoaded, setPreviewSessionLoaded] = useState(!hasNativeApi);
-  const [notebooks, setNotebooks] = useState<NotebookSummary[]>([]);
-  const [notebookSessions, setNotebookSessions] = useState<NotebookSessionSummary[]>([]);
+  const [notebooks, setNotebooks] = useState<NotebookSummary[]>(hasNativeApi ? [] : sampleNotebooks);
+  const [recentSessions, setRecentSessions] = useState<RecentSessionSummary[]>(hasNativeApi ? [] : sampleRecentSessions);
+  const [notebookBrowserOpen, setNotebookBrowserOpen] = useState(false);
   const [blockTransferRequest, setBlockTransferRequest] = useState<BlockTransferRequest | null>(null);
   const [userSettings, setUserSettings] = useState<UserSettings | null>(null);
   const [sourceDocument, setSourceDocument] = useState<SessionSourceDocument>(sampleSourceDocument);
+  const sourceBlockDisplayById = useMemo(
+    () => new Map(createSourceBlockDisplays(sourceDocument.markdownBlocks).map((item) => [item.internalBlockId, item.displayBlockId])),
+    [sourceDocument.markdownBlocks]
+  );
   const [sourceText, setSourceText] = useState(sampleSourceDocument.text);
   const [previewProjectionLabEnabled] = useState(
     () => window.localStorage?.getItem(previewProjectionLabStorageKey) !== "legacy"
@@ -223,11 +346,14 @@ export function App() {
   const [pdfImportDraft, setPdfImportDraft] = useState<PdfImportDraft | null>(null);
   const [assetPreview, setAssetPreview] = useState<AssetPreviewReference | null>(null);
   const [assistantWorkspaceOpen, setAssistantWorkspaceOpen] = useState(false);
+  const [assistantNativeWindow, setAssistantNativeWindow] = useState<AssistantNativeWindow | null>(null);
   const [assistantRemarks, setAssistantRemarks] = useState<AssistantRemark[]>([]);
   const [selectedAssistantRemarkId, setSelectedAssistantRemarkId] = useState<string | null>(null);
   const [runningAssistantTaskId, setRunningAssistantTaskId] = useState<string | null>(null);
+  const [assistantPendingQuestion, setAssistantPendingQuestion] = useState<string | null>(null);
   const [assistantLastError, setAssistantLastError] = useState<string | null>(null);
   const [selectionEditDraft, setSelectionEditDraft] = useState<SelectionEditDraft | null>(null);
+  const [selectionUnlockPromptOpen, setSelectionUnlockPromptOpen] = useState(false);
   const [sourceCreateMenuOpen, setSourceCreateMenuOpen] = useState(false);
   const [hoverTip, setHoverTip] = useState<{ visible: boolean; x: number; y: number; text: string }>({
     visible: false,
@@ -259,6 +385,7 @@ export function App() {
   const previewApplyTokenRef = useRef(0);
   const appliedSessionIdentityRef = useRef(`${currentSession.notebookId}:${currentSession.sessionId}`);
   const sourceSaveStateRef = useRef<SourceSaveState>("saved");
+  const assistantNativeWindowRef = useRef<AssistantNativeWindow | null>(null);
   const sourceTextRef = useRef(sourceText);
   const livePreviewProjectorRef = useRef(createSessionLivePreviewProjector());
   const pendingBackgroundRefreshRef = useRef(false);
@@ -329,18 +456,6 @@ export function App() {
     }
     return new Map(parseSessionSourceText(sourceText).map((update) => [update.blockId, update.markdown]));
   }, [normalizedSearchQuery, previewProjection, previewProjectionLabEnabled, sourceDocument.markdownBlocks, sourceText]);
-  const assistantContextBlocks = useMemo(() => {
-    const markdownByBlockId = new Map(
-      parseSessionSourceText(sourceText).map((update) => [update.blockId, update.markdown])
-    );
-    return sourceDocument.markdownBlocks
-      .filter((block) => block.source !== "ai_explanation")
-      .map((block) => ({
-        id: block.blockId,
-        source: block.source,
-        markdown: markdownByBlockId.get(block.blockId) ?? ""
-      }));
-  }, [sourceDocument.markdownBlocks, sourceText]);
   const searchResults = useMemo(
     () => normalizedSearchQuery
       ? searchSessionSource({
@@ -350,10 +465,6 @@ export function App() {
         })
       : [],
     [blockMarkdowns, normalizedSearchQuery, sourceDocument]
-  );
-  const activeNotebook = useMemo(
-    () => notebooks.find((notebook) => notebook.notebookId === currentSession.notebookId),
-    [currentSession.notebookId, notebooks]
   );
   useWorkspaceLayoutAnchorPreservation(
     isWorkspaceLayoutAnchorLabEnabled(),
@@ -446,22 +557,51 @@ export function App() {
 
   const loadNotebooks = useCallback(async () => {
     if (!window.mathNotes) {
-      setNotebooks([]);
+      setNotebooks(sampleNotebooks);
       return;
     }
     setNotebooks(await window.mathNotes.loadNotebooks());
   }, []);
 
+  const readNotebookSessions = useCallback(async (notebookId: string) => {
+    if (!window.mathNotes) return sampleNotebookSessions[notebookId] ?? [];
+    return window.mathNotes.loadNotebookSessions({ notebookId });
+  }, []);
+
   const loadNotebookSessions = useCallback(async (notebookId = currentSession.notebookId) => {
+    await readNotebookSessions(notebookId);
+  }, [currentSession.notebookId, readNotebookSessions]);
+
+  const loadNotebookSessionPreview = useCallback(async (input: { notebookId: string; sessionId: string }) => {
+    if (window.mathNotes) return window.mathNotes.previewSession(input);
+    const session = (sampleNotebookSessions[input.notebookId] ?? []).find((candidate) => candidate.sessionId === input.sessionId);
+    const markdown = [
+      `## ${session?.title ?? "未命名"}`,
+      "",
+      "设 $X, Y$ 为赋范线性空间，$T: X \\to Y$ 为线性算子。",
+      "",
+      "$$\\|Tx\\|_Y \\le M\\|x\\|_X$$",
+      "",
+      "这里展示打开之后的渲染文字，帮助快速判断是否是要找的笔记。"
+    ].join("\n");
+    return {
+      version: 1 as const,
+      notebookId: input.notebookId,
+      sessionId: input.sessionId,
+      title: session?.title ?? "未命名",
+      updatedAt: session?.updatedAt ?? "",
+      html: renderMarkdownPreview(markdown),
+      truncated: false
+    };
+  }, []);
+
+  const loadRecentSessions = useCallback(async () => {
     if (!window.mathNotes) {
-      setNotebookSessions([]);
+      setRecentSessions(sampleRecentSessions);
       return;
     }
-    const sessions = await window.mathNotes.loadNotebookSessions({
-      notebookId
-    });
-    setNotebookSessions(sessions);
-  }, [currentSession.notebookId]);
+    setRecentSessions(await window.mathNotes.loadRecentSessions());
+  }, []);
 
   const loadCurrentSession = useCallback(async () => {
     if (!window.mathNotes) {
@@ -496,6 +636,32 @@ export function App() {
     setBackgroundRefreshPending(false);
     applySessionDocument(document, { preserveViewport: true, recognitionTraceId });
   }, [applySessionDocument]);
+
+  useEffect(() => {
+    assistantNativeWindowRef.current = assistantNativeWindow;
+  }, [assistantNativeWindow]);
+
+  useEffect(() => () => {
+    const opened = assistantNativeWindowRef.current;
+    if (opened && !opened.window.closed) opened.window.close();
+  }, []);
+
+  useEffect(() => {
+    const opened = assistantNativeWindow;
+    if (!opened) return;
+    if (!assistantWorkspaceOpen) {
+      if (!opened.window.closed) opened.window.close();
+      setAssistantNativeWindow(null);
+      return;
+    }
+
+    const handleWindowClosed = () => {
+      setAssistantNativeWindow((current) => current?.window === opened.window ? null : current);
+      setAssistantWorkspaceOpen(false);
+    };
+    opened.window.addEventListener("pagehide", handleWindowClosed, { once: true });
+    return () => opened.window.removeEventListener("pagehide", handleWindowClosed);
+  }, [assistantNativeWindow, assistantWorkspaceOpen]);
 
   useEffect(() => {
     const cancelPendingViewportRestore = () => {
@@ -753,6 +919,10 @@ export function App() {
   }, [loadNotebooks, currentSession.notebookId, currentSession.sessionId]);
 
   useEffect(() => {
+    void loadRecentSessions();
+  }, [loadRecentSessions, currentSession.notebookId, currentSession.sessionId]);
+
+  useEffect(() => {
     void loadRecognitionTasks();
   }, [loadRecognitionTasks]);
 
@@ -971,6 +1141,27 @@ export function App() {
 
   function showToast(message: string) {
     setToastQueue(message ? [message] : []);
+  }
+
+  function openAssistantWorkspaceWindow() {
+    const current = assistantNativeWindow;
+    if (current && !current.window.closed) {
+      void window.mathNotes?.assistantWindowControl("restore").catch(() => undefined);
+      current.window.focus();
+      setAssistantWorkspaceOpen(true);
+      return;
+    }
+    try {
+      const opened = openAssistantNativeWindow();
+      if (!opened) {
+        showToast("无法打开 AI 对话窗口，请允许应用创建独立窗口后重试");
+        return;
+      }
+      setAssistantNativeWindow(opened);
+      setAssistantWorkspaceOpen(true);
+    } catch (error) {
+      showToast(`无法打开 AI 对话窗口：${error instanceof Error ? error.message : "unknown error"}`);
+    }
   }
 
   function queueStatusToast(message: string) {
@@ -1424,7 +1615,7 @@ export function App() {
     }
   }
 
-  async function createSession() {
+  async function createSession(notebookId = currentSession.notebookId) {
     if (!window.mathNotes) {
       showToast("浏览器预览模式：新建 Session 需要 Electron");
       return;
@@ -1441,7 +1632,7 @@ export function App() {
         });
       }
       const document = await window.mathNotes.createSession({
-        notebookId: currentSession.notebookId
+        notebookId
       });
       applySessionDocument(document);
       setOpenLayer(null);
@@ -1554,38 +1745,6 @@ export function App() {
       showToast(`已新建 Notebook：${title}`);
     } catch (error) {
       showToast(`新建 Notebook 失败：${error instanceof Error ? error.message : "unknown error"}`);
-    } finally {
-      setSavingSource(false);
-    }
-  }
-
-  async function openNotebook(notebook: NotebookSummary) {
-    if (!window.mathNotes) return;
-    if (notebook.notebookId === currentSession.notebookId) {
-      setOpenLayer(null);
-      return;
-    }
-    setSavingSource(true);
-    try {
-      if (sourceSaveState !== "saved") {
-        await window.mathNotes.saveSessionSource({
-          notebookId: currentSession.notebookId,
-          sessionId: currentSession.sessionId,
-          sourceText
-        });
-      }
-      const sessions = await window.mathNotes.loadNotebookSessions({ notebookId: notebook.notebookId });
-      const document = sessions[0]
-        ? await window.mathNotes.openSession({ notebookId: notebook.notebookId, sessionId: sessions[0].sessionId })
-        : await window.mathNotes.createSession({ notebookId: notebook.notebookId });
-      applySessionDocument(document);
-      setNotebookSessions(sessions.length > 0 ? sessions : await window.mathNotes.loadNotebookSessions({ notebookId: notebook.notebookId }));
-      setOpenLayer(null);
-      setRecognitionTasks([]);
-      clearRuntimeEvents();
-      showToast(`已打开 Notebook：${notebook.title}`);
-    } catch (error) {
-      showToast(`打开 Notebook 失败：${error instanceof Error ? error.message : "unknown error"}`);
     } finally {
       setSavingSource(false);
     }
@@ -1724,7 +1883,7 @@ export function App() {
         (block) => !sourceDocument.markdownBlocks.some((existing) => existing.blockId === block.blockId)
       );
       if (created) {
-        locateSource(sourceLocationFromBlock(created), 1400);
+        locateSource(sourceLocationFromBlock(created, sourceBlockDisplayById.get(created.blockId)), 1400);
       }
       showToast("已新建文本块");
     } catch (error) {
@@ -1738,20 +1897,32 @@ export function App() {
   function openSelectionEdit(input: { blockId: string; from: number; to: number; selectedText: string }) {
     const block = sourceDocument.markdownBlocks.find((candidate) => candidate.blockId === input.blockId);
     if (block?.locked) {
-      showToast("这个块已固定，AI 不能修改");
+      openAssistantWorkspaceWindow();
+      setSelectionEditDraft({
+        ...input,
+        instruction: "",
+        proposal: null,
+        replacementMarkdown: "",
+        status: "idle",
+        error: "这个块已经固定。AI 不会越过锁；先解除整块固定，再返回这里重试。",
+        requiresUnlock: true
+      });
+      setSelectionUnlockPromptOpen(true);
       return;
     }
-    setSelectionEditDraft({ ...input, instruction: "", proposal: null, status: "idle" });
+    setSelectionUnlockPromptOpen(false);
+    openAssistantWorkspaceWindow();
+    setSelectionEditDraft({ ...input, instruction: "", proposal: null, replacementMarkdown: "", status: "idle" });
   }
 
-  async function generateSelectionEdit() {
-    const draft = selectionEditDraft;
+  async function generateSelectionEdit(draftOverride?: SelectionEditDraft) {
+    const draft = draftOverride ?? selectionEditDraft;
     if (!draft || !draft.instruction.trim()) return;
     if (!window.mathNotes) {
       setSelectionEditDraft({ ...draft, error: "浏览器预览模式不能调用 AI。" });
       return;
     }
-    setSelectionEditDraft({ ...draft, proposal: null, status: "generating", error: undefined });
+    setSelectionEditDraft({ ...draft, proposal: null, status: "generating", error: undefined, requiresUnlock: false });
     try {
       if (sourceSaveStateRef.current !== "saved") {
         const saved = await window.mathNotes.saveSessionSource({
@@ -1770,7 +1941,13 @@ export function App() {
         selectedText: draft.selectedText,
         instruction: draft.instruction
       });
-      setSelectionEditDraft((current) => current ? { ...current, proposal, status: "idle", error: undefined } : null);
+      setSelectionEditDraft((current) => current ? {
+        ...current,
+        proposal,
+        replacementMarkdown: proposal.replacementMarkdown,
+        status: "idle",
+        error: undefined
+      } : null);
     } catch (error) {
       setSelectionEditDraft((current) => current ? {
         ...current,
@@ -1783,27 +1960,48 @@ export function App() {
   async function applySelectionEditProposal() {
     const draft = selectionEditDraft;
     if (!draft?.proposal || !window.mathNotes) return;
-    setSelectionEditDraft({ ...draft, status: "applying", error: undefined });
+    setSelectionEditDraft({ ...draft, status: "applying", error: undefined, requiresUnlock: false });
     try {
+      if (sourceSaveStateRef.current !== "saved") {
+        const saved = await window.mathNotes.saveSessionSource({
+          notebookId: currentSession.notebookId,
+          sessionId: currentSession.sessionId,
+          sourceText: sourceTextRef.current
+        });
+        applySessionDocument(saved, { preserveViewport: true });
+      }
       const document = await window.mathNotes.applySelectionEdit({
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
-        proposalId: draft.proposal.id
+        proposalId: draft.proposal.id,
+        replacementMarkdown: draft.replacementMarkdown,
+        retryAfterUnlock: draft.requiresUnlock === true
       });
       applySessionDocument(document, { preserveViewport: true });
       setSelectionEditDraft(null);
+      setSelectionUnlockPromptOpen(false);
       showToast("已应用 AI 修改；可用 Ctrl+Z 撤销");
     } catch (error) {
+      const requiresUnlock = isSelectionEditLockError(error) || selectionEditTargetsCurrentLock(
+        draft,
+        sourceDocument,
+        sourceTextRef.current
+      );
       setSelectionEditDraft((current) => current ? {
         ...current,
         status: "idle",
-        error: `应用冲突：${error instanceof Error ? error.message : "unknown error"}。候选已保留。`
+        error: requiresUnlock
+          ? "这段内容已经被固定。AI 不会越过锁；解除固定后可重试，修改候选已保留。"
+          : `应用冲突：${error instanceof Error ? error.message : "unknown error"}。候选已保留。`,
+        requiresUnlock
       } : null);
+      if (requiresUnlock) setSelectionUnlockPromptOpen(true);
     }
   }
 
   async function cancelSelectionEdit() {
     const proposal = selectionEditDraft?.proposal;
+    setSelectionUnlockPromptOpen(false);
     setSelectionEditDraft(null);
     if (!proposal || proposal.status !== "proposed" || !window.mathNotes) return;
     await window.mathNotes.cancelSelectionEdit({
@@ -1811,6 +2009,52 @@ export function App() {
       sessionId: proposal.sessionId,
       proposalId: proposal.id
     }).catch(() => undefined);
+  }
+
+  async function openAssistantRelatedSource(source: AssistantRemarkRelatedSource) {
+    const sessions = await readNotebookSessions(source.notebookId);
+    const session = sessions.find((candidate) => candidate.sessionId === source.sessionId);
+    if (!session) {
+      showToast("这条来源笔记已经不存在");
+      return;
+    }
+    await openNotebookSession(session);
+  }
+
+  async function retrySelectionEdit() {
+    const draft = selectionEditDraft;
+    if (!draft) return;
+    const proposal = draft.proposal;
+    if (proposal && window.mathNotes) {
+      await window.mathNotes.cancelSelectionEdit({
+        notebookId: proposal.notebookId,
+        sessionId: proposal.sessionId,
+        proposalId: proposal.id
+      }).catch(() => undefined);
+    }
+    const nextDraft = { ...draft, proposal: null, replacementMarkdown: "", error: undefined, requiresUnlock: false };
+    setSelectionEditDraft(nextDraft);
+    await generateSelectionEdit(nextDraft);
+  }
+
+  function goToSelectionUnlock() {
+    const draft = selectionEditDraft;
+    if (!draft) return;
+    const block = sourceDocument.markdownBlocks.find((candidate) => candidate.blockId === draft.blockId);
+    setSelectionUnlockPromptOpen(false);
+    if (!block) {
+      showToast("找不到需要解除固定的原文块；修改候选仍已保留");
+      return;
+    }
+    setAssistantWorkspaceOpen(false);
+    locateSource({
+      ...sourceLocationFromBlock(block, sourceBlockDisplayById.get(block.blockId)),
+      selectionFrom: draft.from,
+      selectionTo: draft.to
+    }, 4000);
+    showToast(block.locked
+      ? "已定位被固定的原文。先点“解除整块”，再返回 AI 修改重试"
+      : "已定位被固定的选区。先点“解除固定”，保存后再返回 AI 修改重试");
   }
 
   async function insertEmbeddedImage() {
@@ -1910,13 +2154,58 @@ export function App() {
 
   async function runLearningAssistant(input: AssistantWorkspaceSubmitInput) {
     if (!window.mathNotes || runningAssistantTaskId) return;
-    if (["dirty", "error"].includes(sourceSaveState)) {
-      const saved = await saveSourceDocument({ revealExport: false });
-      if (!saved) return;
-    }
     const taskId = `assistant_${Date.now()}`;
+    setAssistantPendingQuestion(input.question?.trim() || null);
     setAssistantLastError(null);
     setRunningAssistantTaskId(taskId);
+    if (["dirty", "error"].includes(sourceSaveState)) {
+      const saved = await saveSourceDocument({ revealExport: false });
+      if (!saved) {
+        setAssistantPendingQuestion(null);
+        setRunningAssistantTaskId(null);
+        return;
+      }
+    }
+    const focusedBlockId = input.focus.blockId ?? activeSourceBlock?.blockId;
+    const focusedOrdinal = focusedBlockId
+      ? sourceDocument.markdownBlocks.findIndex((block) => block.blockId === focusedBlockId) + 1
+      : undefined;
+    const editIntent = resolveAssistantBlockEditIntent({
+      question: input.question,
+      blockCount: sourceDocument.markdownBlocks.length,
+      focusedOrdinal: focusedOrdinal && focusedOrdinal > 0 ? focusedOrdinal : undefined
+    });
+    if (editIntent) {
+      const block = sourceDocument.markdownBlocks[editIntent.ordinal - 1];
+      const markdown = parseSessionSourceText(sourceTextRef.current)
+        .find((candidate) => candidate.blockId === block.blockId)?.markdown ?? "";
+      const draft: SelectionEditDraft = {
+        blockId: block.blockId,
+        from: 0,
+        to: markdown.length,
+        selectedText: markdown,
+        instruction: editIntent.instruction,
+        proposal: null,
+        replacementMarkdown: "",
+        status: "idle"
+      };
+      setAssistantPendingQuestion(null);
+      setRunningAssistantTaskId(null);
+      openAssistantWorkspaceWindow();
+      if (block.locked) {
+        setSelectionEditDraft({
+          ...draft,
+          error: "这个块已经固定。AI 不会越过锁；先解除整块固定，再返回这里重试。",
+          requiresUnlock: true
+        });
+        setSelectionUnlockPromptOpen(true);
+      } else {
+        setSelectionUnlockPromptOpen(false);
+        setSelectionEditDraft(draft);
+        await generateSelectionEdit(draft);
+      }
+      return;
+    }
     try {
       const result = await window.mathNotes.runAssistantTask({
         taskId,
@@ -1945,6 +2234,7 @@ export function App() {
       setAssistantLastError(message);
       showToast(`AI 学习助手失败：${message}`);
     } finally {
+      setAssistantPendingQuestion(null);
       setRunningAssistantTaskId(null);
     }
   }
@@ -2163,7 +2453,7 @@ export function App() {
         ? document.sourceDocument.markdownBlocks.find((block) => block.blockId === nextVisibleBlock.blockId)
         : undefined;
       if (targetBlock) {
-        locateSource(sourceLocationFromBlock(targetBlock), 900);
+        locateSource(sourceLocationFromBlock(targetBlock, sourceBlockDisplayById.get(targetBlock.blockId)), 900);
       }
       showToast(`已删除 block：${blockId}，按 Ctrl+Z 可撤销`);
     } catch (error) {
@@ -2267,7 +2557,7 @@ export function App() {
       });
       applySessionDocument(result.document, { preserveViewport: request.mode === "copy" });
       setBlockTransferRequest(null);
-      setNotebookSessions(await window.mathNotes.loadNotebookSessions({ notebookId: currentSession.notebookId }));
+      await loadNotebookSessions(currentSession.notebookId);
       if (result.sourceCleanupPending) {
         showToast("目标笔记已收到副本；来源清理未完成，为避免丢失已保留原块");
       } else {
@@ -2281,7 +2571,7 @@ export function App() {
     }
   }
 
-  function locateSource(location: PreviewSourceLocationInput, durationMs = 1800) {
+  function locateSource(location: LocateSourceTarget, durationMs = 1800) {
     setOpenLayer(null);
     if (locatingClearTimerRef.current !== null) {
       window.clearTimeout(locatingClearTimerRef.current);
@@ -2304,7 +2594,7 @@ export function App() {
       showToast(`没有找到对应源码块：${sourceId}`);
       return;
     }
-    locateSource(sourceLocationFromBlock(block), durationMs);
+    locateSource(sourceLocationFromBlock(block, sourceBlockDisplayById.get(block.blockId)), durationMs);
   }
 
   function handleHover(event: MouseEvent<HTMLElement>, block: RenderBlock, location: PreviewSourceLocationInput) {
@@ -2657,9 +2947,20 @@ export function App() {
                 解除固定
               </button>
             ) : null}
+            {selectionEditDraft?.requiresUnlock && !assistantWorkspaceOpen ? (
+              <button
+                className="lock-selection-button ai-unlock-return-button"
+                onClick={openAssistantWorkspaceWindow}
+                type="button"
+              >
+                返回 AI 修改
+              </button>
+            ) : null}
             <em className={`source-save-state ${sourceSaveState}`}>{sourceSaveLabel(sourceSaveState)}</em>
             <span>块</span>
-            <strong title={`${activeSourceBlock.blockId} · ${activeSourceBlock.header}`}>{`${activeSourceBlock.blockId} · ${activeSourceBlock.header}`}</strong>
+            <strong
+              title={`${sourceBlockDisplayById.get(activeSourceBlock.blockId) ?? activeSourceBlock.blockId} · ${activeSourceBlock.header}`}
+            >{`${sourceBlockDisplayById.get(activeSourceBlock.blockId) ?? activeSourceBlock.blockId} · ${activeSourceBlock.header}`}</strong>
           </div>
         ) : null}
         {backgroundRefreshPending ? (
@@ -2681,7 +2982,7 @@ export function App() {
               onCaretLocationChange={setActiveSourceLocation}
               onAssistantRemarkOpen={(remarkId) => {
                 setSelectedAssistantRemarkId(remarkId);
-                setAssistantWorkspaceOpen(true);
+                openAssistantWorkspaceWindow();
               }}
               onChange={(text, projection?: SourceDocumentProjectionChange) => {
                 sourceTextRef.current = text;
@@ -2812,25 +3113,50 @@ export function App() {
       </section>
 
       <NotebookDrawer
-        notebookId={currentSession.notebookId}
-        notebookTitle={activeNotebook?.title ?? currentSession.notebookId}
-        notebooks={notebooks}
         onClose={() => setOpenLayer(null)}
-        onCreateNotebook={() => void createNotebookEntry()}
-        onCreateSession={() => void createSession()}
-        onDeleteSession={(session) => void deleteNotebookSession(session)}
+        onOpenNotebooks={() => {
+          setOpenLayer(null);
+          hideHoverTip();
+          setNotebookBrowserOpen(true);
+        }}
         onOpenSettings={() => {
           setOpenLayer(null);
           hideHoverTip();
           setSettingsOpen(true);
         }}
-        onOpenSession={(session) => void openNotebookSession(session)}
-        onOpenNotebook={(notebook) => void openNotebook(notebook)}
-        onRenameSession={(session) => void renameNotebookSession(session)}
+        onOpenRecentSession={(session) => void openNotebookSession(session)}
         openLayer={openLayer}
-        sessions={notebookSessions}
-        sessionId={currentSession.sessionId}
-        sessionTitle={currentSession.title}
+        recentSessions={recentSessions}
+      />
+      <NotebookBrowserDialog
+        busy={savingSource}
+        currentNotebookId={currentSession.notebookId}
+        currentSessionId={currentSession.sessionId}
+        loadNotebookSessions={readNotebookSessions}
+        loadSessionPreview={loadNotebookSessionPreview}
+        notebooks={notebooks}
+        onClose={() => setNotebookBrowserOpen(false)}
+        onCreateNotebook={() => {
+          setNotebookBrowserOpen(false);
+          void createNotebookEntry();
+        }}
+        onCreateSession={(notebookId) => {
+          setNotebookBrowserOpen(false);
+          void createSession(notebookId);
+        }}
+        onDeleteSession={(session) => {
+          setNotebookBrowserOpen(false);
+          void deleteNotebookSession(session);
+        }}
+        onOpenSession={(session) => {
+          setNotebookBrowserOpen(false);
+          void openNotebookSession(session);
+        }}
+        onRenameSession={(session) => {
+          setNotebookBrowserOpen(false);
+          void renameNotebookSession(session);
+        }}
+        open={notebookBrowserOpen}
       />
       <MoreDrawer
         hasNativeApi={hasNativeApi}
@@ -2863,30 +3189,6 @@ export function App() {
         onSaveNotationConfig={(input) => void saveNotationProfiles(input)}
         onUpdatePairingToken={updatePairingToken}
         onPreviewNotation={previewNotationPrompt}
-        onPickProviderSelfTestImage={async () => {
-          if (!window.mathNotes) {
-            return { cancelled: true };
-          }
-          return window.mathNotes.pickImageForAnnotation();
-        }}
-        onRunProviderSelfTest={async (input) => {
-          if (!window.mathNotes) {
-            throw new Error("桌面诊断仅在 Electron 应用中可用。");
-          }
-          const result = await window.mathNotes.runProviderSelfTest(input);
-          showToast(result.status === "succeeded" ? "单图识别管线自检通过" : `单图自检未通过：${result.status}`);
-          return result;
-        }}
-        onExportDiagnosticReport={async () => {
-          if (!window.mathNotes) {
-            throw new Error("桌面诊断仅在 Electron 应用中可用。");
-          }
-          const result = await window.mathNotes.exportUserDiagnosticReport();
-          if (!result.cancelled) {
-            showToast("脱敏诊断报告已导出");
-          }
-          return result;
-        }}
         onSave={(settings) => void saveUserSettings(settings)}
         open={settingsOpen}
         promptConfig={promptConfig}
@@ -2919,56 +3221,57 @@ export function App() {
         openLayer={openLayer}
         tasks={recognitionTasks}
       />
+      {assistantWorkspaceOpen && assistantNativeWindow ? createPortal(<>
       <AssistantWorkspaceWithRuntime
         answerFontFamily={userSettings?.assistantFontFamily}
         answerFontSize={userSettings?.assistantFontSize}
+        detached
         error={assistantLastError}
         key={`${currentSession.notebookId}/${currentSession.sessionId}`}
         onlineEnabled={userSettings?.assistantOnlineEnabled !== false}
+        pendingQuestion={assistantPendingQuestion}
         onCancel={() => void cancelLearningAssistant()}
-        onClose={() => setAssistantWorkspaceOpen(false)}
-        onDeleteRemark={(remarkId) => void deleteAssistantRemark(remarkId)}
-        onPromoteRemark={(remarkId) => void promoteAssistantRemark(remarkId)}
-        onSelectedRemarkChange={setSelectedAssistantRemarkId}
-        onEditSelection={(input) => {
+        onClose={() => {
+          if (selectionEditDraft) void cancelSelectionEdit();
           setAssistantWorkspaceOpen(false);
-          openSelectionEdit(input);
         }}
+        onDeleteRemark={(remarkId) => void deleteAssistantRemark(remarkId)}
+        onMinimizeWindow={() => void window.mathNotes?.assistantWindowControl("minimize")}
+        onPromoteRemark={(remarkId) => void promoteAssistantRemark(remarkId)}
+        onOpenRelatedSource={(source) => void openAssistantRelatedSource(source)}
+        onSelectedRemarkChange={setSelectedAssistantRemarkId}
+        onEditSelection={openSelectionEdit}
+        onSelectionApply={() => void applySelectionEditProposal()}
+        onSelectionCancel={() => void cancelSelectionEdit()}
+        onSelectionGenerate={() => void generateSelectionEdit()}
+        onSelectionInstructionChange={(instruction) => setSelectionEditDraft((current) => current ? {
+          ...current,
+          instruction,
+          error: undefined
+        } : null)}
+        onSelectionReplacementChange={(replacementMarkdown) => setSelectionEditDraft((current) => current ? {
+          ...current,
+          replacementMarkdown,
+          error: undefined
+        } : null)}
+        onSelectionRetry={() => void retrySelectionEdit()}
+        onSelectionUnlock={() => setSelectionUnlockPromptOpen(true)}
         onSubmit={(input) => void runLearningAssistant(input)}
+        onToggleMaximizeWindow={async () => (await window.mathNotes?.assistantWindowControl("toggleMaximize"))?.maximized}
         open={assistantWorkspaceOpen}
-        providerLabel={
-          assistantProviderConfig
-            ? getRecognitionProviderCapability(assistantProviderConfig.providerId).label
-            : "未配置"
-        }
         remarks={assistantRemarks}
         runtimeTaskId={runningAssistantTaskId}
         selectedRemarkId={selectedAssistantRemarkId}
+        selectionEdit={selectionEditDraft}
         running={Boolean(runningAssistantTaskId)}
-        contextBlocks={assistantContextBlocks}
         sessionDir={sessionDir}
       />
-      <SelectionEditDialog
-        draft={selectionEditDraft}
-        onApply={() => void applySelectionEditProposal()}
-        onCancel={() => void cancelSelectionEdit()}
-        onGenerate={() => void generateSelectionEdit()}
-        onInstructionChange={(instruction) => setSelectionEditDraft((current) => current ? {
-          ...current, instruction, error: undefined
-        } : null)}
-        onRetry={() => {
-          const proposal = selectionEditDraft?.proposal;
-          if (proposal && window.mathNotes) {
-            void window.mathNotes.cancelSelectionEdit({
-              notebookId: proposal.notebookId,
-              sessionId: proposal.sessionId,
-              proposalId: proposal.id
-            }).catch(() => undefined);
-          }
-          setSelectionEditDraft((current) => current ? { ...current, proposal: null, error: undefined } : null);
-          void generateSelectionEdit();
-        }}
+      <SelectionEditUnlockPrompt
+        onCancel={() => setSelectionUnlockPromptOpen(false)}
+        onUnlock={goToSelectionUnlock}
+        open={selectionUnlockPromptOpen}
       />
+      </>, assistantNativeWindow.root, "mathnotes-assistant-portal") : null}
       <CloseConfirmPrompt
         onCancel={() => setCloseConfirmOpen(false)}
         onDiscard={() => {
@@ -3054,7 +3357,7 @@ export function App() {
         aria-label="AI 学习助手"
         className={`assistant-learning-button ${runningAssistantTaskId ? "active" : ""}`}
         icon={<BrainCircuit />}
-        onClick={() => setAssistantWorkspaceOpen((current) => !current)}
+        onClick={openAssistantWorkspaceWindow}
         title="AI 学习助手"
       />
       <AssetPreviewOverlay
@@ -3145,7 +3448,8 @@ export function SelectionEditDialog({
   onCancel,
   onGenerate,
   onInstructionChange,
-  onRetry
+  onRetry,
+  onUnlock
 }: {
   draft: SelectionEditDraft | null;
   onApply: () => void;
@@ -3153,6 +3457,7 @@ export function SelectionEditDialog({
   onGenerate: () => void;
   onInstructionChange: (instruction: string) => void;
   onRetry: () => void;
+  onUnlock?: () => void;
 }) {
   if (!draft) return null;
   const busy = draft.status !== "idle";
@@ -3184,14 +3489,19 @@ export function SelectionEditDialog({
             <pre>{draft.proposal?.replacementMarkdown ?? (draft.status === "generating" ? "正在生成候选…" : "生成后将在这里显示；此时不会修改笔记。")}</pre>
           </article>
         </div>
-        {draft.error ? <p className="selection-edit-error" role="alert">{draft.error}</p> : null}
+        {draft.error ? (
+          <div className="selection-edit-error-row">
+            <p className="selection-edit-error" role="alert">{draft.error}</p>
+            {draft.requiresUnlock && onUnlock ? <button onClick={onUnlock} type="button">去解锁</button> : null}
+          </div>
+        ) : null}
         <footer>
           <button disabled={busy} onClick={onCancel} type="button">取消</button>
           {draft.proposal ? (
             <>
               <button disabled={busy} onClick={onRetry} type="button">重新生成</button>
               <button className="primary" disabled={busy} onClick={onApply} type="button">
-                {draft.status === "applying" ? "正在应用…" : "应用修改"}
+                {draft.status === "applying" ? "正在应用…" : draft.requiresUnlock ? "重试" : "应用修改"}
               </button>
             </>
           ) : (
@@ -3200,6 +3510,31 @@ export function SelectionEditDialog({
             </button>
           )}
         </footer>
+      </section>
+    </div>
+  );
+}
+
+export function SelectionEditUnlockPrompt({
+  onCancel,
+  onUnlock,
+  open
+}: {
+  onCancel: () => void;
+  onUnlock: () => void;
+  open: boolean;
+}) {
+  if (!open) return null;
+  return (
+    <div className="selection-unlock-prompt-layer" data-testid="selection-unlock-prompt">
+      <section aria-label="需要解除固定" aria-modal="true" className="selection-unlock-prompt" role="dialog">
+        <span>AI 修改已暂停</span>
+        <h2>这段内容存在写入锁</h2>
+        <p>AI 无权取消固定。若仍要写入，需要由你先去原文解除固定；当前修改候选会保留。</p>
+        <div>
+          <button onClick={onCancel} type="button">暂不解锁</button>
+          <button className="primary" onClick={onUnlock} type="button">去解除固定</button>
+        </div>
       </section>
     </div>
   );
@@ -3837,12 +4172,14 @@ export function RecognitionRefreshPending({
   );
 }
 
-function windowControlLabel(action: "minimize" | "toggleMaximize" | "close"): string {
+function windowControlLabel(action: "minimize" | "toggleMaximize" | "restore" | "close"): string {
   switch (action) {
     case "minimize":
       return "最小化";
     case "toggleMaximize":
       return "最大化/还原";
+    case "restore":
+      return "还原";
     case "close":
       return "关闭";
   }
@@ -3858,10 +4195,13 @@ export function isOrdinaryShortcutInput(target: EventTarget | null): boolean {
   return Boolean(target.closest("[contenteditable='true']") && !target.closest(".cm-editor"));
 }
 
-function sourceLocationFromBlock(block: SessionSourceMarkdownBlock): PreviewSourceLocationInput {
+function sourceLocationFromBlock(
+  block: SessionSourceMarkdownBlock,
+  displayBlockId: string = block.blockId
+): PreviewSourceLocationInput {
   return {
     blockId: block.blockId,
-    displayBlockId: block.blockId,
+    displayBlockId,
     sourceId: block.sourceId,
     lineInBlock: 1
   };

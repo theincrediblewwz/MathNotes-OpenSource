@@ -1,7 +1,10 @@
 package com.mathnotes.capture.pairing
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,11 +13,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,16 +30,21 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import com.mathnotes.capture.BuildConfig
 import com.mathnotes.capture.R
 import com.mathnotes.capture.companion.CompanionDatabase
 import com.mathnotes.capture.companion.CompanionMarkdownMirror
 import com.mathnotes.capture.notification.NotificationPermissionAction
 import com.mathnotes.capture.notification.NotificationPermissionState
+import com.mathnotes.capture.standalone.StandaloneProviderProfile
+import com.mathnotes.capture.standalone.StandaloneProviderSettingsSection
 import com.mathnotes.capture.ui.MathNotesColors
 import com.mathnotes.capture.ui.MathNotesPageHeader
 import com.mathnotes.capture.ui.MathNotesPaper
@@ -41,6 +53,10 @@ import com.mathnotes.capture.ui.MathNotesSecondaryButton
 import com.mathnotes.capture.ui.MathNotesStatusDot
 import com.mathnotes.capture.ui.MathNotesThemeId
 import kotlinx.coroutines.launch
+
+private const val AUTHOR_ID = "WWZ SYSU"
+private const val AUTHOR_GITHUB_URL = "https://github.com/theincrediblewwz"
+private const val AUTHOR_GITHUB_LABEL = "github.com/theincrediblewwz"
 
 @Composable
 fun PairingSettingsScreen(
@@ -56,7 +72,11 @@ fun PairingSettingsScreen(
     notificationPermission: NotificationPermissionState,
     onNotificationAction: () -> Unit,
     themeId: MathNotesThemeId = MathNotesThemeId.DEFAULT_LIGHT,
-    onThemeChange: (MathNotesThemeId) -> Unit = {}
+    onThemeChange: (MathNotesThemeId) -> Unit = {},
+    providerProfile: StandaloneProviderProfile? = null,
+    onSaveProvider: (String, String, String, String, (Result<Unit>) -> Unit) -> Unit = { _, _, _, _, complete ->
+        complete(Result.failure(IllegalStateException("本机识别设置暂不可用")))
+    }
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -78,14 +98,23 @@ fun PairingSettingsScreen(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(start = 22.dp, top = 28.dp, end = 22.dp, bottom = 112.dp)
+                .padding(start = 22.dp, top = 14.dp, end = 22.dp, bottom = 132.dp)
     ) {
         MathNotesPageHeader(
-            eyebrow = "连接与传输",
-            title = "连接电脑",
-            detail = "默认优先使用 Tailscale；不可用时可回退到电脑热点、USB 或可信局域网。同一手机上若已有 VPN，可改用 HTTPS 隧道。版本 ${BuildConfig.VERSION_NAME}"
+            eyebrow = "MathNotes",
+            title = "设置",
+            detail = "管理电脑连接、识别模型与阅读外观。"
         )
         Spacer(Modifier.height(22.dp))
+
+        AuthorAttributionCard(
+            onOpenGitHub = {
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(AUTHOR_GITHUB_URL)))
+                }
+            }
+        )
+        Spacer(Modifier.height(16.dp))
 
         if (pairedConfig != null) {
             MathNotesPaper(Modifier.fillMaxWidth()) {
@@ -128,7 +157,7 @@ fun PairingSettingsScreen(
         }
 
         Spacer(Modifier.height(16.dp))
-        Text("添加电脑", style = MaterialTheme.typography.titleMedium, color = MathNotesColors.Ink)
+        Text("连接电脑", style = MaterialTheme.typography.titleMedium, color = MathNotesColors.Ink)
         Spacer(Modifier.height(8.dp))
         MathNotesPrimaryButton(
             text = "扫描新电脑",
@@ -155,6 +184,12 @@ fun PairingSettingsScreen(
         }
 
         Spacer(Modifier.height(18.dp))
+        StandaloneProviderSettingsSection(
+            profile = providerProfile,
+            onSave = onSaveProvider
+        )
+
+        Spacer(Modifier.height(16.dp))
         MathNotesPaper(Modifier.fillMaxWidth()) {
             Text("上传通知", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(7.dp))
@@ -287,5 +322,42 @@ fun PairingSettingsScreen(
                 TextButton(onClick = { pendingRemoval = null }) { Text("取消") }
             }
         )
+    }
+}
+
+@Composable
+private fun AuthorAttributionCard(onOpenGitHub: () -> Unit) {
+    MathNotesPaper(Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Image(
+                painter = painterResource(R.drawable.wwz_sysu_avatar),
+                contentDescription = "$AUTHOR_ID 头像",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(68.dp).clip(CircleShape)
+            )
+            Column(Modifier.weight(1f)) {
+                Text("作者", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Muted)
+                Spacer(Modifier.height(3.dp))
+                Text(AUTHOR_ID, style = MaterialTheme.typography.titleLarge, color = MathNotesColors.Ink)
+                Spacer(Modifier.height(7.dp))
+                Surface(
+                    onClick = onOpenGitHub,
+                    shape = RoundedCornerShape(10.dp),
+                    color = MathNotesColors.AccentSoft,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp
+                ) {
+                    Text(
+                        AUTHOR_GITHUB_LABEL,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MathNotesColors.Accent
+                    )
+                }
+            }
+        }
     }
 }

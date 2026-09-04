@@ -12,6 +12,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
 
 final class CapturingURLProtocol: URLProtocol {
     nonisolated(unsafe) static var requests: [URLRequest] = []
+    nonisolated(unsafe) static var requestBodies: [Data] = []
     nonisolated(unsafe) static var response: (status: Int, body: String) = (200, "{}")
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -19,6 +20,7 @@ final class CapturingURLProtocol: URLProtocol {
 
     override func startLoading() {
         Self.requests.append(request)
+        Self.requestBodies.append(Self.captureBody(from: request))
         let response = HTTPURLResponse(
             url: request.url!,
             statusCode: Self.response.status,
@@ -31,6 +33,21 @@ final class CapturingURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    private static func captureBody(from request: URLRequest) -> Data {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var body = Data()
+        var buffer = [UInt8](repeating: 0, count: 8_192)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            body.append(contentsOf: buffer.prefix(count))
+        }
+        return body
+    }
 }
 
 final class ResultBox<T>: @unchecked Sendable {
@@ -88,6 +105,18 @@ do {
     check(lanLink.contains("hosts=192.168.43.12"), "LAN pairing alternate host mismatch")
     check(!lanLink.contains("token="), "LAN pairing link leaked the long-lived token")
     check(CompanionPairingQRCode.image(payload: lanLink, side: 96) != nil, "LAN pairing QR generation failed")
+    let tailnetLink = challenge.pairingLink(
+        host: "100.88.42.7",
+        port: 49_194,
+        alternateHosts: ["100.88.42.7", "172.20.10.2"],
+        transport: .tailnetHTTP
+    )
+    check(tailnetLink.contains("host=100.88.42.7"), "Tailscale pairing link host mismatch")
+    check(tailnetLink.contains("port=49194"), "Tailscale pairing link dynamic port mismatch")
+    check(tailnetLink.contains("transport=tailnet_http"), "Tailscale pairing transport mismatch")
+    check(tailnetLink.contains("hosts=172.20.10.2"), "Tailscale pairing LAN fallback mismatch")
+    check(!tailnetLink.contains("token="), "Tailscale pairing link leaked the long-lived token")
+    check(CompanionPairingQRCode.image(payload: tailnetLink, side: 96) != nil, "Tailscale pairing QR generation failed")
 } catch {
     failures.append("Companion pairing challenge decode failed: \(error)")
 }
@@ -182,6 +211,19 @@ do {
 check(SidecarState.failed("启动失败") == .failed("启动失败"), "failure state lost its message")
 
 do {
+    let tailnetAddress = try TailscaleIPv4Inspection.inspect(Data("100.88.42.7\n".utf8))
+    check(tailnetAddress == "100.88.42.7", "Tailscale IPv4 inspection lost the tailnet address")
+    check(TailscaleIPv4Inspection.isTailnetIPv4("100.64.0.1"), "Tailscale lower IPv4 boundary rejected")
+    check(TailscaleIPv4Inspection.isTailnetIPv4("100.127.255.254"), "Tailscale upper IPv4 boundary rejected")
+    check(!TailscaleIPv4Inspection.isTailnetIPv4("100.128.0.1"), "non-tailnet CGNAT address accepted")
+    check(!TailscaleIPv4Inspection.isTailnetIPv4("192.168.1.8"), "LAN address accepted as Tailscale")
+    do {
+        _ = try TailscaleIPv4Inspection.inspect(Data("192.168.1.8\n".utf8))
+        failures.append("Tailscale IPv4 inspection accepted a LAN address")
+    } catch CompanionHostAutomationError.invalidTailnetAddress {
+        // Expected: QR discovery must never label a LAN address as Tailscale.
+    }
+
     let empty = try TailscaleServeInspection.inspect(Data("{}".utf8), expectedProxy: TailscaleServeCoordinator.expectedProxy)
     check(empty == .unconfigured, "empty Tailscale Serve status must be treated as unconfigured")
 
@@ -308,6 +350,81 @@ do {
     check(imported.manifest.blocks.first?.type == "image", "image import manifest mismatch")
 } catch {
     failures.append("image import response decode failed: \(error)")
+}
+
+do {
+    let data = Data(#"{"version":1,"imported":true,"edited":true,"blockId":"0002","sourceAssetPath":"assets/photos/source.jpg","assetPath":"assets/embedded/edited.png","metadataPath":"assets/embedded/edited.annotation.json","sourceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","outputSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","manifest":{"version":1,"notebookId":"analysis","sessionId":"lecture","title":"第三讲","status":"draft","updatedAt":"2026-08-30T00:00:00.000Z","revision":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","blocks":[]}}"#.utf8)
+    let edited = try JSONDecoder().decode(ImportSessionEditedImageResponse.self, from: data)
+    check(edited.imported && edited.edited && edited.blockId == "0002", "edited image response mismatch")
+    check(edited.metadataPath.hasSuffix(".annotation.json"), "edited image sidecar path mismatch")
+
+    let metadata = MacImageEditMetadata(
+        operations: [
+            .crop(rect: MacNormalizedRect(x: 0.1, y: 0.2, width: 0.7, height: 0.6)),
+            .rotate(quarterTurns: 1)
+        ],
+        annotations: [.arrow(
+            id: "arrow-1",
+            start: MacNormalizedPoint(x: 0.2, y: 0.2),
+            end: MacNormalizedPoint(x: 0.8, y: 0.7),
+            color: "#187857",
+            width: 0.006
+        )]
+    )
+    let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(metadata)) as? [String: Any]
+    let operations = encoded?["operations"] as? [[String: Any]]
+    check(operations?.map { $0["type"] as? String } == ["rotate", "crop"], "image operations were not contract ordered")
+    let annotations = encoded?["annotations"] as? [[String: Any]]
+    check(annotations?.first?["type"] as? String == "arrow", "image annotation encoding mismatch")
+} catch {
+    failures.append("edited image contract failed: \(error)")
+}
+
+do {
+    let ready = SidecarReadyMessage(
+        type: "mathnotes.ready",
+        apiVersion: 1,
+        instanceId: "image-edit-capture",
+        host: "127.0.0.1",
+        port: 43_123
+    )
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [CapturingURLProtocol.self]
+    let client = LocalShellClient(session: URLSession(configuration: configuration))
+    CapturingURLProtocol.requests = []
+    CapturingURLProtocol.requestBodies = []
+    CapturingURLProtocol.response = (200, #"{"version":1,"imported":true,"edited":true,"blockId":"0002","sourceAssetPath":"assets/photos/source.jpg","assetPath":"assets/embedded/edited.png","metadataPath":"assets/embedded/edited.annotation.json","sourceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","outputSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","manifest":{"version":1,"notebookId":"analysis","sessionId":"lecture","title":"第三讲","status":"draft","updatedAt":"2026-08-30T00:00:00.000Z","revision":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","blocks":[]}}"#)
+    let outcome = waitFor {
+        try await client.importSessionEditedImage(
+            ready: ready,
+            token: "local-token",
+            notebookId: "analysis",
+            sessionId: "lecture",
+            fileName: "课堂黑板\r\nInjected: yes.jpg",
+            sourceBytes: Data([0xff, 0xd8, 0xff, 0x01]),
+            outputPngBytes: Data([0x89, 0x50, 0x4e, 0x47]),
+            baseRevision: String(repeating: "b", count: 64),
+            operations: [.rotate(quarterTurns: 1)],
+            annotations: []
+        )
+    }
+    guard case let .success(response) = outcome else {
+        failures.append("edited image client request failed: \(outcome)")
+        throw TestFailure()
+    }
+    check(response.edited, "edited image client lost response state")
+    let request = CapturingURLProtocol.requests.last
+    check(request?.url?.path == "/local/v1/session/image/edit", "edited image request path mismatch")
+    check(request?.url?.query?.contains("notebookId=analysis") == true, "edited image notebook query missing")
+    check(request?.value(forHTTPHeaderField: "Content-Type")?.contains("multipart/form-data; boundary=") == true, "edited image multipart content type missing")
+    let body = String(decoding: CapturingURLProtocol.requestBodies.last ?? Data(), as: UTF8.self)
+    check(body.contains("name=\"metadata\""), "edited image metadata field missing")
+    check(body.contains("课堂黑板  Injected: yes.jpg"), "edited image UTF-8 file name missing")
+    check(!body.contains("\r\nInjected: yes.jpg"), "edited image file name allowed multipart line injection")
+    check(body.contains("name=\"source\""), "edited image source part missing")
+    check(body.contains("name=\"output\""), "edited image output part missing")
+} catch {
+    failures.append("edited image multipart client contract failed: \(error)")
 }
 
 do {

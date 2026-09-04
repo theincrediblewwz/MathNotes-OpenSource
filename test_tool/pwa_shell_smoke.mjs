@@ -12,11 +12,15 @@ const manifest = JSON.parse(await readFile(path.join(pwaRoot, "manifest.webmanif
 const index = await readFile(path.join(pwaRoot, "index.html"), "utf8");
 const serviceWorker = await readFile(path.join(pwaRoot, "sw.js"), "utf8");
 const fixtureToken = "pwa-smoke-token";
-const pairingScreenshotPath = path.join(tmpdir(), "mathnotes-pwa-pairing-auto-origin.png");
-const screenshotPath = path.join(tmpdir(), "mathnotes-pwa1-readonly-companion.png");
-const mobileScreenshotPath = path.join(tmpdir(), "mathnotes-pwa1-readonly-companion-mobile.png");
-const mobileCaptureScreenshotPath = path.join(tmpdir(), "mathnotes-pwa-mobile-capture.png");
-const mobileCatalogScreenshotPath = path.join(tmpdir(), "mathnotes-pwa-mobile-catalog-capture.png");
+const qaRoot = path.join(projectRoot, "output", "qa", "pwa-android-parity-v1");
+await mkdir(qaRoot, { recursive: true });
+const pairingScreenshotPath = path.join(qaRoot, "pairing.png");
+const screenshotPath = path.join(qaRoot, "diagnostic.png");
+const mobileNotesScreenshotPath = path.join(qaRoot, "notes.png");
+const mobileReaderScreenshotPath = path.join(qaRoot, "reader.png");
+const mobileCaptureScreenshotPath = path.join(qaRoot, "capture.png");
+const mobileQueueScreenshotPath = path.join(qaRoot, "queue.png");
+const mobileSettingsScreenshotPath = path.join(qaRoot, "settings.png");
 
 assert(manifest.name === "MathNotes Companion", "PWA manifest name mismatch");
 assert(manifest.display === "standalone" && manifest.start_url === "/", "PWA install contract mismatch");
@@ -135,18 +139,21 @@ try {
   assert(await pairingToken.getAttribute("required") !== null, "PWA pairing token must be required");
   await pairingToken.fill(fixtureToken);
   await page.getByRole("button", { name: "连接电脑" }).click();
-  await page.getByRole("heading", { name: "泛函分析" }).waitFor();
+  await page.getByRole("dialog", { name: "连接你的 MathNotes" }).waitFor({ state: "hidden" });
+  await page.getByRole("heading", { name: "我的笔记" }).waitFor();
+  assert(await hasActiveCredential(page), "PWA pairing UI completed without persisting an active credential");
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.getByRole("heading", { name: "泛函分析" }).waitFor();
+  await page.getByRole("heading", { name: "我的笔记" }).waitFor();
   assert(
     await page.getByRole("heading", { name: "连接你的 MathNotes" }).count() === 0,
     "PWA must restore the saved credential without reopening pairing"
   );
+  await page.getByRole("button", { name: "搜索笔记" }).click();
   const search = page.getByLabel("搜索 Notebook 或 Session");
   await search.fill("不存在的 Session");
   await page.getByRole("heading", { name: "没有匹配的笔记" }).waitFor();
   await page.getByRole("button", { name: "清除搜索" }).click();
-  await page.getByRole("heading", { name: "泛函分析" }).waitFor();
+  await page.locator(".notebook-folder-card").filter({ hasText: "泛函分析" }).waitFor();
 
   await page.route("**/api/v1/uploads", async (route) => {
     assert(route.request().method() === "POST", "PWA upload smoke did not use POST");
@@ -181,6 +188,8 @@ try {
       })
     });
   });
+  await page.getByRole("button", { name: "拍摄", exact: true }).click();
+  await page.getByRole("heading", { name: "拍下这一页" }).waitFor();
   await page.getByRole("button", { name: "PDF", exact: true }).waitFor();
   const galleryInput = page.locator('input[type="file"][accept="image/*"][multiple]');
   await galleryInput.setInputFiles({
@@ -188,11 +197,15 @@ try {
     mimeType: "image/png",
     buffer: await readFile(path.join(projectRoot, "apps", "pwa", "public", "icons", "mathnotes-192.png"))
   });
+  await page.getByRole("button", { name: "队列", exact: true }).click();
   const succeededUpload = page.locator(".upload-task.succeeded");
   await succeededUpload.waitFor({ timeout: 15_000 });
   await succeededUpload.getByText(/^已入库并识别完成 · /).waitFor({ timeout: 15_000 });
 
-  await page.getByRole("button", { name: /泛函分析 第 3 讲/ }).click();
+  await page.getByRole("button", { name: "笔记", exact: true }).click();
+  const sessionButton = page.locator(".session-list button").filter({ hasText: "泛函分析 第 3 讲" });
+  await sessionButton.waitFor();
+  await sessionButton.click();
 
   const reader = page.frameLocator("iframe.reader-frame");
   await reader.getByRole("heading", { name: "泛函分析 第 3 讲" }).waitFor();
@@ -236,6 +249,7 @@ try {
   await page.evaluate(async () => navigator.serviceWorker.ready);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
+  await page.locator(".session-list button").filter({ hasText: "泛函分析 第 3 讲" }).click();
   await page.frameLocator("iframe.reader-frame").getByRole("heading", { name: "半群与生成元" }).waitFor();
 
   const apiStatus = await page.evaluate(async () => (await fetch("/api/v1/health")).status);
@@ -259,13 +273,18 @@ try {
 
   await context.setOffline(true);
   await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "我的笔记" }).waitFor();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByText("离线阅读", { exact: true }).first().waitFor();
   await page.getByRole("button", { name: /连接状态：离线阅读/ }).click();
-  await page.getByRole("region", { name: "连接详情" }).waitFor();
-  await page.getByText("手机当前离线", { exact: true }).waitFor();
-  await page.getByText(started.url, { exact: true }).waitFor();
-  await page.getByRole("button", { name: "立即重试" }).waitFor();
-  await page.getByRole("button", { name: "收起" }).click();
+  const offlineDetails = page.getByRole("region", { name: "连接详情" });
+  await offlineDetails.waitFor();
+  await offlineDetails.getByText("手机当前离线", { exact: true }).waitFor();
+  await offlineDetails.getByText(started.url, { exact: true }).waitFor();
+  await offlineDetails.getByRole("button", { name: "立即重试" }).waitFor();
+  await offlineDetails.getByRole("button", { name: "收起" }).click();
+  await page.getByRole("button", { name: "笔记", exact: true }).click();
+  await page.locator(".session-list button").filter({ hasText: "泛函分析 第 3 讲" }).click();
   const offlineReader = page.frameLocator("iframe.reader-frame");
   await offlineReader.getByRole("heading", { name: "半群与生成元" }).waitFor();
   const offlineImage = offlineReader.getByRole("img", { name: "相图" });
@@ -274,41 +293,79 @@ try {
 
   await context.setOffline(false);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "返回目录" }).click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "立即同步" }).click();
+  await page.getByRole("button", { name: /连接状态：实时同步/ }).waitFor();
+  await page.getByText("PWA 2026.09.01.1", { exact: true }).waitFor();
+  await page.screenshot({ path: mobileSettingsScreenshotPath, fullPage: false });
+  await assertNoHorizontalOverflow(page, "settings");
+
+  await page.setViewportSize({ width: 384, height: 900 });
+  await page.getByRole("button", { name: "笔记", exact: true }).click();
+  if (await page.locator(".reader-toolbar").count()) {
+    await page.locator(".reader-toolbar .back-button").click();
+  }
+  await page.getByRole("heading", { name: "我的笔记" }).waitFor();
+  await page.locator(".continue-reading-copy p").filter({ hasText: "半群与生成元" }).waitFor();
+  await page.screenshot({ path: mobileNotesScreenshotPath, fullPage: false });
+  await assertNoHorizontalOverflow(page, "notes");
+
+  await page.getByRole("button", { name: "拍摄", exact: true }).click();
+  await page.getByRole("heading", { name: "拍下这一页" }).waitFor();
+  const postEditSwitch = page.getByRole("switch", { name: /拍后编辑/ });
+  await postEditSwitch.click();
+  assert(await postEditSwitch.getAttribute("aria-checked") === "true", "post-edit switch did not move to the enabled state");
+  await postEditSwitch.evaluate((element) => new Promise((resolve) => {
+    const track = element.querySelector("strong");
+    if (!track || getComputedStyle(track).backgroundColor === "rgb(35, 121, 88)") {
+      resolve(undefined);
+      return;
+    }
+    const timeout = setTimeout(() => resolve(undefined), 500);
+    track.addEventListener("transitionend", () => {
+      clearTimeout(timeout);
+      resolve(undefined);
+    }, { once: true });
+  }));
+  const postEditVisualState = await postEditSwitch.evaluate((element) => {
+    const track = element.querySelector("strong");
+    if (!track) return { background: "", knobTransform: "" };
+    return {
+      background: getComputedStyle(track).backgroundColor,
+      knobTransform: getComputedStyle(track, "::after").transform
+    };
+  });
+  assert(postEditVisualState.background === "rgb(35, 121, 88)", "post-edit switch track did not turn green");
+  assert(postEditVisualState.knobTransform !== "none", "post-edit switch knob did not slide to the enabled side");
+  await page.screenshot({ path: mobileCaptureScreenshotPath, fullPage: false });
+  await assertNoHorizontalOverflow(page, "capture");
+
+  await page.getByRole("button", { name: "队列", exact: true }).click();
+  await page.getByRole("heading", { name: "今日采集", level: 1 }).waitFor();
+  await page.locator(".upload-task.succeeded").waitFor();
+  await page.screenshot({ path: mobileQueueScreenshotPath, fullPage: false });
+  await assertNoHorizontalOverflow(page, "queue");
+
+  await page.getByRole("button", { name: "笔记", exact: true }).click();
   const mobileSessionButton = page.locator(".session-list button").filter({ hasText: "泛函分析 第 3 讲" });
-  await mobileSessionButton.waitFor();
-  await Promise.all([
-    page.waitForResponse((candidate) => candidate.url().includes("/api/v1/pairing/verify")),
-    page.getByRole("button", { name: "立即刷新" }).click()
-  ]);
-  assert(
-    await page.getByRole("button", { name: "返回目录" }).count() === 0,
-    "catalog refresh unexpectedly reopened the first session"
-  );
-  await page.getByRole("button", { name: /采集到笔记/ }).waitFor();
-  await page.getByText("PWA 2026.07.29.13", { exact: true }).waitFor();
-  await page.screenshot({ path: mobileCatalogScreenshotPath, fullPage: false });
-  const mobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  assert(mobileOverflow <= 1, `mobile PWA overflows horizontally by ${mobileOverflow}px`);
-  await page.getByRole("button", { name: /采集到笔记/ }).click();
-  await page.getByRole("dialog", { name: "采集到当前 Session" }).waitFor();
-  await page.getByRole("button", { name: "关闭采集" }).last().click();
   await mobileSessionButton.click();
   await page.frameLocator("iframe.reader-frame").getByRole("heading", { name: "半群与生成元" }).waitFor();
+  assert(await page.locator(".android-page-header").count() === 0, "reader still renders the large outer page header");
+  assert(await page.locator(".reader-toolbar").count() === 1, "reader does not have exactly one compact app toolbar");
+  await page.screenshot({ path: mobileReaderScreenshotPath, fullPage: false });
+  await assertNoHorizontalOverflow(page, "reader");
   await page.getByRole("button", { name: "采集", exact: true }).click();
-  await page.getByRole("dialog", { name: "采集到当前 Session" }).waitFor();
+  await page.getByRole("heading", { name: "拍下这一页" }).waitFor();
   assert(
-    await page.locator('.mobile-capture-sheet input[type="file"][accept="image/*"][multiple]').count() === 1,
-    "mobile reader capture sheet did not expose gallery intake"
+    await page.locator('input[type="file"][accept="image/*"][multiple]').count() === 1,
+    "mobile reader capture destination did not expose gallery intake"
   );
-  await page.screenshot({ path: mobileCaptureScreenshotPath, fullPage: false });
-  await page.getByRole("button", { name: "关闭采集" }).last().click();
-  await page.screenshot({ path: mobileScreenshotPath, fullPage: false });
   assert(browserMessages.length === 0, `browser emitted errors: ${browserMessages.join(" | ")}`);
 
   console.log(
     `PWA_COMPANION_SMOKE_OK catalog=1 session=1 assets=1 cached=${browserSecurity.cachedUrls.length} ` +
-    `origin=${started.url} screenshots=${pairingScreenshotPath},${screenshotPath},${mobileCatalogScreenshotPath},${mobileScreenshotPath},${mobileCaptureScreenshotPath}`
+    `origin=${started.url} screenshots=${pairingScreenshotPath},${mobileNotesScreenshotPath},${mobileReaderScreenshotPath},` +
+    `${mobileCaptureScreenshotPath},${mobileQueueScreenshotPath},${mobileSettingsScreenshotPath}`
   );
 } catch (error) {
   if (page) {
@@ -453,6 +510,11 @@ async function hasActiveCredential(page) {
       };
     };
   }));
+}
+
+async function assertNoHorizontalOverflow(page, screenName) {
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  assert(overflow <= 1, `${screenName} PWA overflows horizontally by ${overflow}px`);
 }
 
 function assert(condition, message) {

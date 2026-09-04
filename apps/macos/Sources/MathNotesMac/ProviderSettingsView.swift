@@ -1,6 +1,20 @@
 import AppKit
 import SwiftUI
 
+enum ProviderSettingsSection: String {
+    static let storageKey = "mathnotes.settings.section.v1"
+
+    case general
+    case reading
+    case companion
+    case provider
+    case guidance
+
+    static func select(_ section: ProviderSettingsSection) {
+        UserDefaults.standard.set(section.rawValue, forKey: storageKey)
+    }
+}
+
 struct ProviderSettingsView: View {
     @ObservedObject var supervisor: SidecarSupervisor
     @ObservedObject var editingState: AppEditingState
@@ -10,6 +24,8 @@ struct ProviderSettingsView: View {
     @State private var exportURL = DirectoryBookmarkStore.resolvedURL(for: .defaultExport)
     @State private var workspaceMessage: String?
     @State private var isSavingWorkspace = false
+    @State private var backupMessage: String?
+    @State private var isCreatingBackup = false
 
     @State private var appearanceMode = AppAppearanceMode.load()
     @State private var sourceFont = MacTypographyPreferences.sourcePreset()
@@ -59,21 +75,33 @@ struct ProviderSettingsView: View {
     @State private var hostTokenConfirmation = ""
     @State private var isUpdatingHostToken = false
     @State private var isRefreshingPairingChallenge = false
+    @AppStorage(ProviderSettingsSection.storageKey) private var selectedSectionRawValue =
+        ProviderSettingsSection.general.rawValue
+
+    private var selectedSection: Binding<ProviderSettingsSection> {
+        Binding(
+            get: { ProviderSettingsSection(rawValue: selectedSectionRawValue) ?? .general },
+            set: { selectedSectionRawValue = $0.rawValue }
+        )
+    }
 
     var body: some View {
-        TabView {
+        TabView(selection: selectedSection) {
             generalSettings
                 .tabItem { Label("通用", systemImage: "folder") }
+                .tag(ProviderSettingsSection.general)
             readingSettings
                 .tabItem { Label("编辑与阅读", systemImage: "textformat") }
+                .tag(ProviderSettingsSection.reading)
             companionSettings
                 .tabItem { Label("设备连接", systemImage: "network") }
+                .tag(ProviderSettingsSection.companion)
             providerSettings
                 .tabItem { Label("AI 服务", systemImage: "sparkles") }
+                .tag(ProviderSettingsSection.provider)
             aiGuidanceSettings
                 .tabItem { Label("AI 规则", systemImage: "text.badge.checkmark") }
-            diagnostics
-                .tabItem { Label("诊断", systemImage: "stethoscope") }
+                .tag(ProviderSettingsSection.guidance)
         }
         .padding(20)
         .frame(minWidth: 720, minHeight: 600)
@@ -124,6 +152,36 @@ struct ProviderSettingsView: View {
                             choose: { chooseDirectory(title: "选择默认导出位置") { exportURL = $0 } },
                             reset: { exportURL = nil }
                         )
+                    }
+                    .padding(8)
+                }
+
+                GroupBox("笔记备份") {
+                    HStack(spacing: MathNotesTheme.Spacing.standard) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("保存一份可独立打开的笔记副本")
+                                .font(.body.weight(.medium))
+                            Text("只包含已保存的 Notebooks 与 Sessions，不包含 AI 密钥、连接令牌或日志。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let backupMessage {
+                                Text(backupMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(MathNotesTheme.accent)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        Spacer(minLength: MathNotesTheme.Spacing.standard)
+                        if isCreatingBackup { ProgressView().controlSize(.small) }
+                        Button {
+                            chooseDirectory(title: "选择笔记备份位置") { destination in
+                                Task { await createNotesBackup(at: destination) }
+                            }
+                        } label: {
+                            Label("备份笔记…", systemImage: "externaldrive.badge.plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isCreatingBackup || !isCoreReady || editingState.hasUnsavedSourceDrafts)
                     }
                     .padding(8)
                 }
@@ -219,7 +277,10 @@ struct ProviderSettingsView: View {
     private var providerSettings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.section) {
-                settingsHeading("AI 服务", detail: "识别和对话可使用不同模型；密钥只保存在系统钥匙串中。")
+                settingsHeading(
+                    "AI 服务",
+                    detail: "识别和对话可使用不同模型；密钥只保存在系统钥匙串中，并仅在保存、测试或使用 AI 时读取。"
+                )
 
                 GroupBox("数学图片识别") {
                     VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.standard) {
@@ -231,7 +292,7 @@ struct ProviderSettingsView: View {
                                 model = value.defaultModel
                                 endpoint = value.defaultEndpoint
                                 apiKey = ""
-                                Task { hasSavedKey = await supervisor.hasSavedProviderKey(value) }
+                                hasSavedKey = supervisor.hasSavedProviderConfiguration(value)
                             }
                             TextField("模型", text: $model)
                             if preset.exposesEndpoint {
@@ -242,10 +303,12 @@ struct ProviderSettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                             HStack {
-                                SecureField(hasSavedKey ? "已保存；留空则继续使用" : "API 密钥", text: $apiKey)
+                                SecureField(hasSavedKey ? "已保存配置；留空则继续使用" : "API 密钥", text: $apiKey)
                                 Button("测试连通") { providerTestPurpose = .recognition }
-                                    .disabled(isWorking || isTestingProvider || !supervisor.providerStatus.configured)
-                                    .help(supervisor.providerStatus.configured ? "发送一次最小测试请求" : "请先保存识别服务")
+                                    .disabled(isWorking || isTestingProvider || (!supervisor.providerStatus.configured && !hasSavedKey))
+                                    .help(hasSavedKey || supervisor.providerStatus.configured
+                                          ? "按需读取钥匙串并发送一次最小测试请求"
+                                          : "请先保存识别服务")
                             }
                         }
                         .formStyle(.grouped)
@@ -254,7 +317,7 @@ struct ProviderSettingsView: View {
                             providerStatusLabel
                             Spacer()
                             Button("清除配置", role: .destructive) { Task { await clearProvider() } }
-                                .disabled(isWorking || !supervisor.providerStatus.configured)
+                                .disabled(isWorking || (!supervisor.providerStatus.configured && !hasSavedKey))
                             Button("保存识别服务") { Task { await saveProvider() } }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(isWorking || model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
@@ -264,9 +327,9 @@ struct ProviderSettingsView: View {
                     .padding(8)
                 }
 
-                GroupBox("学习助手对话") {
+                GroupBox("与笔记对话") {
                     VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.standard) {
-                        Text("未单独保存时自动继承识别模型；保存后只影响学习助手。")
+                        Text("未单独保存时自动继承识别模型；保存后只影响 AI 对话。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Form {
@@ -277,7 +340,7 @@ struct ProviderSettingsView: View {
                                 assistantModel = value.defaultModel
                                 assistantEndpoint = value.defaultEndpoint
                                 assistantAPIKey = ""
-                                Task { assistantHasSavedKey = await supervisor.hasSavedProviderKey(value, purpose: .assistant) }
+                                assistantHasSavedKey = supervisor.hasSavedProviderConfiguration(value, purpose: .assistant)
                             }
                             TextField("模型", text: $assistantModel)
                             if assistantPreset.exposesEndpoint {
@@ -287,10 +350,13 @@ struct ProviderSettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                             HStack {
-                                SecureField(assistantHasSavedKey ? "已保存；留空则继续使用" : "API 密钥", text: $assistantAPIKey)
+                                SecureField(assistantHasSavedKey ? "已保存配置；留空则继续使用" : "API 密钥", text: $assistantAPIKey)
                                 Button("测试连通") { providerTestPurpose = .assistant }
-                                    .disabled(isAssistantWorking || isTestingAssistantProvider || !supervisor.assistantProviderStatus.configured)
-                                    .help(supervisor.assistantProviderStatus.configured ? "发送一次最小测试请求" : "请先保存对话模型")
+                                    .disabled(isAssistantWorking || isTestingAssistantProvider ||
+                                              (!supervisor.assistantProviderStatus.configured && !assistantHasSavedKey && !hasSavedKey))
+                                    .help(assistantHasSavedKey || hasSavedKey || supervisor.assistantProviderStatus.configured
+                                          ? "按需读取钥匙串并发送一次最小测试请求"
+                                          : "请先保存对话模型")
                             }
                         }
                         .formStyle(.grouped)
@@ -298,7 +364,8 @@ struct ProviderSettingsView: View {
                             assistantProviderStatusLabel
                             Spacer()
                             Button("恢复继承识别模型", role: .destructive) { Task { await clearAssistantProvider() } }
-                                .disabled(isAssistantWorking || supervisor.assistantProviderStatus.inherited == true)
+                                .disabled(isAssistantWorking ||
+                                          (!assistantHasSavedKey && supervisor.assistantProviderStatus.inherited == true))
                             Button("保存对话模型") { Task { await saveAssistantProvider() } }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(isAssistantWorking || assistantModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
@@ -412,7 +479,7 @@ struct ProviderSettingsView: View {
                                         }
                                     }
 
-                                    Text("Android 可直接扫描二维码；也可手填局域网地址与长期配对令牌。手机和 Mac 可使用同一 Wi-Fi、iPhone 热点或同一 Tailscale 网络，不需要开启 Mac 互联网共享。")
+                                    Text("这里保留局域网二维码与手填令牌。需要 Tailscale 时，请打开侧栏的“连接手机”：检测到同一 tailnet 后会优先生成 Tailscale 二维码，也可切回局域网。")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 } else {
@@ -438,6 +505,10 @@ struct ProviderSettingsView: View {
                         Text("仅在你已经配置 Tailscale 时使用：手机也需进入同一 tailnet，再用 Safari 打开该 HTTPS 地址并输入长期配对令牌。局域网地址已可直接打开 PWA；HTTPS 仍用于更完整的安全上下文与远程连接。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Button("检查已有 Tailscale 地址") {
+                            supervisor.inspectCompanionServe()
+                        }
+                        .disabled(supervisor.companionHost == nil)
 
                         if let token = supervisor.companionHostToken {
                             hostValueRow(
@@ -995,8 +1066,11 @@ struct ProviderSettingsView: View {
             Label("已配置 \(supervisor.providerStatus.label ?? "识别服务")", systemImage: "checkmark.circle.fill")
                 .font(.callout).foregroundStyle(MathNotesTheme.accent)
         } else if let restorationError = supervisor.providerRestorationError {
-            Label(restorationError.errorDescription, systemImage: "exclamationmark.triangle.fill")
+            Label(restorationError.errorDescription ?? "无法启用已保存的识别服务。", systemImage: "exclamationmark.triangle.fill")
                 .font(.callout).foregroundStyle(MathNotesTheme.warning)
+        } else if hasSavedKey {
+            Label("配置已安全保存，将在使用 AI 时启用", systemImage: "lock.shield")
+                .font(.callout).foregroundStyle(.secondary)
         } else {
             Text("尚未配置").font(.callout).foregroundStyle(.secondary)
         }
@@ -1062,18 +1136,39 @@ struct ProviderSettingsView: View {
         }
     }
 
+    private func createNotesBackup(at destination: URL) async {
+        guard !editingState.hasUnsavedSourceDrafts else {
+            backupMessage = "请先保存当前修改，再创建备份。"
+            return
+        }
+        isCreatingBackup = true
+        backupMessage = nil
+        let didAccess = destination.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess { destination.stopAccessingSecurityScopedResource() }
+            isCreatingBackup = false
+        }
+        do {
+            let result = try await supervisor.createNotesBackup(destinationParentDir: destination.path)
+            let bytes = ByteCountFormatter.string(fromByteCount: Int64(result.totalBytes), countStyle: .file)
+            backupMessage = "备份完成：\(result.fileCount) 个文件，\(bytes) · \(result.backupDir)"
+        } catch {
+            backupMessage = error.localizedDescription
+        }
+    }
+
     private func loadProvider() async {
         if let record = ProviderPreferences.load() {
             preset = record.providerId
             model = record.model
             endpoint = record.endpoint
         }
-        hasSavedKey = await supervisor.hasSavedProviderKey(preset)
+        hasSavedKey = supervisor.hasSavedProviderConfiguration(preset)
         if let record = ProviderPreferences.load(.assistant) {
             assistantPreset = record.providerId
             assistantModel = record.model
             assistantEndpoint = record.endpoint
-            assistantHasSavedKey = await supervisor.hasSavedProviderKey(record.providerId, purpose: .assistant)
+            assistantHasSavedKey = supervisor.hasSavedProviderConfiguration(record.providerId, purpose: .assistant)
         } else if let record = ProviderPreferences.load(.recognition) {
             assistantPreset = record.providerId
             assistantModel = record.model
@@ -1289,12 +1384,12 @@ struct ProviderSettingsView: View {
     private var companionServeStatus: some View {
         switch supervisor.tailscaleServeState {
         case .idle:
-            Label("等待设备连接服务", systemImage: "clock")
+            Label("不会自动配置 Tailscale；需要时可只读检查已有地址", systemImage: "lock.shield")
                 .foregroundStyle(.secondary)
         case .checking:
             HStack {
                 ProgressView().controlSize(.small)
-                Text("正在确认并自动配置 Mac 的 Tailscale HTTPS 地址")
+                Text("正在读取已有的 Tailscale Serve 状态")
                     .foregroundStyle(.secondary)
             }
         case let .ready(origin):
@@ -1320,8 +1415,11 @@ struct ProviderSettingsView: View {
             )
             .font(.callout).foregroundStyle(MathNotesTheme.accent)
         } else if let restorationError = supervisor.assistantProviderRestorationError {
-            Label(restorationError.errorDescription, systemImage: "exclamationmark.triangle.fill")
+            Label(restorationError.errorDescription ?? "无法启用已保存的对话模型。", systemImage: "exclamationmark.triangle.fill")
                 .font(.callout).foregroundStyle(MathNotesTheme.warning)
+        } else if assistantHasSavedKey || hasSavedKey {
+            Label("配置已安全保存，将在使用 AI 时启用", systemImage: "lock.shield")
+                .font(.callout).foregroundStyle(.secondary)
         } else {
             Text("尚未配置").font(.callout).foregroundStyle(.secondary)
         }

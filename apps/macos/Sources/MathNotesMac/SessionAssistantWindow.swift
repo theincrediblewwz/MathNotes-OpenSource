@@ -39,13 +39,23 @@ struct AssistantWindowDragSurface: NSViewRepresentable {
 }
 
 @MainActor
+struct SessionAssistantSelectionEditContext {
+    let draft: MacSelectionEditDraft
+    let onGenerate: (String, String?) async throws -> SelectionEditProposal
+    let onApply: (SelectionEditProposal, String, Bool) async throws -> ApplySelectionEditResponse
+    let onCancel: (SelectionEditProposal?) async throws -> Void
+    let onRevealLock: () -> Void
+}
+
+@MainActor
 struct SessionAssistantWindowContext {
     let session: SessionCatalogItem
     let manifest: ReadonlySessionManifest
     let activeBlockID: String?
     let selectedText: String
     let selectedTextBlockID: String?
-    let onSelectionEditRequested: (() -> Void)?
+    let selectionEdit: SessionAssistantSelectionEditContext?
+    let onOpenRelatedSource: (SessionAssistantRelatedSource) -> Void
     let onSessionChanged: () async -> Void
 }
 
@@ -77,7 +87,8 @@ struct SessionAssistantWindowRoot: View {
                     selectedText: context.selectedText,
                     selectedTextBlockID: context.selectedTextBlockID,
                     supervisor: supervisor,
-                    onSelectionEditRequested: context.onSelectionEditRequested,
+                    selectionEditContext: context.selectionEdit,
+                    onOpenRelatedSource: context.onOpenRelatedSource,
                     onSessionChanged: context.onSessionChanged,
                     onClose: { dismissWindow(id: "session-assistant") }
                 )
@@ -85,7 +96,7 @@ struct SessionAssistantWindowRoot: View {
                 ContentUnavailableView(
                     "尚未选择笔记",
                     systemImage: "sparkles",
-                    description: Text("从笔记窗口打开学习助手。")
+                    description: Text("从笔记窗口打开“与笔记对话”。")
                 )
             }
         }

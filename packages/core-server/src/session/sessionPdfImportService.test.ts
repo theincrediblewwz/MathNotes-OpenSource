@@ -85,6 +85,26 @@ describe("SessionPdfImportService", () => {
     expect(await readFile(join(sessionDir, block.content.assetPath))).toEqual(PDF);
   });
 
+  it("uses the native client page count instead of the fallback PDF dictionary scan", async () => {
+    const before = await readReadonlySessionManifest({
+      rootDir: root,
+      notebookId: "analysis",
+      sessionId: "lecture"
+    });
+    const result = await new SessionPdfImportService(root).importPdf({
+      notebookId: "analysis",
+      sessionId: "lecture",
+      fileName: "native-count.pdf",
+      bytes: PDF,
+      baseRevision: before.revision,
+      pageCountHint: 7
+    });
+
+    expect(result.pageCount).toBe(7);
+    const session = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+    expect(session.blocks.at(-1)).toMatchObject({ type: "pdf", pageCount: 7 });
+  });
+
   it("rejects invalid, empty, oversized and stale PDF input without residue", async () => {
     const before = await readReadonlySessionManifest({
       rootDir: root,

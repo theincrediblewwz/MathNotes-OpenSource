@@ -5,6 +5,7 @@ import { createBlockRef, type RecognitionProvider, type RecognitionProviderEvent
 import { StreamingOutputGuard } from "../domain/streamingOutputGuard";
 import { SessionWriteCoordinator } from "./sessionWriteCoordinator";
 import { buildSessionRecognitionContext } from "./sessionRecognitionContext";
+import { sessionManifestRevision } from "./sessionRevision";
 
 export type SessionRecognitionStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
 export type SessionRecognitionFailureKind = "output_anomaly" | "provider_unavailable";
@@ -31,10 +32,29 @@ export type SessionRecognitionTask = Readonly<{
   providerName?: string;
   error?: string;
   failureKind?: SessionRecognitionFailureKind;
+  batchId?: string;
+  pageNumber?: number;
+  pageCount?: number;
+  batchConcurrency?: number;
   warnings?: string[];
   timing?: SessionRecognitionTiming;
   createdAt: string;
   updatedAt: string;
+}>;
+
+export type PreparePdfRecognitionBatchInput = Readonly<{
+  notebookId: string;
+  sessionId: string;
+  pdfBlockId: string;
+  pdfAssetPath: string;
+  batchId: string;
+  pageCount: number;
+  concurrency: number;
+  baseRevision: string;
+  pages: ReadonlyArray<Readonly<{
+    pageNumber: number;
+    imageAssetPath: string;
+  }>>;
 }>;
 
 export type SessionRecognitionEvent = Readonly<{
@@ -66,6 +86,9 @@ export class SessionRecognitionError extends Error {
       | "block_locked"
       | "asset_not_found"
       | "not_image_block"
+      | "not_pdf_block"
+      | "revision_conflict"
+      | "invalid_pdf_batch"
       | "recognition_in_progress"
       | "task_not_found"
       | "task_not_retryable"
@@ -177,6 +200,173 @@ export class SessionRecognitionService {
     return publicTask(task);
   }
 
+  async preparePdfBatch(input: PreparePdfRecognitionBatchInput): Promise<SessionRecognitionTask[]> {
+    const prepared = await this.coordinator.run(input.notebookId, input.sessionId, async () => {
+      const context = await readSessionContext(this.rootDir, input.notebookId, input.sessionId);
+      if (input.baseRevision !== sessionManifestRevision(context.session)) {
+        throw new SessionRecognitionError("revision_conflict", 409);
+      }
+      if (!isSafeBatchId(input.batchId) || !Number.isInteger(input.pageCount) || input.pageCount < 1 ||
+          !Number.isInteger(input.concurrency) || input.concurrency < 1 || input.concurrency > 4 ||
+          input.pages.length === 0) {
+        throw new SessionRecognitionError("invalid_pdf_batch", 400);
+      }
+      const pdfBlock = context.session.blocks.find((block) => block.id === input.pdfBlockId);
+      if (!pdfBlock) throw new SessionRecognitionError("block_not_found", 404);
+      if (pdfBlock.type !== "pdf") throw new SessionRecognitionError("not_pdf_block", 422);
+      if (normalizeRelativePath(pdfBlock.path) !== normalizeRelativePath(input.pdfAssetPath) ||
+          (pdfBlock.pageCount !== undefined && pdfBlock.pageCount !== input.pageCount)) {
+        throw new SessionRecognitionError("invalid_pdf_batch", 409);
+      }
+
+      const existingTasks = await readTasks(context.sessionDir);
+      if (existingTasks.some((task) => task.batchId === input.batchId)) {
+        throw new SessionRecognitionError("recognition_in_progress", 409);
+      }
+      const pages = [...input.pages].sort((left, right) => left.pageNumber - right.pageNumber);
+      const seenPages = new Set<number>();
+      for (const page of pages) {
+        if (!Number.isInteger(page.pageNumber) || page.pageNumber < 1 || page.pageNumber > input.pageCount ||
+            seenPages.has(page.pageNumber)) {
+          throw new SessionRecognitionError("invalid_pdf_batch", 400);
+        }
+        seenPages.add(page.pageNumber);
+        const imagePath = assertInside(context.sessionDir, resolve(context.sessionDir, page.imageAssetPath));
+        const imageStat = await stat(imagePath).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            throw new SessionRecognitionError("asset_not_found", 404);
+          }
+          throw error;
+        });
+        if (!imageStat.isFile()) throw new SessionRecognitionError("asset_not_found", 404);
+      }
+
+      const timestamp = this.now();
+      const recognitionContext = await buildSessionRecognitionContext({
+        sessionDir: context.sessionDir,
+        session: context.session,
+        beforeBlockId: pdfBlock.id,
+        now: timestamp
+      });
+      const firstNumericId = maxNumericBlockId(context.session) + 1;
+      const transcripts = pages.map((page, index) => {
+        const id = String(firstNumericId + index).padStart(4, "0");
+        return createBlockRef({
+          id,
+          type: "markdown",
+          path: `blocks/${id}_ai_transcript.md`,
+          source: "ai_transcription",
+          sourceName: `PDF 第 ${page.pageNumber} 页`,
+          fromAssets: [pdfBlock.path],
+          sourcePageNumber: page.pageNumber,
+          sourcePageImagePath: normalizeRelativePath(page.imageAssetPath),
+          createdAt: timestamp
+        });
+      });
+      const tasks: StoredTask[] = pages.map((page, index) => ({
+        version: 1,
+        id: `recognition_${input.batchId}_page_${String(page.pageNumber).padStart(4, "0")}`,
+        notebookId: input.notebookId,
+        sessionId: input.sessionId,
+        imageBlockId: pdfBlock.id,
+        transcriptBlockId: transcripts[index].id,
+        assetPath: pdfBlock.path,
+        imagePath: assertInside(context.sessionDir, resolve(context.sessionDir, page.imageAssetPath)),
+        recognitionContext: recognitionContext.summary || undefined,
+        recognitionContextFingerprint: recognitionContext.fingerprint,
+        batchId: input.batchId,
+        pageNumber: page.pageNumber,
+        pageCount: input.pageCount,
+        batchConcurrency: input.concurrency,
+        status: "pending",
+        attempts: 0,
+        timing: { acceptedAt: timestamp },
+        createdAt: timestamp,
+        updatedAt: timestamp
+      }));
+      const pdfIndex = context.session.blocks.findIndex((block) => block.id === pdfBlock.id);
+      const nextSession: SessionRecord = {
+        ...context.session,
+        updatedAt: timestamp,
+        blocks: [
+          ...context.session.blocks.slice(0, pdfIndex + 1),
+          ...transcripts,
+          ...context.session.blocks.slice(pdfIndex + 1)
+        ]
+      };
+      const previousSessionText = await readFile(context.sessionPath, "utf8");
+      const previousTaskText = await readOptionalText(taskLogPath(context.sessionDir));
+      const createdTranscriptPaths: string[] = [];
+      try {
+        for (let index = 0; index < transcripts.length; index += 1) {
+          const path = assertInside(context.sessionDir, resolve(context.sessionDir, transcripts[index].path));
+          await writeAtomically(path, initialDraft(pages[index].pageNumber));
+          createdTranscriptPaths.push(path);
+        }
+        await writeAtomically(context.sessionPath, `${JSON.stringify(nextSession, null, 2)}\n`);
+        await writeTasks(context.sessionDir, [...existingTasks, ...tasks]);
+      } catch (error) {
+        await writeAtomically(context.sessionPath, previousSessionText).catch(() => undefined);
+        if (previousTaskText === undefined) await rm(taskLogPath(context.sessionDir), { force: true });
+        else await writeAtomically(taskLogPath(context.sessionDir), previousTaskText).catch(() => undefined);
+        await Promise.all(createdTranscriptPaths.map((path) => rm(path, { force: true })));
+        throw error;
+      }
+      return tasks;
+    });
+    for (const task of prepared) this.emit(task, "status", `PDF 第 ${task.pageNumber} 页已进入识别队列。`);
+    return prepared.map(publicTask);
+  }
+
+  async runPrepared(input: {
+    notebookId: string;
+    sessionId: string;
+    taskId: string;
+  }): Promise<SessionRecognitionTask> {
+    const task = await this.requireTask(input);
+    if (task.status !== "pending") return publicTask(task);
+    await this.trackRun(task);
+    return this.get(input);
+  }
+
+  async prepareRetry(input: {
+    notebookId: string;
+    sessionId: string;
+    taskId: string;
+  }): Promise<SessionRecognitionTask> {
+    const task = await this.requireTask(input);
+    if (task.status !== "failed" && task.status !== "cancelled") {
+      throw new SessionRecognitionError("task_not_retryable", 409, task.id);
+    }
+    await this.waitForRun(task.id, 1_000);
+    await this.assertTranscriptWritable(task);
+    const pending = await this.updateTask(task, {
+      status: "pending",
+      error: undefined,
+      failureKind: undefined,
+      warnings: undefined,
+      executionId: undefined,
+      timing: { acceptedAt: this.now() }
+    });
+    try {
+      await this.writeTranscript(pending, initialDraft(pending.pageNumber));
+    } catch (error) {
+      await this.updateTask(pending, {
+        status: task.status,
+        error: task.error,
+        failureKind: task.failureKind,
+        warnings: task.warnings,
+        executionId: task.executionId,
+        timing: task.timing
+      });
+      throw error;
+    }
+    this.emit(pending, "status", pending.pageNumber
+      ? `PDF 第 ${pending.pageNumber} 页已重新排队。`
+      : "识别任务已重新排队。");
+    return publicTask(pending);
+  }
+
   async get(input: { notebookId: string; sessionId: string; taskId: string }): Promise<SessionRecognitionTask> {
     const task = await this.requireTask(input);
     return publicTask(await this.recoverOrphan(task));
@@ -223,29 +413,18 @@ export class SessionRecognitionService {
     await this.writeTranscript(
       cancelled,
       task.previousTranscriptMarkdown ?? cancelledDraft(cancelled.providerName)
-    );
+    ).catch((error) => {
+      if (!(error instanceof SessionRecognitionError) || error.code !== "block_locked") throw error;
+    });
     this.emit(cancelled, "status", "识别已中断。");
     await this.waitForRun(task.id, 500);
     return publicTask(cancelled);
   }
 
   async retry(input: { notebookId: string; sessionId: string; taskId: string }): Promise<SessionRecognitionTask> {
-    const task = await this.requireTask(input);
-    if (task.status !== "failed" && task.status !== "cancelled") {
-      throw new SessionRecognitionError("task_not_retryable", 409, task.id);
-    }
-    await this.waitForRun(task.id, 1_000);
-    const pending = await this.updateTask(task, {
-      status: "pending",
-      error: undefined,
-      failureKind: undefined,
-      warnings: undefined,
-      executionId: undefined
-    });
-    await this.writeTranscript(pending, initialDraft());
-    this.emit(pending, "status", "识别任务已重新排队。");
-    this.scheduleRun(pending);
-    return publicTask(pending);
+    const pending = await this.prepareRetry(input);
+    this.scheduleRun(await this.requireTask(input));
+    return pending;
   }
 
   async rerun(input: {
@@ -269,9 +448,7 @@ export class SessionRecognitionService {
       if (!transcriptBlock || transcriptBlock.type !== "markdown" || transcriptBlock.source !== "ai_transcription") {
         throw new SessionRecognitionError("block_not_found", 404, task.id);
       }
-      if (context.session.locks.some(
-        (lock) => lock.kind === "block" && lock.blockId === transcriptBlock.id
-      )) {
+      if (isBlockProtected(context.session, transcriptBlock.id)) {
         throw new SessionRecognitionError("block_locked", 423, task.id);
       }
       const transcriptPath = resolve(context.sessionDir, transcriptBlock.path);
@@ -310,6 +487,12 @@ export class SessionRecognitionService {
   }
 
   private scheduleRun(task: StoredTask): void {
+    void this.trackRun(task).catch(() => undefined);
+  }
+
+  private trackRun(task: StoredTask): Promise<void> {
+    const existing = this.activeRuns.get(task.id);
+    if (existing) return existing;
     const running = this.run(task);
     this.activeRuns.set(task.id, running);
     void running.then(
@@ -319,6 +502,7 @@ export class SessionRecognitionService {
         this.emit(task, "stderr", error instanceof Error ? error.message : "识别任务异常退出。");
       }
     );
+    return running;
   }
 
   private async waitForRun(taskId: string, timeoutMs: number): Promise<void> {
@@ -347,6 +531,7 @@ export class SessionRecognitionService {
     let pendingDraft: string | undefined;
     let draftTimer: ReturnType<typeof setTimeout> | undefined;
     let firstOutputAt: string | undefined;
+    let draftWriteError: unknown;
     const persistPendingDraft = () => {
       if (draftTimer) {
         clearTimeout(draftTimer);
@@ -364,7 +549,10 @@ export class SessionRecognitionService {
       if (draftTimer) return;
       draftTimer = setTimeout(() => {
         draftTimer = undefined;
-        void persistPendingDraft();
+        void persistPendingDraft().catch((error) => {
+          draftWriteError ??= error;
+          controller.abort(error);
+        });
       }, 80);
     };
     try {
@@ -423,6 +611,7 @@ export class SessionRecognitionService {
         : await provider.transcribe(input);
       if (anomaly) throw new Error("Recognition output anomaly");
       await persistPendingDraft();
+      if (draftWriteError) throw draftWriteError;
       await this.writeTranscript(task, result.markdown);
       const completedAt = this.now();
       const succeeded = await this.transitionTask(task, ["running"], {
@@ -445,19 +634,25 @@ export class SessionRecognitionService {
       });
       if (current.executionId !== task.executionId) return;
       if (current.status === "cancelled") return;
+      const effectiveError = draftWriteError ?? error;
       const cancelled = controller.signal.aborted && !anomaly;
-      const providerUnavailable = error instanceof SessionRecognitionError && error.code === "provider_unavailable";
+      const providerUnavailable = effectiveError instanceof SessionRecognitionError && effectiveError.code === "provider_unavailable";
+      const blockLocked = effectiveError instanceof SessionRecognitionError && effectiveError.code === "block_locked";
       const message = anomaly?.detail
-        ?? (providerUnavailable ? "识别服务尚未配置或未能恢复，请在设置中保存并测试识别服务。" : error instanceof Error ? error.message : "识别失败");
-      const status: SessionRecognitionStatus = cancelled ? "cancelled" : "failed";
+        ?? (providerUnavailable
+          ? "识别服务尚未配置或未能恢复，请在设置中保存并测试识别服务。"
+          : blockLocked ? "内容已锁定，识别没有继续写入。" : effectiveError instanceof Error ? effectiveError.message : "识别失败");
+      const status: SessionRecognitionStatus = cancelled && !blockLocked ? "cancelled" : "failed";
       const completedAt = this.now();
       const restoredMarkdown = current.previousTranscriptMarkdown;
-      await this.writeTranscript(current, restoredMarkdown ?? (anomaly
-        ? anomalyDraft(anomaly.safeText, current.providerName, message)
-        : cancelled ? cancelledDraft(current.providerName) : failureDraft(current.providerName, message)));
+      if (!blockLocked) {
+        await this.writeTranscript(current, restoredMarkdown ?? (anomaly
+          ? anomalyDraft(anomaly.safeText, current.providerName, message)
+          : cancelled ? cancelledDraft(current.providerName) : failureDraft(current.providerName, message)));
+      }
       task = await this.updateTask(current, {
         status,
-        error: cancelled ? "用户已中断识别。" : message,
+        error: cancelled && !blockLocked ? "用户已中断识别。" : message,
         failureKind: anomaly ? "output_anomaly" : providerUnavailable ? "provider_unavailable" : undefined,
         previousTranscriptMarkdown: undefined,
         timing: completedTiming(current, completedAt, firstOutputAt)
@@ -486,13 +681,21 @@ export class SessionRecognitionService {
 
   private async recoverOrphan(task: StoredTask): Promise<StoredTask> {
     if (task.status !== "running" || this.abortControllers.has(task.id)) return task;
+    let restoredPrevious = false;
     if (task.previousTranscriptMarkdown !== undefined) {
-      await this.writeTranscript(task, task.previousTranscriptMarkdown);
+      try {
+        await this.writeTranscript(task, task.previousTranscriptMarkdown);
+        restoredPrevious = true;
+      } catch (error) {
+        if (!(error instanceof SessionRecognitionError) || error.code !== "block_locked") throw error;
+      }
     }
     return this.updateTask(task, {
       status: "failed",
       error: task.previousTranscriptMarkdown !== undefined
-        ? "上次重新识别被中断，已恢复原转写。"
+        ? restoredPrevious
+          ? "上次重新识别被中断，已恢复原转写。"
+          : "上次重新识别被中断；内容已锁定，未改动当前笔记。"
         : "上次识别运行被中断，请重试。",
       previousTranscriptMarkdown: undefined
     });
@@ -540,6 +743,17 @@ export class SessionRecognitionService {
     });
   }
 
+  private async assertTranscriptWritable(task: StoredTask): Promise<void> {
+    const context = await readSessionContext(this.rootDir, task.notebookId, task.sessionId);
+    const block = context.session.blocks.find((candidate) => candidate.id === task.transcriptBlockId);
+    if (!block || block.type !== "markdown" || block.source !== "ai_transcription") {
+      throw new SessionRecognitionError("block_not_found", 404, task.id);
+    }
+    if (isBlockProtected(context.session, block.id)) {
+      throw new SessionRecognitionError("block_locked", 423, task.id);
+    }
+  }
+
   private transitionPendingTask(task: StoredTask, changes: Partial<StoredTask>): Promise<StoredTask | undefined> {
     return this.transitionTask(task, ["pending"], changes);
   }
@@ -566,6 +780,9 @@ export class SessionRecognitionService {
       const block = context.session.blocks.find((candidate) => candidate.id === task.transcriptBlockId);
       if (!block || block.type !== "markdown" || block.source !== "ai_transcription") {
         throw new SessionRecognitionError("block_not_found", 404, task.id);
+      }
+      if (isBlockProtected(context.session, block.id)) {
+        throw new SessionRecognitionError("block_locked", 423, task.id);
       }
       const timestamp = this.now();
       const blockPath = resolve(context.sessionDir, block.path);
@@ -619,6 +836,10 @@ function publicTask(task: StoredTask): SessionRecognitionTask {
     providerName: task.providerName,
     error: task.error,
     failureKind: task.failureKind,
+    batchId: task.batchId,
+    pageNumber: task.pageNumber,
+    pageCount: task.pageCount,
+    batchConcurrency: task.batchConcurrency,
     warnings: task.warnings,
     timing: task.timing,
     createdAt: task.createdAt,
@@ -670,19 +891,28 @@ async function readSessionContext(rootDir: string, notebookId: string, sessionId
 }
 
 function nextBlockId(session: SessionRecord): string {
-  const max = session.blocks.reduce((current, block) => {
+  return String(maxNumericBlockId(session) + 1).padStart(4, "0");
+}
+
+function isBlockProtected(session: SessionRecord, blockId: string): boolean {
+  return session.blocks.some((block) => block.id === blockId && block.status === "locked") ||
+    session.locks.some((lock) => lock.blockId === blockId && lock.aiEditable === false);
+}
+
+function maxNumericBlockId(session: SessionRecord): number {
+  return session.blocks.reduce((current, block) => {
     const value = Number.parseInt(block.id, 10);
     return Number.isFinite(value) ? Math.max(current, value) : current;
   }, 0);
-  return String(max + 1).padStart(4, "0");
 }
 
-function assertInside(root: string, target: string): void {
+function assertInside(root: string, target: string): string {
   const normalizedRoot = resolve(root);
   const normalizedTarget = resolve(target);
   if (normalizedTarget !== normalizedRoot && !normalizedTarget.startsWith(`${normalizedRoot}${sep}`)) {
     throw new SessionRecognitionError("path_outside_session", 400);
   }
+  return normalizedTarget;
 }
 
 async function readTasks(sessionDir: string): Promise<StoredTask[]> {
@@ -700,6 +930,10 @@ async function upsertTask(sessionDir: string, task: StoredTask): Promise<void> {
   const index = tasks.findIndex((candidate) => candidate.id === task.id);
   if (index >= 0) tasks[index] = task;
   else tasks.push(task);
+  await writeTasks(sessionDir, tasks);
+}
+
+async function writeTasks(sessionDir: string, tasks: readonly StoredTask[]): Promise<void> {
   await writeAtomically(taskLogPath(sessionDir), `${JSON.stringify(tasks, null, 2)}\n`);
 }
 
@@ -733,8 +967,27 @@ async function renameWithTransientRetry(source: string, target: string): Promise
   }
 }
 
-function initialDraft(): string {
-  return "#### 正在识别\n\n识别服务正在准备。";
+function initialDraft(pageNumber?: number): string {
+  return pageNumber
+    ? `#### PDF 第 ${pageNumber} 页正在识别\n\n识别服务正在准备。`
+    : "#### 正在识别\n\n识别服务正在准备。";
+}
+
+function normalizeRelativePath(value: string): string {
+  return value.replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+function isSafeBatchId(value: string): boolean {
+  return /^pdf_[a-zA-Z0-9_-]{1,120}$/.test(value);
+}
+
+async function readOptionalText(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 function cancelledDraft(provider?: string): string {

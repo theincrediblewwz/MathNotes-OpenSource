@@ -4,6 +4,14 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
+@Entity(tableName = "standalone_notebooks")
+data class StandaloneNotebookEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
 @Entity(tableName = "standalone_sessions")
 data class StandaloneSessionEntity(
     @PrimaryKey val id: String,
@@ -54,6 +62,7 @@ object StandaloneBlockKind {
 }
 
 object StandaloneTaskStatus {
+    const val NEEDS_CONFIGURATION = "needs_configuration"
     const val AWAITING_CONFIRMATION = "awaiting_confirmation"
     const val CLAIMED = "claimed"
     const val SUCCEEDED = "succeeded"

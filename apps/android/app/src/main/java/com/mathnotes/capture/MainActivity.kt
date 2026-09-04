@@ -14,6 +14,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -35,6 +38,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,17 +51,22 @@ import androidx.compose.runtime.setValue
 import android.os.Build
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.FileProvider
 import com.mathnotes.capture.notification.rememberNotificationPermissionController
 import com.mathnotes.capture.imageedit.ImageEditDraft
 import com.mathnotes.capture.imageedit.ImageEditScreen
-import com.mathnotes.capture.companion.CompanionNotesScreen
+import com.mathnotes.capture.notes.UnifiedNotesScreen
 import com.mathnotes.capture.pairing.PairingConfig
 import com.mathnotes.capture.pairing.PairingParseResult
 import com.mathnotes.capture.pairing.PairingSettingsScreen
@@ -83,7 +93,12 @@ import com.mathnotes.capture.ui.systemBarAppearanceFor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.mathnotes.capture.storage.CaptureSource
-import com.mathnotes.capture.standalone.StandaloneScreen
+import com.mathnotes.capture.standalone.StandaloneViewModel
+import com.mathnotes.capture.standalone.StandaloneBlockKind
+import com.mathnotes.capture.standalone.StandaloneNotebookEntity
+import com.mathnotes.capture.standalone.StandaloneProviderCatalog
+import com.mathnotes.capture.standalone.StandaloneSessionEntity
+import com.mathnotes.capture.standalone.StandaloneTaskStatus
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -134,9 +149,8 @@ private enum class AppSection(
     val label: String,
     @DrawableRes val icon: Int
 ) {
-    STANDALONE("standalone", "独立", R.drawable.ic_mathnotes_notes),
     NOTES("notes", "笔记", R.drawable.ic_mathnotes_notes),
-    CAPTURE("capture", "拍照", R.drawable.ic_mathnotes_camera),
+    CAPTURE("capture", "拍摄", R.drawable.ic_mathnotes_camera),
     QUEUE("queue", "队列", R.drawable.ic_mathnotes_queue),
     SETTINGS("settings", "设置", R.drawable.ic_mathnotes_settings)
 }
@@ -165,10 +179,46 @@ fun MathNotesCaptureApp(
 ) {
     val context = LocalContext.current
     val pairingStore = remember(context) { PairingStore(context.applicationContext) }
+    val routingPreferences = remember(context) { CaptureRoutingPreferences(context.applicationContext) }
     val captureViewModel: CaptureViewModel = viewModel()
+    val standaloneViewModel: StandaloneViewModel = viewModel()
     val captures by captureViewModel.captures.collectAsStateWithLifecycle()
-    var section by remember { mutableStateOf(AppSection.CAPTURE) }
+    val standaloneProviderProfile by standaloneViewModel.providerProfile.collectAsStateWithLifecycle()
+    val standaloneState by standaloneViewModel.state.collectAsStateWithLifecycle()
+    val recentGalleryItems = remember(captures, standaloneState.allBlocks, standaloneState.allTasks) {
+        val uploadItems = captures.filter {
+            it.materialType == com.mathnotes.capture.storage.MaterialType.IMAGE &&
+                it.localCopyAvailable && File(it.localPath).isFile
+        }.map { capture ->
+            CaptureGalleryItem(
+                id = "upload:${capture.captureId}",
+                path = capture.localPath,
+                label = capture.sourceName.ifBlank { "最近拍摄" },
+                canDelete = capture.state == CaptureState.UPLOADED,
+                createdAt = capture.createdAt
+            )
+        }
+        val localItems = standaloneState.allBlocks.filter {
+            it.kind == StandaloneBlockKind.IMAGE && File(it.localPath).isFile
+        }
+            .map { block ->
+                val tasks = standaloneState.allTasks.filter { it.assetBlockId == block.id }
+                CaptureGalleryItem(
+                    id = "local:${block.id}",
+                    path = block.localPath,
+                    label = "本机拍摄",
+                    canDelete = tasks.none { it.status == StandaloneTaskStatus.CLAIMED },
+                    createdAt = block.createdAt
+                )
+            }
+        (uploadItems + localItems).sortedByDescending(CaptureGalleryItem::createdAt).take(80)
+    }
+    var section by remember { mutableStateOf(AppSection.NOTES) }
+    var openLocalNotesRequest by remember { mutableStateOf(0) }
+    var selectingLocalCaptureTarget by rememberSaveable { mutableStateOf(false) }
     var pairedConfig by remember { mutableStateOf(pairingStore.load()) }
+    var windowsConnectionVerified by remember { mutableStateOf(false) }
+    var preferWindowsRecognition by remember { mutableStateOf(routingPreferences.preferWindows()) }
     var pairingProfiles by remember { mutableStateOf(pairingStore.list()) }
     var scannerOpen by remember { mutableStateOf(false) }
     var pendingPairing by remember { mutableStateOf<PairingConfig?>(null) }
@@ -181,21 +231,33 @@ fun MathNotesCaptureApp(
     var imageEditMessage by remember { mutableStateOf<String?>(null) }
     var pendingSystemCameraFile by remember { mutableStateOf<File?>(null) }
     var pendingSystemCameraEdit by remember { mutableStateOf(false) }
+    var pendingSystemCameraDestination by remember { mutableStateOf<CaptureRecognitionDestination?>(null) }
+    var pendingSystemCameraLocalSessionId by remember { mutableStateOf<String?>(null) }
+    var imageEditDestination by remember { mutableStateOf(CaptureRecognitionDestination.ANDROID_LOCAL_DRAFT) }
+    var imageEditLocalSessionId by remember { mutableStateOf<String?>(null) }
     var editAfterCapture by rememberSaveable { mutableStateOf(false) }
     var systemCameraSessionActive by rememberSaveable { mutableStateOf(false) }
     var launchNextSystemCamera by remember { mutableStateOf(false) }
-    var previewGalleryPaths by remember { mutableStateOf<List<String>?>(null) }
-    LaunchedEffect(previewGalleryPaths) {
-        onMediaPreviewChange(previewGalleryPaths != null)
+    var previewGalleryOpen by remember { mutableStateOf(false) }
+    var queueFocusCaptureId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(previewGalleryOpen) {
+        onMediaPreviewChange(previewGalleryOpen)
     }
     val notificationPermission = rememberNotificationPermissionController()
+    val captureDestination = resolveCaptureRecognitionDestination(
+        preferWindows = preferWindowsRecognition,
+        windowsConnectionVerified = windowsConnectionVerified,
+        hasWindowsTarget = pairedConfig?.hasTarget == true
+    )
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        val pairing = pairedConfig
-        if (uri == null || pairing?.hasTarget != true) return@rememberLauncherForActivityResult
+        if (uri == null) return@rememberLauncherForActivityResult
+        val destination = captureDestination
         captureMessage = "正在保存所选图片…"
         captureViewModel.stageImage(uri) { result ->
             captureMessage = result.fold(
                 onSuccess = {
+                    imageEditDestination = destination
+                    imageEditLocalSessionId = standaloneState.activeSession?.id
                     imageEditDraft = it
                     imageEditMessage = null
                     null
@@ -207,16 +269,22 @@ fun MathNotesCaptureApp(
     val systemCameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
         val file = pendingSystemCameraFile
         val shouldEdit = pendingSystemCameraEdit
+        val destination = pendingSystemCameraDestination ?: CaptureRecognitionDestination.ANDROID_LOCAL_DRAFT
+        val localSessionId = pendingSystemCameraLocalSessionId
         pendingSystemCameraFile = null
+        pendingSystemCameraDestination = null
+        pendingSystemCameraLocalSessionId = null
         when (systemCameraReturnAction(saved, file != null, shouldEdit)) {
             SystemCameraReturnAction.STOP -> {
                 file?.delete()
                 systemCameraSessionActive = false
                 launchNextSystemCamera = false
-                if (!saved) captureMessage = "拍摄已结束"
+                if (!saved) captureMessage = "已返回 MathNotes，可以继续使用下方快门拍摄"
             }
             SystemCameraReturnAction.EDIT -> {
                 val capturedFile = requireNotNull(file)
+                imageEditDestination = destination
+                imageEditLocalSessionId = localSessionId
                 imageEditMessage = "正在打开图片编辑…"
                 captureViewModel.stageCapturedFile(capturedFile) { result ->
                     result.fold(
@@ -236,20 +304,27 @@ fun MathNotesCaptureApp(
             SystemCameraReturnAction.ENQUEUE -> {
                 val capturedFile = requireNotNull(file)
                 val pairing = pairedConfig
-                if (pairing?.hasTarget != true) {
-                    capturedFile.delete()
-                    systemCameraSessionActive = false
-                    launchNextSystemCamera = false
-                    captureMessage = "当前没有可用的目标笔记"
-                    return@rememberLauncherForActivityResult
-                }
-                captureMessage = "正在把系统相机照片加入队列…"
-                captureViewModel.commit(capturedFile, pairing) { result ->
-                    captureMessage = result.fold(
-                        onSuccess = { "照片已加入队列，继续拍摄" },
-                        onFailure = { "无法生成素材：${it.message ?: "请重试"}" }
-                    )
-                    launchNextSystemCamera = systemCameraSessionActive
+                if (destination == CaptureRecognitionDestination.WINDOWS_SESSION && pairing?.hasTarget == true) {
+                    captureMessage = "正在把系统相机照片加入 Windows 队列…"
+                    captureViewModel.commit(capturedFile, pairing) { result ->
+                        captureMessage = result.fold(
+                            onSuccess = { "照片已加入 Windows 队列，继续拍摄" },
+                            onFailure = { "无法生成素材：${it.message ?: "请重试"}" }
+                        )
+                        launchNextSystemCamera = systemCameraSessionActive
+                    }
+                } else {
+                    captureMessage = "正在保存到本机识别队列…"
+                    standaloneViewModel.importCapturedFile(capturedFile, localSessionId) { result ->
+                        captureMessage = result.fold(
+                            onSuccess = {
+                                if (standaloneProviderProfile?.enabled == true) "照片已加入本机队列并开始识别"
+                                else "照片已保存在本机；请先到设置中配置识别模型"
+                            },
+                            onFailure = { "无法保存本机照片：${it.message ?: "请重试"}" }
+                        )
+                        launchNextSystemCamera = systemCameraSessionActive
+                    }
                 }
             }
         }
@@ -272,6 +347,7 @@ fun MathNotesCaptureApp(
 
     LaunchedEffect(pendingPairing) {
         val config = pendingPairing ?: return@LaunchedEffect
+        windowsConnectionVerified = false
         checking = true
         val result = withContext(Dispatchers.IO) {
             PairingVerifier(deviceLabel = listOf(Build.MANUFACTURER, Build.MODEL).filter(String::isNotBlank).joinToString(" "))
@@ -284,6 +360,7 @@ fun MathNotesCaptureApp(
                 pairedConfig = pairingStore.load()
                 pairingProfiles = pairingStore.list()
                 availableTargets = result.targets
+                windowsConnectionVerified = true
                 pairedConfig?.let(captureViewModel::resumeBlockedAfterPairing)
             } else {
                 statusMessage = "配对已验证，但未能保存到本机，请重试"
@@ -329,6 +406,8 @@ fun MathNotesCaptureApp(
     fun launchSystemCamera() {
         val file = captureViewModel.createOutputFile()
         pendingSystemCameraEdit = editAfterCapture
+        pendingSystemCameraDestination = captureDestination
+        pendingSystemCameraLocalSessionId = standaloneState.activeSession?.id
         pendingSystemCameraFile = file
         val uri = FileProvider.getUriForFile(
             context,
@@ -351,7 +430,7 @@ fun MathNotesCaptureApp(
     }
 
     val currentEditDraft = imageEditDraft
-    if (currentEditDraft != null && pairedConfig?.hasTarget == true) {
+    if (currentEditDraft != null) {
         ImageEditScreen(
             draft = currentEditDraft,
             saving = imageEditSaving,
@@ -359,20 +438,56 @@ fun MathNotesCaptureApp(
             onApply = { appliedDraft, turns, perspective, crop, lasso, annotations ->
                 imageEditSaving = true
                 imageEditMessage = "正在生成白底 PNG…"
-                captureViewModel.commitImageDraft(appliedDraft, pairedConfig!!, turns, perspective, crop, lasso, annotations) { result ->
-                    imageEditSaving = false
-                    result.fold(
-                        onSuccess = {
-                            captureViewModel.discardImageDraft(appliedDraft)
-                            imageEditDraft = null
-                            imageEditMessage = null
-                            captureMessage = "图片已加入上传队列"
-                            launchNextSystemCamera = systemCameraSessionActive
-                        },
-                        onFailure = {
-                            imageEditMessage = "无法生成素材：${it.message ?: "请重试"}"
-                        }
-                    )
+                val pairing = pairedConfig
+                if (imageEditDestination == CaptureRecognitionDestination.WINDOWS_SESSION && pairing?.hasTarget == true) {
+                    captureViewModel.commitImageDraft(appliedDraft, pairing, turns, perspective, crop, lasso, annotations) { result ->
+                        imageEditSaving = false
+                        result.fold(
+                            onSuccess = {
+                                captureViewModel.discardImageDraft(appliedDraft)
+                                imageEditDraft = null
+                                imageEditLocalSessionId = null
+                                imageEditMessage = null
+                                captureMessage = "图片已加入 Windows 上传队列"
+                                launchNextSystemCamera = systemCameraSessionActive
+                            },
+                            onFailure = {
+                                imageEditMessage = "无法生成素材：${it.message ?: "请重试"}"
+                            }
+                        )
+                    }
+                } else {
+                    captureViewModel.renderImageDraft(appliedDraft, turns, perspective, crop, lasso, annotations) { renderResult ->
+                        renderResult.fold(
+                            onSuccess = { rendered ->
+                                standaloneViewModel.importCapturedFile(rendered, imageEditLocalSessionId) { importResult ->
+                                    imageEditSaving = false
+                                    importResult.fold(
+                                        onSuccess = {
+                                            captureViewModel.discardImageDraft(appliedDraft)
+                                            imageEditDraft = null
+                                            imageEditLocalSessionId = null
+                                            imageEditMessage = null
+                                            captureMessage = if (standaloneProviderProfile?.enabled == true) {
+                                                "图片已加入本机队列并开始识别"
+                                            } else {
+                                                "图片已保存在本机；请先到设置中配置识别模型"
+                                            }
+                                            launchNextSystemCamera = systemCameraSessionActive
+                                        },
+                                        onFailure = {
+                                            rendered.delete()
+                                            imageEditMessage = "无法保存本机素材：${it.message ?: "请重试"}"
+                                        }
+                                    )
+                                }
+                            },
+                            onFailure = {
+                                imageEditSaving = false
+                                imageEditMessage = "无法生成素材：${it.message ?: "请重试"}"
+                            }
+                        )
+                    }
                 }
             },
             onWorkingDraftChange = { imageEditDraft = it },
@@ -380,6 +495,8 @@ fun MathNotesCaptureApp(
                 captureViewModel.discardImageDraft(currentEditDraft)
                 imageEditDraft = null
                 imageEditMessage = null
+                imageEditDestination = CaptureRecognitionDestination.ANDROID_LOCAL_DRAFT
+                imageEditLocalSessionId = null
                 launchNextSystemCamera = systemCameraSessionActive
             }
         )
@@ -393,14 +510,27 @@ fun MathNotesCaptureApp(
     ) {
         Box(Modifier.fillMaxSize().statusBarsPadding()) {
             when (section) {
-            AppSection.STANDALONE -> StandaloneScreen()
-            AppSection.NOTES -> CompanionNotesScreen(
+            AppSection.NOTES -> UnifiedNotesScreen(
+                standaloneViewModel = standaloneViewModel,
                 pairing = pairedConfig,
                 targets = availableTargets,
                 themeId = themeId,
+                openLocalRequest = openLocalNotesRequest,
+                selectCaptureTarget = selectingLocalCaptureTarget,
+                onCaptureTargetSelected = { session ->
+                    standaloneViewModel.selectSession(session.id)
+                    selectingLocalCaptureTarget = false
+                    captureMessage = "已选择拍摄目标：${session.title}"
+                    section = AppSection.CAPTURE
+                },
+                onCancelCaptureTargetSelection = {
+                    selectingLocalCaptureTarget = false
+                    section = AppSection.CAPTURE
+                },
                 endpointCandidates = pairedConfig?.let(pairingStore::endpointCandidates).orEmpty(),
                 onPairingVerified = { verified, targets ->
                     if (pairingStore.save(verified)) {
+                        windowsConnectionVerified = true
                         pairedConfig = pairingStore.load()
                         pairingProfiles = pairingStore.list()
                         availableTargets = targets
@@ -411,7 +541,11 @@ fun MathNotesCaptureApp(
             AppSection.CAPTURE -> CaptureScreen(
                 pairedConfig,
                 availableTargets,
-                captures.count { isActiveQueueState(it.state) },
+                captures.count { isActiveQueueState(it.state) } + standaloneState.allTasks.count {
+                    it.status == StandaloneTaskStatus.NEEDS_CONFIGURATION ||
+                        it.status == StandaloneTaskStatus.AWAITING_CONFIRMATION ||
+                        it.status == StandaloneTaskStatus.CLAIMED
+                },
                 onSelectTarget = { target ->
                     pairedConfig?.withTarget(target)?.let { updated ->
                         if (pairingStore.save(updated)) {
@@ -422,14 +556,83 @@ fun MathNotesCaptureApp(
                 },
                 editAfterCapture = editAfterCapture,
                 onEditAfterCaptureChange = { editAfterCapture = it },
+                preferWindowsRecognition = preferWindowsRecognition,
+                windowsConnectionVerified = windowsConnectionVerified,
+                onPreferWindowsRecognitionChange = { next ->
+                    if (routingPreferences.setPreferWindows(next)) preferWindowsRecognition = next
+                },
+                localNotebooks = standaloneState.notebooks,
+                localSessions = standaloneState.sessions,
+                activeLocalSessionId = standaloneState.activeSession?.id,
+                onSelectLocalSession = standaloneViewModel::selectSession,
+                onOpenLocalNotebooks = {
+                    selectingLocalCaptureTarget = true
+                    openLocalNotesRequest += 1
+                    section = AppSection.NOTES
+                },
+                onScanComputer = { scannerOpen = true },
                 onOpenSystemCamera = {
                     systemCameraSessionActive = true
                     launchNextSystemCamera = true
+                    captureMessage = "已切换到系统相机；退出系统相机即可返回 MathNotes"
                 },
-                recentCapturePaths = captures.filter {
-                    it.materialType == com.mathnotes.capture.storage.MaterialType.IMAGE && it.localCopyAvailable
-                }.map(CaptureEntity::localPath).take(40),
-                onOpenRecentGallery = { paths -> previewGalleryPaths = paths },
+                onOpenQueue = {
+                    val upload = captures.firstOrNull { isActiveQueueState(it.state) }
+                    if (upload != null) {
+                        queueFocusCaptureId = upload.captureId
+                        section = AppSection.QUEUE
+                    } else {
+                        section = AppSection.QUEUE
+                    }
+                },
+                createOutputFile = captureViewModel::createOutputFile,
+                onPhotoSaved = { capturedFile ->
+                    val destination = captureDestination
+                    val localSessionId = standaloneState.activeSession?.id
+                    if (editAfterCapture) {
+                        imageEditDestination = destination
+                        imageEditLocalSessionId = localSessionId
+                        imageEditMessage = "正在打开图片编辑…"
+                        captureViewModel.stageCapturedFile(capturedFile) { result ->
+                            result.fold(
+                                onSuccess = {
+                                    imageEditDraft = it
+                                    imageEditMessage = null
+                                },
+                                onFailure = {
+                                    capturedFile.delete()
+                                    imageEditMessage = null
+                                    captureMessage = "无法打开照片：${it.message ?: "请重试"}"
+                                }
+                            )
+                        }
+                    } else if (destination == CaptureRecognitionDestination.WINDOWS_SESSION && pairedConfig?.hasTarget == true) {
+                        captureMessage = "正在加入 Windows 队列…"
+                        captureViewModel.commit(capturedFile, pairedConfig!!) { result ->
+                            captureMessage = result.fold(
+                                onSuccess = { "照片已加入 Windows 队列" },
+                                onFailure = { "无法生成素材：${it.message ?: "请重试"}" }
+                            )
+                        }
+                    } else {
+                        captureMessage = "正在保存到本机识别队列…"
+                        standaloneViewModel.importCapturedFile(capturedFile, localSessionId) { result ->
+                            captureMessage = result.fold(
+                                onSuccess = {
+                                    if (standaloneProviderProfile?.enabled == true) "照片已加入本机队列并开始识别"
+                                    else "照片已保存在本机；请先到设置中配置识别模型"
+                                },
+                                onFailure = { "无法保存本机照片：${it.message ?: "请重试"}" }
+                            )
+                        }
+                    }
+                },
+                onCaptureError = { captureMessage = it },
+                localProviderLabel = standaloneProviderProfile?.providerId
+                    ?.let(StandaloneProviderCatalog::displayLabel)
+                    ?: "DeepSeek",
+                recentCaptures = recentGalleryItems,
+                onOpenRecentGallery = { previewGalleryOpen = true },
                 onPickImage = {
                     galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 },
@@ -437,12 +640,58 @@ fun MathNotesCaptureApp(
                 statusMessage = captureMessage
             )
             AppSection.QUEUE -> QueueScreen(
-                captures,
-                captureViewModel::deleteAcknowledged,
-                captureViewModel::retry,
-                captureViewModel::cancel,
-                captureViewModel::clearRecentUploaded,
-                captureViewModel::clearUploadedHistory
+                captures = captures,
+                onDelete = captureViewModel::deleteAcknowledged,
+                onRetry = captureViewModel::retry,
+                onCancel = captureViewModel::cancel,
+                onClearRecentUploaded = captureViewModel::clearRecentUploaded,
+                onClearUploadedHistory = captureViewModel::clearUploadedHistory,
+                onDeleteHistory = { capture ->
+                    captureViewModel.deleteUploadedHistory(capture) { result ->
+                        captureMessage = result.fold(
+                            onSuccess = { "已删除上传历史" },
+                            onFailure = { "删除失败：${it.message ?: "请重试"}" }
+                        )
+                    }
+                },
+                focusCaptureId = queueFocusCaptureId,
+                onFocusConsumed = { queueFocusCaptureId = null },
+                onDeleteTask = { capture ->
+                    captureViewModel.deleteQueueTask(capture) { result ->
+                        captureMessage = result.fold(
+                            onSuccess = { "已删除队列任务" },
+                            onFailure = { "删除失败：${it.message ?: "请重试"}" }
+                        )
+                    }
+                },
+                localTasks = standaloneState.allTasks,
+                localBlocks = standaloneState.allBlocks,
+                localSessions = standaloneState.sessions,
+                localNotebooks = standaloneState.notebooks,
+                onDeleteLocalTask = { task ->
+                    standaloneViewModel.deleteTask(task) { result ->
+                        captureMessage = result.fold(
+                            onSuccess = { "已删除本机识别任务" },
+                            onFailure = { "删除失败：${it.message ?: "请重试"}" }
+                        )
+                    }
+                },
+                connectionLabel = if (preferWindowsRecognition && windowsConnectionVerified && pairedConfig?.hasTarget == true) {
+                    "已连接 · ${pairedConfig?.computerLabel.orEmpty().ifBlank { "Windows" }}"
+                } else {
+                    "本机识别"
+                },
+                captureTargetLabel = if (preferWindowsRecognition && windowsConnectionVerified && pairedConfig?.hasTarget == true) {
+                    pairedConfig?.targetTitle.orEmpty().ifBlank { "Windows Session" }
+                } else {
+                    listOfNotNull(
+                        standaloneState.activeSession?.notebookId?.let { notebookId ->
+                            standaloneState.notebooks.firstOrNull { it.id == notebookId }?.title
+                        },
+                        standaloneState.activeSession?.title
+                    ).joinToString(" · ").ifBlank { "本机笔记" }
+                },
+                onContinueCapture = { section = AppSection.CAPTURE }
             )
             AppSection.SETTINGS -> PairingSettingsScreen(
                 pairedConfig = pairedConfig,
@@ -454,6 +703,7 @@ fun MathNotesCaptureApp(
                 onCheck = { pairedConfig?.let { pendingPairing = it } },
                 onActivate = { profileId ->
                     if (pairingStore.activate(profileId)) {
+                        windowsConnectionVerified = false
                         pairedConfig = pairingStore.load()
                         pairingProfiles = pairingStore.list()
                         availableTargets = emptyList()
@@ -462,6 +712,7 @@ fun MathNotesCaptureApp(
                 },
                 onRemove = { profileId ->
                     if (pairingStore.remove(profileId)) {
+                        windowsConnectionVerified = false
                         pairedConfig = pairingStore.load()
                         pairingProfiles = pairingStore.list()
                         availableTargets = emptyList()
@@ -473,22 +724,52 @@ fun MathNotesCaptureApp(
                 notificationPermission = notificationPermission.state,
                 onNotificationAction = notificationPermission.performAction,
                 themeId = themeId,
-                onThemeChange = onThemeChange
+                onThemeChange = onThemeChange,
+                providerProfile = standaloneProviderProfile,
+                onSaveProvider = standaloneViewModel::saveProviderProfile
             )
         }
 
             MathNotesFloatingNavigation(
                 items = AppSection.entries.map { MathNotesNavItem(it.key, it.label, it.icon) },
                 selectedKey = section.key,
-                onSelect = { key -> section = AppSection.entries.first { it.key == key } },
+                onSelect = { key ->
+                    val next = AppSection.entries.first { it.key == key }
+                    if (next != AppSection.NOTES) selectingLocalCaptureTarget = false
+                    section = next
+                },
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
         }
 
-        previewGalleryPaths?.takeIf { it.isNotEmpty() }?.let { paths ->
+        if (previewGalleryOpen) {
             CapturePreviewGallery(
-                paths = paths,
-                onClose = { previewGalleryPaths = null }
+                items = recentGalleryItems,
+                onClose = { previewGalleryOpen = false },
+                onDelete = { item ->
+                    when {
+                        item.id.startsWith("upload:") -> captures.firstOrNull {
+                            it.captureId == item.id.removePrefix("upload:")
+                        }?.let { capture ->
+                            captureViewModel.deleteUploadedHistory(capture) { result ->
+                                captureMessage = result.fold(
+                                    onSuccess = { "照片已删除" },
+                                    onFailure = { "删除失败：${it.message ?: "请重试"}" }
+                                )
+                            }
+                        }
+                        item.id.startsWith("local:") -> standaloneState.allBlocks.firstOrNull {
+                            it.id == item.id.removePrefix("local:")
+                        }?.let { block ->
+                            standaloneViewModel.deleteImage(block) { result ->
+                                captureMessage = result.fold(
+                                    onSuccess = { "照片已删除" },
+                                    onFailure = { "删除失败：${it.message ?: "请重试"}" }
+                                )
+                            }
+                        }
+                    }
+                }
             )
         }
     }
@@ -502,216 +783,313 @@ private fun CaptureScreen(
     onSelectTarget: (PairingTarget) -> Unit,
     editAfterCapture: Boolean,
     onEditAfterCaptureChange: (Boolean) -> Unit,
+    preferWindowsRecognition: Boolean,
+    windowsConnectionVerified: Boolean,
+    onPreferWindowsRecognitionChange: (Boolean) -> Unit,
+    localNotebooks: List<StandaloneNotebookEntity>,
+    localSessions: List<StandaloneSessionEntity>,
+    activeLocalSessionId: String?,
+    onSelectLocalSession: (String) -> Unit,
+    onOpenLocalNotebooks: () -> Unit,
+    onScanComputer: () -> Unit,
     onOpenSystemCamera: () -> Unit,
-    recentCapturePaths: List<String>,
-    onOpenRecentGallery: (List<String>) -> Unit,
+    onOpenQueue: () -> Unit,
+    createOutputFile: () -> File,
+    onPhotoSaved: (File) -> Unit,
+    onCaptureError: (String) -> Unit,
+    localProviderLabel: String,
+    recentCaptures: List<CaptureGalleryItem>,
+    onOpenRecentGallery: () -> Unit,
     onPickImage: () -> Unit,
     onPickPdf: () -> Unit,
     statusMessage: String?
 ) {
     var targetMenuOpen by remember { mutableStateOf(false) }
     var targetNotebook by remember { mutableStateOf<String?>(null) }
+    var importMenuOpen by remember { mutableStateOf(false) }
+    val routesToWindows = preferWindowsRecognition && windowsConnectionVerified && pairedConfig?.hasTarget == true
+    val activeLocalSession = localSessions.firstOrNull { it.id == activeLocalSessionId } ?: localSessions.firstOrNull()
+    val activeLocalNotebook = activeLocalSession?.let { session -> localNotebooks.firstOrNull { it.id == session.notebookId } }
+    LaunchedEffect(routesToWindows) {
+        targetMenuOpen = false
+        targetNotebook = null
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(start = 22.dp, top = 28.dp, end = 22.dp, bottom = 112.dp)
+            .padding(start = 22.dp, top = 8.dp, end = 22.dp, bottom = 138.dp)
     ) {
-        MathNotesPageHeader(
-            eyebrow = "MathNotes",
-            title = "拍下这一页",
-            detail = "照片会先安全保存在手机，再送往当前电脑的 Session。"
-        )
-        Spacer(Modifier.height(24.dp))
-        if (pairedConfig != null && targets.isNotEmpty()) {
-            BoxWithConstraints {
-                MathNotesPaper(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            targetNotebook = null
-                            targetMenuOpen = true
-                        }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("拍下这一页", style = MaterialTheme.typography.headlineMedium, color = MathNotesColors.Ink, fontWeight = FontWeight.Bold)
+                Text("保持光线均匀，对齐页面边缘", style = MaterialTheme.typography.bodySmall, color = MathNotesColors.Muted)
+            }
+            val connectShape = RoundedCornerShape(15.dp)
+            Surface(
+                modifier = Modifier
+                    .width(94.dp)
+                    .height(42.dp)
+                    .clip(connectShape)
+                    .clickable(onClick = onScanComputer),
+                shape = connectShape,
+                color = MathNotesColors.AccentSoft
+            ) {
+                Row(
+                    Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text("照片送往", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Muted)
-                    Spacer(Modifier.height(5.dp))
-                    Text(
-                        pairedConfig.targetTitle.ifBlank { pairedConfig.sessionId },
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MathNotesColors.Ink
+                    androidx.compose.material3.Icon(
+                        painter = androidx.compose.ui.res.painterResource(R.drawable.ic_mathnotes_qr),
+                        contentDescription = "扫码连接电脑",
+                        tint = MathNotesColors.Accent,
+                        modifier = Modifier.size(18.dp)
                     )
-                    Text("点击切换 Session", style = MaterialTheme.typography.bodySmall, color = MathNotesColors.Accent)
+                    Text("连电脑", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Accent)
                 }
-                val menuShape = RoundedCornerShape(10.dp)
-                DropdownMenu(
-                    expanded = targetMenuOpen,
-                    onDismissRequest = { targetMenuOpen = false },
-                    modifier = Modifier
-                        .width(maxWidth)
-                        .background(MathNotesColors.Paper, menuShape)
-                        .border(BorderStroke(1.dp, MathNotesColors.Line), menuShape),
-                    shape = menuShape,
-                    containerColor = MathNotesColors.Paper,
-                    tonalElevation = 0.dp,
-                    shadowElevation = 8.dp
-                ) {
-                    if (targetNotebook == null) {
-                        targets.groupBy { it.notebookId }.forEach { (notebookId, notebookTargets) ->
-                            val notebookTitle = notebookTargets.firstOrNull()?.notebookTitle.orEmpty().ifBlank { notebookId }
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text("▸  $notebookTitle", style = MaterialTheme.typography.titleMedium, color = MathNotesColors.Ink)
-                                        Spacer(Modifier.height(3.dp))
-                                        Text("${notebookTargets.size} 个 Session", style = MaterialTheme.typography.bodySmall, color = MathNotesColors.Muted)
-                                    }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            InlineCaptureCamera(
+                createOutputFile = createOutputFile,
+                onPhotoSaved = onPhotoSaved,
+                onError = onCaptureError,
+                recentPath = recentCaptures.firstOrNull()?.path,
+                onOpenRecent = onOpenRecentGallery,
+                onOpenImport = { importMenuOpen = true },
+                modifier = Modifier.fillMaxSize(),
+                overlayContent = {
+                    val targetShape = RoundedCornerShape(18.dp)
+                    val recognitionShape = RoundedCornerShape(18.dp)
+                    val editShape = RoundedCornerShape(18.dp)
+                    Row(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .weight(1.15f)
+                                .height(36.dp)
+                                .clip(targetShape)
+                                .semantics { contentDescription = "选择拍摄目标" }
+                                .clickable {
+                                    targetNotebook = null
+                                    targetMenuOpen = true
                                 },
-                                onClick = { targetNotebook = notebookId }
+                            shape = targetShape,
+                            color = MathNotesColors.Paper.copy(alpha = 0.94f)
+                        ) {
+                            Box(Modifier.fillMaxSize().padding(horizontal = 11.dp), contentAlignment = Alignment.CenterStart) {
+                                Text(
+                                    if (routesToWindows) {
+                                        pairedConfig?.targetTitle.orEmpty().ifBlank { "选择 Session" }
+                                    } else {
+                                        activeLocalSession?.title ?: "选择 Session"
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MathNotesColors.Ink,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(36.dp)
+                                .clip(recognitionShape)
+                                .clickable(
+                                    enabled = pairedConfig != null,
+                                    onClick = { onPreferWindowsRecognitionChange(!preferWindowsRecognition) }
+                                ),
+                            shape = recognitionShape,
+                            color = MathNotesColors.Paper.copy(alpha = 0.94f)
+                        ) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    if (routesToWindows) "电脑识别" else "本机识别 · $localProviderLabel",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MathNotesColors.Ink,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                        Surface(
+                            modifier = Modifier
+                                .weight(0.9f)
+                                .height(36.dp)
+                                .clip(editShape)
+                                .toggleable(
+                                    value = editAfterCapture,
+                                    role = Role.Switch,
+                                    onValueChange = onEditAfterCaptureChange
+                                )
+                                .semantics { contentDescription = "拍后编辑开关" },
+                            shape = editShape,
+                            color = MathNotesColors.Paper.copy(alpha = 0.94f)
+                        ) {
+                            Row(
+                                Modifier.fillMaxSize().padding(horizontal = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text("拍后编辑", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Ink, maxLines = 1)
+                                Switch(
+                                    checked = editAfterCapture,
+                                    onCheckedChange = null,
+                                    modifier = Modifier.scale(0.66f),
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = MathNotesColors.Paper,
+                                        checkedTrackColor = MathNotesColors.Accent,
+                                        uncheckedThumbColor = MathNotesColors.Muted,
+                                        uncheckedTrackColor = MathNotesColors.Line,
+                                        uncheckedBorderColor = MathNotesColors.Line
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    statusMessage?.let { message ->
+                        Surface(
+                            modifier = Modifier.align(Alignment.TopCenter).padding(10.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MathNotesColors.Paper.copy(alpha = 0.9f)
+                        ) {
+                            Text(message, style = MaterialTheme.typography.bodySmall, color = MathNotesColors.Muted, modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp), maxLines = 1)
+                        }
+                    }
+                }
+            )
+
+            val menuShape = RoundedCornerShape(16.dp)
+            DropdownMenu(
+                expanded = targetMenuOpen,
+                onDismissRequest = { targetMenuOpen = false },
+                modifier = Modifier
+                    .width(maxWidth)
+                    .background(MathNotesColors.Paper, menuShape)
+                    .border(BorderStroke(1.dp, MathNotesColors.Line), menuShape),
+                shape = menuShape,
+                containerColor = MathNotesColors.Paper,
+                tonalElevation = 0.dp,
+                shadowElevation = 8.dp
+            ) {
+                val notebookRows = if (routesToWindows) {
+                    targets.groupBy { it.notebookId }.map { (id, grouped) ->
+                        Triple(id, grouped.firstOrNull()?.notebookTitle.orEmpty().ifBlank { id }, grouped.size)
+                    }
+                } else {
+                    localNotebooks.map { notebook ->
+                        Triple(notebook.id, notebook.title, localSessions.count { it.notebookId == notebook.id })
+                    }
+                }
+                if (targetNotebook == null) {
+                    notebookRows.forEach { (notebookId, notebookTitle, sessionCount) ->
+                        DropdownMenuItem(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                            text = {
+                                Column {
+                                    Text(notebookTitle, style = MaterialTheme.typography.titleMedium, color = MathNotesColors.Ink)
+                                    Text("$sessionCount 个 Session", style = MaterialTheme.typography.bodySmall, color = MathNotesColors.Muted)
+                                }
+                            },
+                            onClick = { targetNotebook = notebookId }
+                        )
+                    }
+                    if (!routesToWindows) {
+                        DropdownMenuItem(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                            text = { Text("打开 Notebooks…", color = MathNotesColors.Accent) },
+                            onClick = {
+                                targetMenuOpen = false
+                                onOpenLocalNotebooks()
+                            }
+                        )
+                    }
+                } else {
+                    DropdownMenuItem(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                        text = { Text("返回 Notebooks", color = MathNotesColors.Accent) },
+                        onClick = { targetNotebook = null }
+                    )
+                    if (routesToWindows) {
+                        targets.filter { it.notebookId == targetNotebook }.forEach { target ->
+                            val selected = target.notebookId == pairedConfig?.notebookId && target.sessionId == pairedConfig?.sessionId
+                            DropdownMenuItem(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                                text = { Text(target.title, color = if (selected) MathNotesColors.Accent else MathNotesColors.Ink) },
+                                onClick = {
+                                    onSelectTarget(target)
+                                    targetMenuOpen = false
+                                }
                             )
                         }
                     } else {
-                        DropdownMenuItem(
-                            text = { Text("‹  返回 Notebook", color = MathNotesColors.Accent) },
-                            onClick = { targetNotebook = null }
-                        )
-                    }
-                    targets.filter { it.notebookId == targetNotebook }.forEach { target ->
-                        val selected = target.notebookId == pairedConfig.notebookId &&
-                            target.sessionId == pairedConfig.sessionId
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(
-                                        target.title,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MathNotesColors.Ink
-                                    )
-                                    Spacer(Modifier.height(3.dp))
-                                    Text(
-                                        if (selected) "当前 Session" else "选择此 Session",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (selected) MathNotesColors.Accent else MathNotesColors.Muted
-                                    )
+                        localSessions.filter { it.notebookId == targetNotebook }.forEach { session ->
+                            val selected = session.id == activeLocalSession?.id
+                            DropdownMenuItem(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                                text = { Text(session.title, color = if (selected) MathNotesColors.Accent else MathNotesColors.Ink) },
+                                onClick = {
+                                    onSelectLocalSession(session.id)
+                                    targetMenuOpen = false
                                 }
-                            },
-                            onClick = {
-                                onSelectTarget(target)
-                                targetMenuOpen = false
-                            },
-                            modifier = Modifier.background(
-                                if (selected) MathNotesColors.AccentSoft else MathNotesColors.Paper,
-                                RoundedCornerShape(7.dp)
                             )
-                        )
+                        }
                     }
                 }
             }
-        }
-        Spacer(Modifier.height(14.dp))
-        MathNotesPaper(Modifier.fillMaxWidth()) {
-            Text("本机队列", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Muted)
-            Spacer(Modifier.height(7.dp))
-            Text(
-                if (queueCount == 0) "没有待处理素材" else "$queueCount 项素材正在等待或上传",
-                style = MaterialTheme.typography.titleMedium,
-                color = MathNotesColors.Ink
-            )
-        }
-        Spacer(Modifier.height(22.dp))
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            MathNotesPrimaryButton(
-                text = if (pairedConfig?.hasTarget == true) "拍照" else "请先选择笔记",
-                onClick = onOpenSystemCamera,
-                enabled = pairedConfig?.hasTarget == true,
-                icon = R.drawable.ic_mathnotes_camera,
-                modifier = Modifier.weight(1f)
-            )
-            MathNotesPaper(
-                Modifier.clickable { onEditAfterCaptureChange(!editAfterCapture) }
+            DropdownMenu(
+                expanded = importMenuOpen,
+                onDismissRequest = { importMenuOpen = false },
+                shape = menuShape,
+                containerColor = MathNotesColors.Paper,
+                tonalElevation = 0.dp,
+                shadowElevation = 8.dp
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        "拍后编辑",
-                        color = MathNotesColors.Ink,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Switch(
-                        checked = editAfterCapture,
-                        onCheckedChange = onEditAfterCaptureChange
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(7.dp))
-        Text(
-            "使用手机厂商相机与防抖；确认一张后会继续拍摄，取消或返回时结束。",
-            color = MathNotesColors.Muted,
-            style = MaterialTheme.typography.bodySmall
-        )
-        if (recentCapturePaths.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            MathNotesPaper(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenRecentGallery(recentCapturePaths) }
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    val path = recentCapturePaths.first()
-                    val thumbnail = remember(path) { loadCameraThumbnail(path) }
-                    if (thumbnail != null) {
-                        Image(
-                            bitmap = thumbnail.asImageBitmap(),
-                            contentDescription = "打开最近拍摄素材",
-                            modifier = Modifier.size(64.dp)
-                        )
+                DropdownMenuItem(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                    text = { Text("使用系统相机（厂商算法）") },
+                    onClick = {
+                        importMenuOpen = false
+                        onOpenSystemCamera()
                     }
-                    Column {
-                        Text("最近拍摄", style = MaterialTheme.typography.titleMedium, color = MathNotesColors.Ink)
-                        Text(
-                            "${recentCapturePaths.size} 张 · 点开后左右滑动",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MathNotesColors.Muted
-                        )
+                )
+                DropdownMenuItem(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                    text = { Text("从相册选择") },
+                    onClick = {
+                        importMenuOpen = false
+                        onPickImage()
                     }
-                }
+                )
+                DropdownMenuItem(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                    text = { Text("导入 PDF") },
+                    enabled = windowsConnectionVerified && pairedConfig?.hasTarget == true,
+                    onClick = {
+                        importMenuOpen = false
+                        onPickPdf()
+                    }
+                )
+                DropdownMenuItem(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                    text = { Text(if (queueCount == 0) "打开本机队列" else "打开本机队列 · $queueCount") },
+                    onClick = {
+                        importMenuOpen = false
+                        onOpenQueue()
+                    }
+                )
             }
-        }
-        Spacer(Modifier.height(9.dp))
-        MathNotesSecondaryButton(
-            text = "从相册选择",
-            onClick = onPickImage,
-            enabled = pairedConfig?.hasTarget == true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(9.dp))
-        MathNotesSecondaryButton(
-            text = "选择 PDF",
-            onClick = onPickPdf,
-            enabled = pairedConfig?.hasTarget == true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(7.dp))
-        Text(
-            "PDF 会先安全保存并上传；阅读、分页识别和目标位置由电脑端确认。",
-            color = MathNotesColors.Muted,
-            style = MaterialTheme.typography.bodySmall
-        )
-        statusMessage?.let {
-            Spacer(Modifier.height(10.dp))
-            Text(it, color = MathNotesColors.Muted, style = MaterialTheme.typography.bodySmall)
         }
     }
-
 }
 
 internal fun isActiveQueueState(state: String): Boolean = state == CaptureState.PENDING ||

@@ -212,6 +212,73 @@ class CaptureRepository(
         true
     }
 
+    suspend fun renderImageDraft(
+        draft: ImageEditDraft,
+        rotationQuarterTurns: Int,
+        perspectiveCorners: List<NormalizedPoint>? = null,
+        cropRect: NormalizedRect?,
+        lassoPoints: List<NormalizedPoint>? = null,
+        annotations: List<ImageAnnotationObject> = emptyList()
+    ): File = withContext(Dispatchers.IO) {
+        val rendered = AndroidImageTransformer.render(
+            draft = draft,
+            outputDirectory = File(context.filesDir, "captures/derived"),
+            rotationQuarterTurns = rotationQuarterTurns,
+            perspectiveCorners = perspectiveCorners,
+            cropRect = cropRect,
+            lassoPoints = lassoPoints,
+            annotations = annotations
+        )
+        rendered.sidecarFile.delete()
+        rendered.outputFile
+    }
+
+    suspend fun deleteUploadedHistory(capture: CaptureEntity): Boolean = withContext(Dispatchers.IO) {
+        val current = dao.find(capture.captureId) ?: return@withContext false
+        if (current.state != CaptureState.UPLOADED) return@withContext false
+        val file = File(current.localPath)
+        val staged = if (current.localCopyAvailable && file.exists()) {
+            File(file.parentFile, ".${file.name}.${UUID.randomUUID()}.deleting")
+        } else {
+            null
+        }
+        if (staged != null && !file.renameTo(staged)) return@withContext false
+        try {
+            if (dao.deleteUploadedById(current.captureId) != 1) {
+                staged?.renameTo(file)
+                return@withContext false
+            }
+            staged?.delete()
+            true
+        } catch (error: Throwable) {
+            if (staged != null && staged.exists()) staged.renameTo(file)
+            throw error
+        }
+    }
+
+    suspend fun deleteQueueTask(capture: CaptureEntity): Boolean = withContext(Dispatchers.IO) {
+        val current = dao.find(capture.captureId) ?: return@withContext false
+        if (current.state == CaptureState.UPLOADING) return@withContext false
+        val file = File(current.localPath)
+        val staged = if (current.localCopyAvailable && file.exists()) {
+            File(file.parentFile, ".${file.name}.${UUID.randomUUID()}.deleting")
+        } else {
+            null
+        }
+        if (staged != null && !file.renameTo(staged)) return@withContext false
+        try {
+            if (dao.deleteTaskByIdUnlessUploading(current.captureId) != 1) {
+                staged?.renameTo(file)
+                return@withContext false
+            }
+            staged?.delete()
+            true
+        } catch (error: Throwable) {
+            if (staged != null && staged.exists()) staged.renameTo(file)
+            throw error
+        }
+    }
+
     suspend fun clearUploadedHistory() = withContext(Dispatchers.IO) {
         dao.listUploaded().forEach { capture ->
             if (capture.localCopyAvailable) File(capture.localPath).delete()

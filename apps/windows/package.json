@@ -1,6 +1,6 @@
 {
   "name": "@mathnotes/windows",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "private": true,
   "license": "GPL-3.0-only",
   "type": "module",
@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
     "dev:desktop": "concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:5173 && npm run build:electron && set MATHNOTES_DEV_SERVER=http://127.0.0.1:5173&& electron electron-dist/main.cjs\"",
-    "build:electron": "npm run build --workspace @mathnotes/shared && npm run build --workspace @mathnotes/core-server && esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --outdir=electron-dist --out-extension:.js=.cjs --external:electron --external:pdfjs-dist/*",
+    "build:electron": "npm run build --workspace @mathnotes/shared && npm run build --workspace @mathnotes/core-server && npm exec -- esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --outdir=electron-dist --out-extension:.js=.cjs --external:electron --external:pdfjs-dist/*",
     "build": "tsc -b && npm run build:electron && vite build",
     "test": "vitest run"
   },

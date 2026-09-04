@@ -148,6 +148,69 @@ class CaptureRepositoryTest {
     }
 
     @Test
+    fun deletingUploadedHistoryRemovesItsReceiptAndManagedLocalFile() = runBlocking {
+        val repository = CaptureRepository(context, database.captureDao())
+        val file = repository.createOutputFile(3_457).apply { writeBytes("history-jpeg".toByteArray()) }
+        val capture = repository.commitCapturedFile(
+            file,
+            PairingConfig(1, "192.168.137.1", 43424, "0123456789abcdef", "analysis", "lecture", "private_http")
+        )
+        repository.markUploaded(capture.captureId, 202, "upload-history", "recognition-history")
+        val uploaded = repository.find(capture.captureId)!!
+
+        assertTrue(repository.deleteUploadedHistory(uploaded))
+        assertFalse(file.exists())
+        assertEquals(null, repository.find(capture.captureId))
+    }
+
+    @Test
+    fun deletingHistoryRejectsAnActiveUploadAndPreservesItsFileAndRow() = runBlocking {
+        val repository = CaptureRepository(context, database.captureDao())
+        val file = repository.createOutputFile(3_458).apply { writeBytes("pending-history-jpeg".toByteArray()) }
+        val capture = repository.commitCapturedFile(
+            file,
+            PairingConfig(1, "192.168.137.1", 43424, "0123456789abcdef", "analysis", "lecture", "private_http")
+        )
+
+        assertFalse(repository.deleteUploadedHistory(capture))
+        assertTrue(file.exists())
+        assertEquals(capture.captureId, repository.find(capture.captureId)?.captureId)
+        file.delete()
+        Unit
+    }
+
+    @Test
+    fun deletingPendingQueueTaskRemovesItsRowAndManagedFile() = runBlocking {
+        val repository = CaptureRepository(context, database.captureDao())
+        val file = repository.createOutputFile(3_459).apply { writeBytes("pending-delete-jpeg".toByteArray()) }
+        val capture = repository.commitCapturedFile(
+            file,
+            PairingConfig(1, "192.168.137.1", 43424, "0123456789abcdef", "analysis", "lecture", "private_http")
+        )
+
+        assertTrue(repository.deleteQueueTask(capture))
+        assertFalse(file.exists())
+        assertEquals(null, repository.find(capture.captureId))
+    }
+
+    @Test
+    fun deletingUploadingQueueTaskIsRejectedWithoutTouchingItsFileOrRow() = runBlocking {
+        val repository = CaptureRepository(context, database.captureDao())
+        val file = repository.createOutputFile(3_460).apply { writeBytes("uploading-delete-jpeg".toByteArray()) }
+        val capture = repository.commitCapturedFile(
+            file,
+            PairingConfig(1, "192.168.137.1", 43424, "0123456789abcdef", "analysis", "lecture", "private_http")
+        )
+        val uploading = requireNotNull(repository.markAttemptStarted(capture.captureId))
+
+        assertFalse(repository.deleteQueueTask(uploading))
+        assertTrue(file.exists())
+        assertEquals(CaptureState.UPLOADING, repository.find(capture.captureId)?.state)
+        file.delete()
+        Unit
+    }
+
+    @Test
     fun selectedImageIsCopiedPrivatelyAndQueuedWithGalleryMetadata() = runBlocking {
         val repository = CaptureRepository(context, database.captureDao())
         val pairing = PairingConfig(

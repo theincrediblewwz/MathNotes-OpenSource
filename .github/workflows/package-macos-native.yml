@@ -39,14 +39,31 @@ jobs:
       - run: npm run test:macos:ui
       - run: npm run test:macos:long-session
       - run: npm run package:macos:native
+      - name: Seed inaccessible legacy pairing and provider credentials
+        shell: bash
+        run: |
+          security add-generic-password -U -s com.mathnotes.companion-host -a pairing-token -w legacy-ci-token-not-for-production -T /usr/bin/security
+          security add-generic-password -U -s com.mathnotes.provider-api-key -a recognition:mimo_2_5 -w provider-ci-key-not-for-production -T /usr/bin/security
+          PROVIDER_JSON='{"providerId":"mimo_2_5","model":"mimo-v2.5","endpoint":"https://api.xiaomimimo.com/v1"}'
+          PROVIDER_HEX="$(printf '%s' "$PROVIDER_JSON" | xxd -p | tr -d '\n')"
+          defaults write com.mathnotes.native mathnotes.provider.settings.v1 -data "$PROVIDER_HEX"
       - name: Launch packaged app and capture its real window
         run: npm run test:macos:app-launch
+      - name: Remove credential fixtures
+        if: always()
+        shell: bash
+        run: |
+          security delete-generic-password -s com.mathnotes.companion-host -a pairing-token || true
+          security delete-generic-password -s com.mathnotes.provider-api-key -a recognition:mimo_2_5 || true
+          defaults delete com.mathnotes.native mathnotes.provider.settings.v1 || true
       - name: Upload native UI acceptance screenshot
         if: github.event_name == 'push' || inputs.upload_artifact == true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: MathNotes-macOS-native-ui-acceptance
-          path: output/playwright/macos-native-app.png
+          path: |
+            output/playwright/macos-native-app*.png
+            output/playwright/macos-native-phone-connection.png
           if-no-files-found: warn
           retention-days: 1
       - name: Upload final package artifact

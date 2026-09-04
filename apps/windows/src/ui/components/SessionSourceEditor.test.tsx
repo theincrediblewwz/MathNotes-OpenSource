@@ -187,6 +187,62 @@ describe("SessionSourceEditor", () => {
     });
   });
 
+  it("selects the protected AI target when navigating to user unlock", async () => {
+    if (!HTMLElement.prototype.scrollTo) HTMLElement.prototype.scrollTo = vi.fn();
+    Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () =>
+      ({ bottom: 0, height: 0, left: 0, right: 0, top: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    const markdown = [
+      `<!-- lock:start id="span" hash="${"a".repeat(64)}" -->`,
+      "锁定内容",
+      "<!-- lock:end id=\"span\" -->"
+    ].join("\n");
+    const selectionFrom = markdown.indexOf("锁定内容");
+    const document: SessionSourceDocument = {
+      text: ["--- source: user | block: 0001 ---", markdown].join("\n"),
+      markdownBlocks: [{
+        blockId: "0001",
+        sourceId: "src-0001",
+        path: "blocks/0001_user_note.md",
+        source: "user",
+        header: "user",
+        locked: false
+      }]
+    };
+    const onActiveBlockChange = vi.fn();
+    const onProtectedSpanUnlockableChange = vi.fn();
+
+    render(
+      <SessionSourceEditor
+        document={document}
+        insertMarkdownRequest={null}
+        locatingRequest={{
+          blockId: "0001",
+          sourceId: "src-0001",
+          selectionFrom,
+          selectionTo: selectionFrom + "锁定内容".length,
+          nonce: 1
+        }}
+        lockSelectionRequest={0}
+        unlockProtectedSpanRequest={0}
+        value={document.text}
+        onActiveBlockChange={onActiveBlockChange}
+        onChange={vi.fn()}
+        onDeleteBlockRequest={vi.fn()}
+        onProtectedSpanUnlockableChange={onProtectedSpanUnlockableChange}
+        onProtectedSpanUnlocked={vi.fn()}
+        onSelectionLockableChange={vi.fn()}
+        onSelectionLocked={vi.fn()}
+        onSourceReferenceClick={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onActiveBlockChange).toHaveBeenCalledWith(expect.objectContaining({ blockId: "0001" }));
+      expect(onProtectedSpanUnlockableChange).toHaveBeenLastCalledWith(true);
+    });
+  });
+
   it("opens the product context menu from editable Markdown", async () => {
     const onRerecognizeBlockRequest = vi.fn();
     Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
@@ -275,7 +331,7 @@ describe("SessionSourceEditor", () => {
     fireEvent.focus(container.querySelector(".cm-content") as HTMLElement);
     await waitFor(() => expect(onCaretLocationChange).toHaveBeenLastCalledWith({
       blockId: "0042",
-      displayBlockId: "0042",
+      displayBlockId: "0001",
       lineCount: 3,
       lineInBlock: 1,
       sourceId: "src-0042"
@@ -350,7 +406,7 @@ describe("SessionSourceEditor", () => {
     expect(screen.queryByTestId("editor-context-menu")).toBeNull();
   });
 
-  it("disables the AI edit entry for an empty selection or a locked block", async () => {
+  it("offers whole-block AI editing and forwards locked selections for explicit lock feedback", async () => {
     Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
     Range.prototype.getBoundingClientRect = () =>
       ({ bottom: 0, height: 0, left: 0, right: 0, top: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
@@ -372,6 +428,7 @@ describe("SessionSourceEditor", () => {
       unlockProtectedSpanRequest: 0,
       onActiveBlockChange: vi.fn(),
       onChange: vi.fn(),
+      onAiSelectionEditRequest: vi.fn(),
       onDeleteBlockRequest: vi.fn(),
       onProtectedSpanUnlockableChange: vi.fn(),
       onProtectedSpanUnlocked: vi.fn(),
@@ -386,7 +443,13 @@ describe("SessionSourceEditor", () => {
     const content = container.querySelector(".cm-content") as HTMLElement;
 
     fireEvent.contextMenu(content, { clientX: 120, clientY: 140 });
-    expect((screen.getByRole("button", { name: "用 AI 修改选中文字" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "用 AI 修改该块" }));
+    expect(sharedProps.onAiSelectionEditRequest).toHaveBeenCalledWith({
+      blockId: "0001",
+      from: 0,
+      to: 5,
+      selectedText: "a😀bc"
+    });
 
     const locked: SessionSourceDocument = {
       ...unlocked,
@@ -400,7 +463,15 @@ describe("SessionSourceEditor", () => {
     lockedView!.dispatch({ selection: { anchor: 1, head: 5 } });
 
     fireEvent.contextMenu(lockedContent, { clientX: 120, clientY: 140 });
-    expect((screen.getByRole("button", { name: "用 AI 修改选中文字" }) as HTMLButtonElement).disabled).toBe(true);
+    const lockedAction = screen.getByRole("button", { name: "用 AI 修改选中文字" }) as HTMLButtonElement;
+    expect(lockedAction.disabled).toBe(false);
+    fireEvent.click(lockedAction);
+    expect(sharedProps.onAiSelectionEditRequest).toHaveBeenLastCalledWith({
+      blockId: "0001",
+      from: 1,
+      to: 5,
+      selectedText: "😀bc"
+    });
   });
 
   it("inserts after the right-clicked block and forwards its blockId", async () => {

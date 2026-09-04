@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { MoreDrawer, NotebookDrawer, SettingsModal, UserSettingsForm } from "./Drawers";
+import { formatRecentReadingTime, MoreDrawer, NotebookDrawer, SettingsModal, UserSettingsForm } from "./Drawers";
 import { defaultAssistantFontFamily, defaultPreviewFontFamily } from "../../common/defaultUserSettings";
 import { DEFAULT_PREVIEW_FOLLOW_SHORTCUT } from "../../common/keyboardShortcuts";
 import { createEmptyNotationProfileConfig } from "../../common/notationProfiles";
@@ -22,142 +22,95 @@ const settings = {
 };
 
 describe("NotebookDrawer", () => {
-  const notebooks = [
+  const recentSessions = [
     {
       notebookId: "functional_analysis",
-      title: "泛函分析",
-      sessionCount: 1,
-      createdAt: "2026-06-30T08:00:00.000Z",
-      updatedAt: "2026-06-30T08:00:00.000Z"
-    }
-  ];
-  const sessions = [
-    {
-      notebookId: "functional_analysis",
+      notebookTitle: "泛函分析",
       sessionId: "lecture",
       title: "泛函分析 第 3 讲",
       status: "draft" as const,
       createdAt: "2026-06-30T08:00:00.000Z",
-      updatedAt: "2026-06-30T08:00:00.000Z"
+      updatedAt: "2026-06-30T08:00:00.000Z",
+      openedAt: "2026-08-30T08:00:00.000Z"
     }
   ];
 
-  it("opens a visible context menu for right-click rename", () => {
-    const onRenameSession = vi.fn();
-    const onDeleteSession = vi.fn();
-
+  it("shows only recent reading in the old directory position", () => {
     render(
       <NotebookDrawer
         onClose={() => undefined}
-        onDeleteSession={onDeleteSession}
-        onRenameSession={onRenameSession}
         openLayer="notebook"
-        sessionId="lecture"
-        sessions={sessions}
+        recentSessions={recentSessions}
       />
     );
-
-    const sessionRow = screen.getByRole("button", { name: "泛函分析 第 3 讲lecture" });
-    screen.getByTestId("notebook-drawer").getBoundingClientRect = () =>
-      ({
-        bottom: 520,
-        height: 448,
-        left: 16,
-        right: 336,
-        top: 72,
-        width: 320,
-        x: 16,
-        y: 72,
-        toJSON: () => undefined
-      }) as DOMRect;
-
-    fireEvent.contextMenu(sessionRow, { clientX: 68, clientY: 224 });
-
-    expect(screen.getByTestId("session-context-menu").style.left).toBe("52px");
-    expect(screen.getByTestId("session-context-menu").style.top).toBe("152px");
-    fireEvent.click(screen.getByRole("menuitem", { name: "删除 Session" }));
-
-    expect(onDeleteSession).toHaveBeenCalledWith(sessions[0]);
-
-    fireEvent.contextMenu(sessionRow, { clientX: 68, clientY: 224 });
-    fireEvent.click(screen.getByRole("menuitem", { name: "重命名 Session" }));
-
-    expect(onRenameSession).toHaveBeenCalledWith(sessions[0]);
+    expect(screen.getByRole("heading", { name: "最近阅读" })).toBeTruthy();
+    expect(screen.getByText("泛函分析 第 3 讲")).toBeTruthy();
+    expect(screen.queryByText("当前 Notebook 的 Sessions")).toBeNull();
+    expect(screen.queryByText("Notebooks")).toBeNull();
+    expect(screen.getByRole("button", { name: "设置" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "新建 Notebook" })).toBeNull();
   });
 
-  it("exposes settings from the notebook drawer", () => {
+  it("opens a recent session or the separate Notebook browser explicitly", () => {
+    const onOpenRecentSession = vi.fn();
+    const onOpenNotebooks = vi.fn();
     const onOpenSettings = vi.fn();
-
     render(
       <NotebookDrawer
         onClose={() => undefined}
+        onOpenNotebooks={onOpenNotebooks}
+        onOpenRecentSession={onOpenRecentSession}
         onOpenSettings={onOpenSettings}
         openLayer="notebook"
-        sessionId="lecture"
-        sessions={sessions}
+        recentSessions={recentSessions}
       />
     );
-
+    fireEvent.click(screen.getByRole("button", { name: /泛函分析 第 3 讲/ }));
+    expect(onOpenRecentSession).toHaveBeenCalledWith(recentSessions[0]);
+    fireEvent.click(screen.getByRole("button", { name: "打开 Notebooks" }));
+    expect(onOpenNotebooks).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
 
-    expect(onOpenSettings).toHaveBeenCalled();
+    const actions = screen.getByTestId("notebook-drawer").querySelectorAll(".recent-reading-actions > button");
+    expect([...actions].map((button) => button.textContent?.trim())).toEqual(["设置", "打开 Notebooks"]);
   });
 
-  it("exposes real notebook switching and creation", () => {
-    const onCreateNotebook = vi.fn();
-    const onOpenNotebook = vi.fn();
+  it("shows a quiet empty state and never renders more than four rows", () => {
+    const { rerender } = render(<NotebookDrawer onClose={() => undefined} openLayer="notebook" recentSessions={[]} />);
+    expect(screen.getByText("还没有最近阅读")).toBeTruthy();
+    rerender(
+      <NotebookDrawer
+        onClose={() => undefined}
+        openLayer="notebook"
+        recentSessions={Array.from({ length: 6 }, (_, index) => ({
+          ...recentSessions[0],
+          sessionId: `session-${index}`,
+          title: `笔记 ${index}`
+        }))}
+      />
+    );
+    expect(screen.getAllByRole("button").filter((button) => button.className === "recent-reading-row")).toHaveLength(4);
+  });
+
+  it("formats recent time without showing storage timestamps", () => {
+    const now = Date.parse("2026-08-30T08:30:00.000Z");
+    expect(formatRecentReadingTime("2026-08-30T08:29:30.000Z", now)).toBe("刚刚");
+    expect(formatRecentReadingTime("2026-08-30T08:07:00.000Z", now)).toBe("23 分钟前");
+    expect(formatRecentReadingTime("2026-08-29T08:30:00.000Z", now)).toBe("1 天前");
+  });
+
+  it("closes from the minimalist title bar", () => {
+    const onClose = vi.fn();
     render(
       <NotebookDrawer
-        notebookId="functional_analysis"
-        notebooks={notebooks}
-        onClose={() => undefined}
-        onCreateNotebook={onCreateNotebook}
-        onOpenNotebook={onOpenNotebook}
+        onClose={onClose}
         openLayer="notebook"
-        sessionId="lecture"
-        sessions={sessions}
+        recentSessions={recentSessions}
       />
     );
-
-    fireEvent.click(screen.getByRole("button", { name: "新建 Notebook" }));
-    fireEvent.click(screen.getByRole("button", { name: "泛函分析1 个 Session" }));
-
-    expect(onCreateNotebook).toHaveBeenCalledTimes(1);
-    expect(onOpenNotebook).toHaveBeenCalledWith(notebooks[0]);
-  });
-
-  it("clears the session context menu when the drawer is closed and reopened", () => {
-    const { rerender } = render(
-      <NotebookDrawer
-        onClose={() => undefined}
-        openLayer="notebook"
-        sessionId="lecture"
-        sessions={sessions}
-      />
-    );
-    const sessionRow = screen.getByRole("button", { name: "泛函分析 第 3 讲lecture" });
-
-    fireEvent.contextMenu(sessionRow, { clientX: 68, clientY: 224 });
-    expect(screen.getByTestId("session-context-menu")).toBeTruthy();
-
-    rerender(
-      <NotebookDrawer
-        onClose={() => undefined}
-        openLayer={null}
-        sessionId="lecture"
-        sessions={sessions}
-      />
-    );
-    rerender(
-      <NotebookDrawer
-        onClose={() => undefined}
-        openLayer="notebook"
-        sessionId="lecture"
-        sessions={sessions}
-      />
-    );
-
-    expect(screen.queryByTestId("session-context-menu")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "关闭最近阅读" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -229,6 +182,18 @@ describe("MoreDrawer", () => {
 });
 
 describe("UserSettingsForm", () => {
+  it("shows the author identity first with a local avatar and exact GitHub profile", () => {
+    render(<UserSettingsForm hasNativeApi settings={settings} />);
+
+    expect(screen.getByAltText("WWZ SYSU 头像")).toBeTruthy();
+    const profile = screen.getByRole("link", { name: "打开 WWZ SYSU 的 GitHub 主页" }) as HTMLAnchorElement;
+    expect(profile.href).toBe("https://github.com/theincrediblewwz");
+    expect(profile.target).toBe("_blank");
+    expect(profile.rel).toContain("noreferrer");
+    expect(profile.compareDocumentPosition(screen.getByRole("heading", { name: "文件位置" })))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   it("renders the compact preview-follow shortcut recorder with the default", () => {
     render(<UserSettingsForm hasNativeApi settings={settings} />);
 
@@ -248,7 +213,7 @@ describe("UserSettingsForm", () => {
     fireEvent.keyDown(input, { ctrlKey: true, key: "t", shiftKey: true });
 
     expect(input.value).toBe("Ctrl+Shift+T");
-    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存全部设置" }));
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ previewFollowShortcut: "Ctrl+Shift+T" }));
   });
 
@@ -311,6 +276,21 @@ describe("UserSettingsForm", () => {
     expect(screen.getByTestId("source-font-preview").style.fontSize).toBe("13px");
     expect(screen.getByTestId("preview-font-preview").style.fontSize).toBe("16px");
     expect(screen.getByTestId("assistant-font-preview").style.fontSize).toBe("16px");
+  });
+
+  it("applies typography in place without scrolling to the global save action", () => {
+    const onSave = vi.fn();
+    render(<UserSettingsForm hasNativeApi onSave={onSave} settings={settings} />);
+
+    fireEvent.change(screen.getByLabelText("左侧字号"), { target: { value: "18" } });
+    fireEvent.change(screen.getByLabelText("右侧字体"), { target: { value: '"STIX Two Text", "Times New Roman", "Noto Serif SC", serif' } });
+    fireEvent.click(screen.getByRole("button", { name: "一键应用" }));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      notesRootDir: settings.notesRootDir,
+      sourceFontSize: 18,
+      previewFontFamily: '"STIX Two Text", "Times New Roman", "Noto Serif SC", serif'
+    }));
   });
 
   it("keeps learning-assistant and appearance settings without an obsolete recognition HUD toggle", () => {
@@ -612,37 +592,11 @@ describe("SettingsModal", () => {
     );
   });
 
-  it("requires an explicit one-call action and exports a redacted diagnostic report", async () => {
-    const onPickProviderSelfTestImage = vi.fn().mockResolvedValue({
-      cancelled: false,
-      fileName: "blackboard.png",
-      sourcePath: "C:\\private\\blackboard.png"
-    });
-    const onRunProviderSelfTest = vi.fn().mockResolvedValue({
-      providerId: "mimo_2_5",
-      providerLabel: "MiMo v2.5",
-      model: "mimo-v2.5",
-      status: "succeeded",
-      warningCount: 0,
-      eventCount: 8,
-      previewUpdateCount: 3,
-      elapsedMs: 1250,
-      reportPath: "C:\\private\\report.json",
-      exportPath: "C:\\private\\draft.md"
-    });
-    const onExportDiagnosticReport = vi.fn().mockResolvedValue({
-      cancelled: false,
-      outputPath: "C:\\exports\\diagnostics.json",
-      report: {}
-    });
-
+  it("keeps developer diagnostics out of the ordinary settings experience", () => {
     render(
       <SettingsModal
         hasNativeApi
         onClose={() => undefined}
-        onExportDiagnosticReport={onExportDiagnosticReport}
-        onPickProviderSelfTestImage={onPickProviderSelfTestImage}
-        onRunProviderSelfTest={onRunProviderSelfTest}
         open
         providerConfig={{
           providerId: "mimo_2_5",
@@ -655,19 +609,9 @@ describe("SettingsModal", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "选择自检图片" }));
-    expect(await screen.findByText("blackboard.png")).toBeTruthy();
-    expect(screen.getByText(/确认后将调用 .* 1 次/)).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "确认并运行 1 次" }));
-    await waitFor(() => expect(onRunProviderSelfTest).toHaveBeenCalledWith({
-      imagePath: "C:\\private\\blackboard.png",
-      confirmedExternalCall: true
-    }));
-    expect(await screen.findByText("MiMo v2.5 · 通过")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "导出脱敏诊断报告" }));
-    await waitFor(() => expect(onExportDiagnosticReport).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("heading", { name: "诊断与自检" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "选择自检图片" })).toBeNull();
+    expect(screen.queryByTestId("user-diagnostics")).toBeNull();
   });
 });
 

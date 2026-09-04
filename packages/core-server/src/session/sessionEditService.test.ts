@@ -228,6 +228,118 @@ describe("SessionEditService", () => {
     expect(unlocked.block.content).toMatchObject({ kind: "markdown", blockLocked: false });
   });
 
+  it("protects an exact user selection and unlocks it without weakening the other write guards", async () => {
+    const original = "前文 😀人工确认定义 后文";
+    const protectedText = "😀人工确认定义";
+    await writeFile(join(sessionDir, "blocks", "0001.md"), original);
+    const service = new SessionEditService(root, () => "2026-08-30T13:00:00.000Z");
+    const before = await readBlock();
+    if (before.content.kind !== "markdown") throw new Error("expected markdown");
+    const from = original.indexOf(protectedText);
+
+    const protectedResult = await service.protectMarkdownSelection({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: before.content.baseRevision,
+      selection: { from, to: from + protectedText.length, selectedText: protectedText }
+    });
+    expect(protectedResult).toMatchObject({ version: 1, protected: true });
+    expect(protectedResult.spanId).toMatch(/^lock_[0-9a-f-]{36}$/);
+    if (protectedResult.block.content.kind !== "markdown") throw new Error("expected markdown");
+    expect(protectedResult.block.content.protectedSpanCount).toBe(1);
+    expect(protectedResult.block.content.markdown).toContain(
+      `<!-- lock:start id="${protectedResult.spanId}" hash="${sha256Text(protectedText)}" -->`
+    );
+    let stored = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+    expect(stored.locks).toEqual([
+      expect.objectContaining({
+        id: protectedResult.spanId,
+        blockId: "0001",
+        kind: "span",
+        contentHash: sha256Text(protectedText),
+        createdBy: "user",
+        aiEditable: false
+      })
+    ]);
+
+    const protectedMarkdown = protectedResult.block.content.markdown;
+    const saved = await service.saveMarkdownBlock({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      markdown: `新增说明\n${protectedMarkdown}`,
+      baseRevision: protectedResult.block.content.baseRevision
+    });
+    if (saved.block.content.kind !== "markdown") throw new Error("expected markdown");
+    const savedMarkdown = saved.block.content.markdown;
+    const partial = "人工确认";
+    const partialFrom = savedMarkdown.indexOf(partial);
+    const unlocked = await service.unlockMarkdownProtectedSelection({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: saved.block.content.baseRevision,
+      selection: { from: partialFrom, to: partialFrom + partial.length, selectedText: partial }
+    });
+    expect(unlocked).toMatchObject({ version: 1, protected: false, spanId: protectedResult.spanId });
+    if (unlocked.block.content.kind !== "markdown") throw new Error("expected markdown");
+    expect(unlocked.block.content.markdown).toBe(`新增说明\n${original}`);
+    expect(unlocked.block.content.protectedSpanCount).toBe(0);
+    stored = JSON.parse(await readFile(join(sessionDir, "session.json"), "utf8")) as SessionRecord;
+    expect(stored.locks).toEqual([]);
+  });
+
+  it("rejects stale, overlapping, malformed, and tampered protected-span updates", async () => {
+    const original = "第一段\n第二段\n第三段";
+    await writeFile(join(sessionDir, "blocks", "0001.md"), original);
+    const service = new SessionEditService(root);
+    const before = await readBlock();
+    if (before.content.kind !== "markdown") throw new Error("expected markdown");
+    const selectedText = "第二段";
+    const from = original.indexOf(selectedText);
+
+    await expect(service.protectMarkdownSelection({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: before.content.baseRevision,
+      selection: { from: 2, to: 6, selectedText: "\n第二段" }
+    })).rejects.toMatchObject({ code: "invalid_selection", statusCode: 422 });
+
+    const protectedResult = await service.protectMarkdownSelection({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: before.content.baseRevision,
+      selection: { from, to: from + selectedText.length, selectedText }
+    });
+    if (protectedResult.block.content.kind !== "markdown") throw new Error("expected markdown");
+    const protectedMarkdown = protectedResult.block.content.markdown;
+    const protectedFrom = protectedMarkdown.indexOf(selectedText);
+
+    await expect(service.protectMarkdownSelection({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: protectedResult.block.content.baseRevision,
+      selection: { from: protectedFrom, to: protectedFrom + selectedText.length, selectedText }
+    })).rejects.toMatchObject({ code: "protected_selection", statusCode: 423 });
+    await expect(service.unlockMarkdownProtectedSelection({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: before.content.baseRevision,
+      selection: { from: protectedFrom, to: protectedFrom + selectedText.length, selectedText }
+    })).rejects.toMatchObject({ code: "revision_conflict", statusCode: 409 });
+
+    const outsideText = "第一段";
+    await expect(service.unlockMarkdownProtectedSelection({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: protectedResult.block.content.baseRevision,
+      selection: { from: 0, to: outsideText.length, selectedText: outsideText }
+    })).rejects.toMatchObject({ code: "protected_span_missing", statusCode: 423 });
+
+    const tamperedMarkdown = protectedMarkdown.replace(selectedText, "已被篡改");
+    await writeFile(join(sessionDir, "blocks", "0001.md"), tamperedMarkdown);
+    const tampered = await readBlock();
+    if (tampered.content.kind !== "markdown") throw new Error("expected markdown");
+    const tamperedText = "已被篡改";
+    const tamperedFrom = tamperedMarkdown.indexOf(tamperedText);
+    await expect(service.unlockMarkdownProtectedSelection({
+      notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: tampered.content.baseRevision,
+      selection: { from: tamperedFrom, to: tamperedFrom + tamperedText.length, selectedText: tamperedText }
+    })).rejects.toMatchObject({ code: "protected_span_changed", statusCode: 423 });
+    expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8")).toBe(tamperedMarkdown);
+  });
+
   it("allows edits around a protected span but rejects changing or removing it", async () => {
     const protectedText = "已确认公式 $x=1$";
     const hash = sha256Text(protectedText);

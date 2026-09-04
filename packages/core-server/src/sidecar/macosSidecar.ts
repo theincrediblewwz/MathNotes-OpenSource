@@ -25,6 +25,7 @@ import { SessionEditService } from "../session/sessionEditService";
 import { SessionImageImportService } from "../session/sessionImageImportService";
 import { SessionWriteCoordinator } from "../session/sessionWriteCoordinator";
 import { SessionRecognitionService } from "../session/sessionRecognitionService";
+import { SessionPdfRecognitionBatchService } from "../session/sessionPdfRecognitionBatchService";
 import { SessionAssistantService } from "../session/sessionAssistantService";
 import { SessionSelectionEditService } from "../session/sessionSelectionEditService";
 import { SessionExportService } from "../session/sessionExportService";
@@ -42,6 +43,7 @@ import {
 import { RevisionEventLog } from "../events/revisionEventLog";
 import type { CompanionUploadActivity } from "../api/networkApiContracts";
 import { DeviceIdentityService } from "../device/deviceIdentityService";
+import { createNotesBackup } from "../backup/notesBackup";
 
 export const MACOS_SIDECAR_API_VERSION = 1;
 
@@ -121,6 +123,10 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
     () => environment.providerFactory.createRecognitionProvider(),
     sessionWrites
   );
+  const sessionPdfRecognition = new SessionPdfRecognitionBatchService(
+    options.notesRootDir,
+    sessionRecognition
+  );
   const sessionAssistant = new SessionAssistantService(
     options.notesRootDir,
     () => environment.providerFactory.createAssistantProvider(),
@@ -163,6 +169,11 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
       notebookId: input.notebookId,
       title: input.title
     }),
+    createNotesBackup: (input) => createNotesBackup({
+      notesRootDir: options.notesRootDir,
+      destinationParentDir: input.destinationParentDir,
+      appVersion: options.appVersion
+    }),
     createCompanionPairingChallenge: deviceIdentityService
       ? () => deviceIdentityService.createExclusiveChallenge()
       : undefined,
@@ -176,12 +187,21 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
     appendSessionMarkdown: (input) => sessionEditor.appendMarkdownBlock(input),
     saveSessionBlock: (input) => sessionEditor.saveMarkdownBlock(input),
     setSessionBlockLock: (input) => sessionEditor.setMarkdownBlockLock(input),
+    protectSessionBlockSpan: (input) => sessionEditor.protectMarkdownSelection(input),
+    unlockSessionBlockSpan: (input) => sessionEditor.unlockMarkdownProtectedSelection(input),
     reorderSessionBlocks: async (input) => {
       await sessionBlockOrganizer.reorder(input);
       return readReadonlySessionManifest({ rootDir: options.notesRootDir, ...input });
     },
     deleteSessionBlocks: async (input) => {
-      await sessionBlockOrganizer.delete(input);
+      const deleted = await sessionBlockOrganizer.deleteRecoverable(input);
+      return {
+        manifest: await readReadonlySessionManifest({ rootDir: options.notesRootDir, ...input }),
+        undo: deleted.undo
+      };
+    },
+    restoreSessionBlocks: async (input) => {
+      await sessionBlockOrganizer.restoreDeleted(input);
       return readReadonlySessionManifest({ rootDir: options.notesRootDir, ...input });
     },
     transferSessionBlocks: (input) => sessionBlockOrganizer.transfer(input),
@@ -189,9 +209,11 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
     readSessionConflict: (input) => sessionEditor.readMarkdownConflict(input),
     resolveSessionConflict: (input) => sessionEditor.resolveMarkdownConflict(input),
     importSessionImage: (input) => sessionImageImporter.importImage(input),
+    importSessionEditedImage: (input) => sessionImageImporter.importEditedImage(input),
     importSessionPdf: (input) => sessionPdfImporter.importPdf(input),
     readSessionAsset: (input) => readReadonlySessionAsset({ rootDir: options.notesRootDir, ...input }),
     sessionRecognition,
+    sessionPdfRecognition,
     readSessionCompanionActivity: (input) => companionActivityStore.read(input),
     sessionAssistant,
     sessionSelectionEdit,
@@ -220,7 +242,7 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
       await localShell.stop();
     }
   };
-  const companionHost = options.companionHost && deviceIdentityService
+  let companionHost = options.companionHost && deviceIdentityService
     ? createCompanionHost({
         options,
         sessionImageImporter,
@@ -234,10 +256,32 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
   const companionHostService: CoreService | undefined = companionHost && {
     name: "companion-host-api",
     async start() {
-      startedCompanionHost = await companionHost.start();
+      try {
+        startedCompanionHost = await companionHost!.start();
+      } catch (error) {
+        const requestedPort = options.companionHost?.port ?? 1051;
+        if (requestedPort === 0 || !isAddressInUse(error)) throw error;
+        await companionHost!.stop();
+        environment.logger.warn("Companion host port is occupied; retrying with an available port", {
+          requestedPort
+        });
+        companionHost = createCompanionHost({
+          options: {
+            ...options,
+            companionHost: { ...options.companionHost!, port: 0 }
+          },
+          sessionImageImporter,
+          sessionPdfImporter,
+          sessionRecognition,
+          companionStore,
+          deviceIdentityService: deviceIdentityService!,
+          companionActivityStore
+        });
+        startedCompanionHost = await companionHost.start();
+      }
     },
     async stop() {
-      await companionHost.stop();
+      await companionHost!.stop();
     }
   };
 
@@ -269,6 +313,11 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
       await companionActivityStore.stop();
     }
   };
+}
+
+function isAddressInUse(error: unknown): boolean {
+  if ((error as NodeJS.ErrnoException | undefined)?.code === "EADDRINUSE") return true;
+  return error instanceof AggregateError && error.errors.some(isAddressInUse);
 }
 
 function createCompanionHost(input: {

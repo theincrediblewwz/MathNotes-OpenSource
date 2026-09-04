@@ -4,6 +4,14 @@ import path from "node:path";
 
 const root = process.cwd();
 const content = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/ContentView.swift"), "utf8");
+const notebookBrowser = await readFile(
+  path.join(root, "apps/macos/Sources/MathNotesMac/MacNotebookBrowser.swift"),
+  "utf8"
+);
+const recentReading = await readFile(
+  path.join(root, "apps/macos/Sources/MathNotesMac/MacRecentReadingStore.swift"),
+  "utf8"
+);
 const theme = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/MathNotesTheme.swift"), "utf8");
 const app = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/MathNotesMacApp.swift"), "utf8");
 const appearance = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/AppAppearanceMode.swift"), "utf8");
@@ -13,6 +21,14 @@ const runtimeDiagnostics = await readFile(
   "utf8"
 );
 const reader = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/ReadonlySessionView.swift"), "utf8");
+const imageEditor = await readFile(
+  path.join(root, "apps/macos/Sources/MathNotesMac/MacImageAnnotationEditor.swift"),
+  "utf8"
+);
+const imageEditingModels = await readFile(
+  path.join(root, "apps/macos/Sources/MathNotesMac/MacImageEditingModels.swift"),
+  "utf8"
+);
 const assistantWindow = await readFile(
   path.join(root, "apps/macos/Sources/MathNotesMac/SessionAssistantWindow.swift"),
   "utf8"
@@ -23,6 +39,38 @@ const selectionEditor = await readFile(
 );
 const localShellClient = await readFile(
   path.join(root, "apps/macos/Sources/MathNotesMac/LocalShellClient.swift"),
+  "utf8"
+);
+const localShellServer = await readFile(
+  path.join(root, "packages/core-server/src/api/localShellServer.ts"),
+  "utf8"
+);
+const capabilityPolicy = await readFile(
+  path.join(root, "packages/core-server/src/api/capabilityPolicy.ts"),
+  "utf8"
+);
+const sessionEditService = await readFile(
+  path.join(root, "packages/core-server/src/session/sessionEditService.ts"),
+  "utf8"
+);
+const sessionBlockOrganizer = await readFile(
+  path.join(root, "packages/core-server/src/session/sessionBlockOrganizeService.ts"),
+  "utf8"
+);
+const sessionImageImporter = await readFile(
+  path.join(root, "packages/core-server/src/session/sessionImageImportService.ts"),
+  "utf8"
+);
+const pdfRecognitionBatch = await readFile(
+  path.join(root, "packages/core-server/src/session/sessionPdfRecognitionBatchService.ts"),
+  "utf8"
+);
+const macosSidecar = await readFile(
+  path.join(root, "packages/core-server/src/sidecar/macosSidecar.ts"),
+  "utf8"
+);
+const notesBackup = await readFile(
+  path.join(root, "packages/core-server/src/backup/notesBackup.ts"),
   "utf8"
 );
 const providerSettings = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/ProviderSettingsView.swift"), "utf8");
@@ -48,6 +96,10 @@ const companionHostAutomation = await readFile(
 );
 const companionLanPairing = await readFile(
   path.join(root, "apps/macos/Sources/MathNotesMac/CompanionLanPairing.swift"),
+  "utf8"
+);
+const phoneConnection = await readFile(
+  path.join(root, "apps/macos/Sources/MathNotesMac/PhoneConnectionSheet.swift"),
   "utf8"
 );
 const markdownDrop = await readFile(
@@ -77,8 +129,40 @@ const selectionEditBlockSection = reader.slice(
   reader.indexOf("private struct MacSelectionEditDraft")
 );
 const selectionEditSheetSection = reader.slice(
-  reader.indexOf("private struct MacSelectionEditSheet"),
+  reader.indexOf("struct MacSelectionEditWorkspace"),
   reader.indexOf("private struct SessionTransferTarget")
+);
+const imageImportClientSection = localShellClient.slice(
+  localShellClient.indexOf("func importSessionImage("),
+  localShellClient.indexOf("func stagePdfRecognitionPage(")
+);
+const pdfImportClientSection = localShellClient.slice(
+  localShellClient.indexOf("func importSessionPdf("),
+  localShellClient.indexOf("func startRecognition(")
+);
+const sidecarProtocol = await readFile(
+  path.join(root, "apps/macos/Sources/MathNotesMac/SidecarProtocol.swift"),
+  "utf8"
+);
+const sidebarBodySection = content.slice(
+  content.indexOf("NavigationSplitView"),
+  content.indexOf("private var sidebarHeader")
+);
+const networkRouteSection = capabilityPolicy.slice(
+  capabilityPolicy.indexOf("export const NETWORK_API_ROUTES"),
+  capabilityPolicy.indexOf("export const LOCAL_SHELL_API_ROUTES")
+);
+const localRouteSection = capabilityPolicy.slice(
+  capabilityPolicy.indexOf("export const LOCAL_SHELL_API_ROUTES"),
+  capabilityPolicy.indexOf("const routeByRequest")
+);
+const supervisorStartSection = supervisor.slice(
+  supervisor.indexOf("func start()"),
+  supervisor.indexOf("func retry()")
+);
+const savedProviderMetadataSection = supervisor.slice(
+  supervisor.indexOf("func hasSavedProviderConfiguration"),
+  supervisor.indexOf("func configureProvider")
 );
 
 const checks = [
@@ -89,7 +173,9 @@ const checks = [
   [markdownDrop.includes("startAccessingSecurityScopedResource") && markdownDrop.includes("maximumBytes = 2 * 1024 * 1024"), "Markdown drops must use security scope and the bounded local write limit"],
   [content.includes("temporaryMarkdownDocuments") && content.includes("MarkdownArchiveSheet") && markdownDrop.includes("尚未归入任何 Notebook"), "unassigned Markdown must stay in an explicit temporary Session until archival"],
   [localShellClient.includes('path: "local/v1/session/markdown"') && localShellClient.includes('path: "local/v1/markdown/preview"'), "macOS Markdown import and temporary preview must use trusted Core routes"],
-  [content.includes(".searchable("), "catalog search is required"],
+  [notebookBrowser.includes('TextField("搜索 Notebook 或 Session"') &&
+    notebookBrowser.includes("localizedCaseInsensitiveContains"),
+    "the Notebook browser must search Notebook and Session titles"],
   [content.includes(".accessibilityLabel("), "explicit accessibility labels are required"],
   [content.includes("MathNotesTheme.canvas") && content.includes("MathNotesTheme.sidebar"), "semantic page colors are required"],
   [!content.includes("Color(red:"), "brand RGB values must stay in MathNotesTheme"],
@@ -159,8 +245,36 @@ const checks = [
     sourceBlockSection.includes("selectedText: selectionBinding"),
     "selection binding must belong to the editable source block view"],
   [reader.includes("baseRevision") && reader.includes("saveMarkdownBlock"), "controlled save must carry the base revision"],
-  [reader.includes(".fileImporter(") && reader.includes("importSessionImage"), "native image import must use the system picker and controlled API"],
+  [reader.includes(".fileImporter(") && reader.includes("importSessionEditedImage"), "native image import must use the system picker and controlled API"],
   [reader.includes("allowedContentTypes: [.pdf]") && reader.includes("importSessionPdf"), "native PDF import must use the system picker and controlled API"],
+  [reader.includes("PdfImportOptionsSheet") &&
+    reader.includes('case readOnly') && reader.includes('case recognizeSelected') && reader.includes('case recognizeAll') &&
+    reader.includes('case currentSession') && reader.includes('case newSession') &&
+    reader.includes('Text("2（推荐）").tag(2)') && reader.includes('Text("4").tag(4)'),
+    "native PDF import must expose read-only, page-range, all-page, destination, and bounded-concurrency choices"],
+  [reader.includes("renderPdfPagePNG") &&
+    reader.includes("stagePdfRecognitionPage") && reader.includes("startPdfRecognitionBatch") &&
+    localShellClient.includes('path: "local/v1/session/pdf-recognition/page"') &&
+    localShellClient.includes('path: "local/v1/session/pdf-recognition/start"'),
+    "selected PDF pages must be rendered locally, staged, and started through trusted Core routes"],
+  [!imageImportClientSection.includes("pageCount") &&
+    pdfImportClientSection.includes("pageCount: Int") &&
+    pdfImportClientSection.includes('URLQueryItem(name: "pageCount", value: String(pageCount))') &&
+    reader.includes("width: CGFloat(width)") && reader.includes("height: CGFloat(height)"),
+    "PDFKit page count and bitmap dimensions must stay attached to PDF import rather than image import"],
+  [reader.includes("pdfRecognitionBatchCard") &&
+    reader.includes('controlPdfRecognition("pause"') &&
+    reader.includes('controlPdfRecognition("resume"') &&
+    reader.includes('controlPdfRecognition("cancel"'),
+    "PDF recognition batches must expose progress plus pause, resume, and cancel controls"],
+  [reader.includes("manifest.blocks.filter(\\.renderInNote)"),
+    "the rendered note must include every visible block type, not Markdown alone"],
+  [localRouteSection.includes('path: "/local/v1/session/pdf-recognition/page", capability: "local.workspace.manage"') &&
+    localRouteSection.includes('path: "/local/v1/session/pdf-recognition/start", capability: "local.workspace.manage"') &&
+    !networkRouteSection.includes("/session/pdf-recognition") &&
+    pdfRecognitionBatch.includes("preparePdfBatch") && pdfRecognitionBatch.includes("currentConcurrency") &&
+    pdfRecognitionBatch.includes("pauseRequested") && pdfRecognitionBatch.includes("cancelRequested"),
+    "PDF batch recognition and its adaptive scheduler must remain on the trusted local host"],
   [reader.includes("isImportingImage") && reader.includes("ProgressView"), "image import must expose bounded progress feedback"],
   [reader.includes("RecognitionTaskSheet") && reader.includes("startRecognition"), "image blocks must expose the native recognition task sheet"],
   [reader.includes("afterSequence") && reader.includes("pollGeneration"), "recognition events must resume from a monotonic sequence"],
@@ -184,8 +298,9 @@ const checks = [
   [reader.includes('"重新识别这个块"') && reader.includes("rerunRecognition") &&
     localShellClient.includes("local/v1/session/recognition/rerun"),
     "transcription blocks must expose safe per-block re-recognition"],
-  [reader.includes("SessionAssistantPanel") && reader.includes("本轮实际喂给 AI") &&
-    reader.includes("第 42 块是什么"), "the native learning assistant must expose exact context and numbered-block semantics"],
+  [reader.includes("SessionAssistantPanel") && reader.includes("SessionAssistantScope") &&
+    reader.includes("第 42 块是什么") && !reader.includes('compactContextBudget\n            }'),
+    "the native AI conversation must keep exact scope semantics without exposing context-budget internals"],
   [reader.includes('"明确加入笔记正文"') && reader.includes("promoteSessionAssistant") &&
     reader.includes("deleteSessionAssistant"), "assistant remarks must stay independent until explicit promotion"],
   [localShellClient.includes("local/v1/session/assistant/preview") &&
@@ -225,13 +340,48 @@ const checks = [
     reader.includes('accessibilityIdentifier("session-preview-floating-actions")') &&
     reader.includes(".background(.ultraThinMaterial, in: Capsule())") &&
     reader.includes('Label("导出 Markdown"') &&
-    reader.includes('Label("导入图片"') &&
+    reader.includes('Label("编辑并插入图片"') &&
     reader.includes('Label("导入 PDF"'),
     "preview actions must use a compact floating cluster with complete labels inside its overflow menu"],
-  [app.includes('Window("学习助手", id: "session-assistant")') &&
+  [reader.includes("MacImageAnnotationEditor(") &&
+    reader.includes("prepareImageEdit") &&
+    reader.includes("commitImageEdit") &&
+    reader.includes("imageEditDraft") &&
+    imageEditor.includes('accessibilityIdentifier("mac-image-annotation-editor")'),
+    "Mac image import must open the native editor before committing a note block"],
+  [["case perspective", "case crop", "case lasso", "case pen", "case arrow"].every((token) => imageEditor.includes(token)) &&
+    imageEditor.includes('compactButton("左转"') &&
+    imageEditor.includes('compactButton("右转"') &&
+    imageEditor.includes('Label("应用当前操作"') &&
+    imageEditor.includes('Text(isApplying ? "正在保存…" : "插入图片")'),
+    "Mac image editor must expose Windows-equivalent perspective, crop, lasso, annotation, rotation, apply, and insert tools"],
+  [imageEditor.includes('CIFilter(name: "CIPerspectiveCorrection")') &&
+    imageEditor.includes("lassoCropped") &&
+    imageEditor.includes("annotated(image") &&
+    imageEditor.includes("CGImageDestinationCreateWithData") &&
+    imageEditor.includes("CGImageDestinationFinalize"),
+    "Mac image editor tools must render a real derived PNG rather than remain visual-only controls"],
+  [localShellClient.includes('path: "local/v1/session/image/edit"') &&
+    localShellClient.includes('contentType: "multipart/form-data; boundary=') &&
+    supervisor.includes("func importSessionEditedImage(") &&
+    macosSidecar.includes("importSessionEditedImage: (input) => sessionImageImporter.importEditedImage(input)"),
+    "edited image source, output, and metadata must flow through one authenticated local sidecar commit"],
+  [localRouteSection.includes('path: "/local/v1/session/image/edit", capability: "local.workspace.manage"') &&
+    !networkRouteSection.includes("/session/image/edit") &&
+    sessionImageImporter.includes("sourceAssetPath") &&
+    sessionImageImporter.includes("metadataPath") &&
+    sessionImageImporter.includes("assertValidImageTransformSidecar(sidecar)") &&
+    sessionImageImporter.includes("baseRevision !== sessionManifestRevision(session)"),
+    "edited image writes must remain local-only, revision-bound, original-preserving, and sidecar-audited"],
+  [imageEditingModels.includes("MacImageEditMetadata") &&
+    imageEditingModels.includes("contractOrder") &&
+    contractTests.includes("image operations were not contract ordered") &&
+    contractTests.includes("edited image multipart client contract"),
+    "Mac transform metadata and multipart transport must remain covered by the native contract"],
+  [app.includes('Window("与笔记对话", id: "session-assistant")') &&
     assistantWindow.includes("SessionAssistantPanel(") &&
     reader.includes(".dropDestination(for: String.self)") &&
-    reader.includes('.accessibilityLabel("关闭学习助手")') &&
+    reader.includes('.accessibilityLabel("关闭与笔记对话")') &&
     !reader.includes("AssistantResizableFrame") &&
     !reader.includes("isPresentingAssistant"),
     "the learning assistant must use an independent native window so the note remains interactive"],
@@ -290,11 +440,13 @@ const checks = [
     "block organization must be guarded while source drafts are dirty"],
   [reader.includes('Label("删除这个块", systemImage: "trash")') &&
     reader.includes("deleteSessionBlocks(") &&
-    reader.includes("onManifestChanged(updated)") &&
+    reader.includes("onBlockDeleted(response)") &&
     reader.includes('.alert("删除这个内容段？"') &&
+    reader.includes('accessibilityIdentifier("session-block-delete-undo")') &&
+    reader.includes('.keyboardShortcut("z", modifiers: .command)') &&
     !reader.includes("剩余编号立即按当前顺序重新排列") &&
     localShellClient.includes("local/v1/session/blocks/delete"),
-    "block deletion must use a stable user-facing alert and immediately apply the returned authoritative manifest"],
+    "block deletion must use a stable confirmation, immediately apply the manifest, and expose visible native undo"],
   [reader.includes('"首字 \\(formatDuration(firstOutputMs))"') &&
     reader.includes('"总耗时 \\(formatDuration(providerMs))"'),
     "recognition UI must expose measured first-output and provider duration"],
@@ -308,7 +460,9 @@ const checks = [
     "assistant and task panels must use close semantics instead of completion semantics"],
   [reader.includes("interactiveDismissDisabled"), "unsaved editor drafts must resist accidental dismissal"],
   [!reader.includes("DIRECT MARKDOWN"), "developer block labels must not appear in the reader"]
-  ,[app.includes("ProviderSettingsView") && content.includes("openSettings()") && content.includes("gearshape"), "native settings must be reachable from the toolbar"]
+  ,[app.includes("ProviderSettingsView") && content.includes("sidebarSettingsAction") &&
+    content.includes('Label("设置", systemImage: "gearshape")'),
+    "native settings must be directly reachable above recent reading in the sidebar"]
   ,[providerSettings.includes("Picker(\"界面外观\"") &&
     providerSettings.includes(".onChange(of: appearanceMode)") &&
     providerSettings.includes("saveReadingPreferences()") &&
@@ -322,7 +476,10 @@ const checks = [
     reader.includes(".frame(width: 44, height: 44)") &&
     reader.includes("MathNotesMaterialBackground(shape: Circle())"),
     "floating controls must keep a compact visual surface inside a full 44 point hit target"]
-  ,[providerSettings.includes("TabView") && providerSettings.includes("Label(\"通用\"") && providerSettings.includes("Label(\"诊断\""), "settings must separate general, reading, provider, and diagnostic categories"]
+  ,[providerSettings.includes("TabView") && providerSettings.includes("Label(\"通用\"") &&
+    providerSettings.includes("Label(\"编辑与阅读\"") &&
+    !providerSettings.includes('.tabItem { Label("诊断"'),
+    "ordinary settings must keep user categories while hiding developer diagnostics"]
   ,[providerSettings.includes("NSOpenPanel") && providerSettings.includes("applyNotesRoot") && providerSettings.includes("hasUnsavedSourceDrafts"), "notes root changes must use the system picker and unsaved-edit guard"]
   ,[macPreferences.includes("bookmarkData") && macPreferences.includes("withSecurityScope") && macPreferences.includes("DirectoryPreferenceSnapshot"), "directory preferences must use restorable security-scoped bookmarks"]
   ,[reader.includes("MacPreferenceKeys.sourceFont") && reader.includes("styledPreviewHTML"), "saved typography must reach both source and preview panes"]
@@ -331,9 +488,78 @@ const checks = [
     "temporary catalog loading or failure must not clear the currently open Session"]
   ,[providerSettings.includes("SecureField") && !providerSettings.includes("TextField(\"API 密钥"), "provider API key must use a secure field"]
   ,[keychain.includes("kSecClassGenericPassword") && keychain.includes("SecItemCopyMatching") && keychain.includes("SecItemUpdate"), "provider API key must use the system keychain"]
-  ,[supervisor.includes("Task.detached") && supervisor.includes("restoreProviderConfiguration"), "blocking keychain access and startup restore must stay off the main thread"]
+  ,[keychain.includes("kSecUseAuthenticationUI") && keychain.includes("kSecUseAuthenticationUISkip"), "automatic Keychain reads must never present a macOS authentication dialog"]
+  ,[!supervisorStartSection.includes("KeychainCredentialStore") &&
+    !supervisorStartSection.includes("CompanionHostCredential") &&
+    supervisor.includes("CompanionHostTokenStore()"),
+    "phone-host startup and token rotation must not depend on a legacy Keychain ACL"]
+  ,[supervisor.includes("Task.detached") && supervisor.includes("restoreProviderConfiguration") &&
+    !supervisorStartSection.includes("restoreProviderConfiguration") &&
+    !supervisorStartSection.includes("keychainAccount") &&
+    savedProviderMetadataSection.includes("ProviderPreferences.load") &&
+    !savedProviderMetadataSection.includes("KeychainCredentialStore") &&
+    !savedProviderMetadataSection.includes(".read("),
+    "app startup and saved-configuration labels must not read provider secrets from Keychain"]
   ,[providerPreferences.includes("UserDefaults") && !providerPreferences.includes("apiKey"), "UserDefaults may persist only non-secret provider settings"]
-  ,[content.includes("新建 Notebook") && content.includes("新建 Session") && content.includes("creationSheet"), "workspace creation must be available from the native toolbar"]
+  ,[content.includes("新建 Notebook") && content.includes("新建 Session") && content.includes("creationSheet") &&
+    notebookBrowser.includes("onCreateNotebook") && notebookBrowser.includes("onCreateSession"),
+    "workspace creation must be available from the native Notebook browser"]
+  ,[sidebarBodySection.includes("sidebarPhoneConnectionAction") &&
+    sidebarBodySection.includes("sidebarSettingsAction") &&
+    sidebarBodySection.includes("recentReadingSidebar") &&
+    sidebarBodySection.includes("notebookBrowserAction") &&
+    sidebarBodySection.indexOf("sidebarPhoneConnectionAction") < sidebarBodySection.indexOf("sidebarSettingsAction") &&
+    sidebarBodySection.indexOf("sidebarSettingsAction") < sidebarBodySection.indexOf("recentReadingSidebar") &&
+    sidebarBodySection.indexOf("recentReadingSidebar") < sidebarBodySection.indexOf("notebookBrowserAction") &&
+    !sidebarBodySection.includes("coreStatus"),
+    "the sidebar must present phone connection, Settings, recent reading, then Open Notebooks without developer core status"]
+  ,[content.includes('Text("连接手机")') && content.includes('Text("显示二维码，让 Android 扫码")') &&
+    content.includes('accessibilityIdentifier("sidebar-phone-connection")') && content.includes("PhoneConnectionSheet("),
+    "phone connection must be a prominent first-level sidebar action that opens a focused sheet"]
+  ,[phoneConnection.includes('accessibilityIdentifier("phone-pairing-qr")') &&
+    phoneConnection.includes("CompanionPairingQRCode.image") &&
+    phoneConnection.includes("challenge.pairingLink(") &&
+    phoneConnection.includes("alternateHosts: allPairingAddresses") &&
+    phoneConnection.includes("transport: endpoint.route.transport"),
+    "the focused phone sheet must render a real QR code for the selected LAN or Tailscale route"]
+  ,[phoneConnection.includes("正在准备手机连接") && phoneConnection.includes("正在生成二维码") &&
+    phoneConnection.includes("正在检测连接网络") && phoneConnection.includes("还没有可用的连接网络") &&
+    phoneConnection.includes("二维码只包含一次性配对信息"),
+    "the focused phone sheet must explain host startup, generation, no-network, and ready states"]
+  ,[phoneConnection.includes('accessibilityIdentifier("phone-connection-route-picker")') &&
+    phoneConnection.includes('case .tailnet: "Tailscale"') &&
+    phoneConnection.includes("tailnetAddress = try await coordinator.readIPv4Address()") &&
+    phoneConnection.includes("手机也需登录同一 Tailscale 网络"),
+    "the focused phone sheet must prefer a discovered Tailscale route while allowing an explicit LAN choice"]
+  ,[supervisorStartSection.includes("Task.sleep(for: .seconds(15))") &&
+    supervisorStartSection.includes('self.state = .failed("本机连接服务启动超时') &&
+    phoneConnection.includes('case let .failed(message)') &&
+    phoneConnection.includes('Button("重试")') &&
+    phoneConnection.includes('accessibilityIdentifier("phone-connection-failed")'),
+    "sidecar startup must time out into an actionable phone-connection failure instead of spinning forever"]
+  ,[phoneConnection.includes("ProviderSettingsSection.select(.companion)") &&
+    providerSettings.includes("TabView(selection: selectedSection)") &&
+    providerSettings.includes(".tag(ProviderSettingsSection.companion)"),
+    "more connection settings must deep-link directly to the Device Connection tab"]
+  ,[/recentReadingSidebar\s*\.frame\(maxWidth: \.infinity, maxHeight: \.infinity\)/.test(sidebarBodySection),
+    "local, remote, loading, empty, and failure states must all keep the sidebar at full height"]
+  ,[content.includes('Label("打开 Notebooks", systemImage: "folder")') &&
+    content.includes("MacNotebookBrowser(") &&
+    notebookBrowser.includes('Image(systemName: "folder.fill")') &&
+    notebookBrowser.includes("LazyVGrid") &&
+    content.includes("beginCreationAfterBrowserDismiss") &&
+    content.includes("await Task.yield()"),
+    "Notebook selection must use a dedicated large-folder browser"]
+  ,[notebookBrowser.includes(".onHover") && notebookBrowser.includes(".popover(") &&
+    notebookBrowser.includes("loadPreview") && notebookBrowser.includes("fetchSessionManifest") &&
+    notebookBrowser.includes("companionReader.loadDocument"),
+    "hovering a Session must preview rendered source for local and connected-computer notes"]
+  ,[recentReading.includes("mathnotes.recent-reading.v1") &&
+    recentReading.includes("maximumStoredCount = 24") &&
+    recentReading.includes("sidebarCount = 4") &&
+    recentReading.includes("entries.filter { $0.id != next.id }") &&
+    content.includes("MacRecentReadingStore.recording"),
+    "recent reading must be bounded, deduplicated, persisted, and updated on open"]
   ,[providerSettings.includes("Label(\"设备连接\"") && providerSettings.includes("SecureField") && providerSettings.includes("检查连接"), "macOS settings must expose a secure Companion connection workflow"]
   ,[providerSettings.includes("GroupBox(\"本机作为主机\")") && providerSettings.includes("设备连接服务运行中"), "macOS settings must expose its own Companion host status"]
   ,[providerSettings.includes("GroupBox(\"连接其他 MathNotes 主机\")"), "macOS settings must keep remote-host client configuration separate"]
@@ -347,14 +573,23 @@ const checks = [
   ,[providerSettings.includes("DisclosureGroup(\"更换长期配对令牌\")") && providerSettings.includes("PWA / 手填连接令牌"), "the long-lived host token must be visible only on demand while token rotation remains collapsed"]
   ,[companionLanPairing.includes("NWPathMonitor") && companionLanPairing.includes("getifaddrs") && companionLanPairing.includes("isRFC1918"), "LAN address discovery must be read-only, path-aware, and limited to RFC1918 addresses"]
   ,[companionLanPairing.includes("CIQRCodeGenerator") && companionLanPairing.includes('URLQueryItem(name: "v", value: "2")') && !companionLanPairing.includes('URLQueryItem(name: "token"'), "LAN QR must use the Android v2 one-time challenge without the legacy token"]
+  ,[companionLanPairing.includes('case tailnetHTTP = "tailnet_http"') && companionLanPairing.includes("transport.rawValue") &&
+    companionHostAutomation.includes('arguments: ["ip", "-4"]') && companionHostAutomation.includes("isTailnetIPv4"),
+    "Mac Tailscale QR discovery must be read-only and reuse the Android tailnet_http pairing contract"]
   ,[nativeContract.includes('"CompanionLanPairing.swift"'), "the Apple native contract must compile the LAN pairing helpers"]
   ,[!providerSettings.includes("title: \"本机地址\"") && !providerSettings.includes("旧版长期令牌"), "the host UI must not present internal or legacy-labelled values as phone inputs"]
   ,[providerSettings.includes("不会开启 Mac 互联网共享") && providerSettings.includes("不会启用 Funnel") && providerSettings.includes("若 macOS 询问是否允许传入连接"), "host guidance must state the exact local-network and manual-firewall boundary"]
-  ,[companionHostAutomation.includes('arguments: ["serve", "status", "--json"]') && companionHostAutomation.includes('arguments: ["serve", "--bg", Self.expectedProxy]'), "Mac startup must inspect Serve first and only create the expected missing mapping"]
+  ,[companionHostAutomation.includes('arguments: ["serve", "status", "--json"]') &&
+    !companionHostAutomation.includes('arguments: ["serve", "--bg"') &&
+    providerSettings.includes('Button("检查已有 Tailscale 地址")') &&
+    !supervisorStartSection.includes("inspectCompanionServe"),
+    "Mac startup must not invoke or mutate Tailscale; an explicit Settings action may inspect existing Serve state"]
   ,[companionHostAutomation.includes("case .conflict") && companionHostAutomation.includes("throw CompanionHostAutomationError.serveConflict"), "existing conflicting Serve or Funnel configuration must stop automatic mutation"]
-  ,[companionHostAutomation.includes("/opt/homebrew/bin/tailscale") && companionHostAutomation.includes("/Applications/Tailscale.app/Contents/MacOS/Tailscale"), "automatic setup must locate both CLI and packaged Mac Tailscale installations"]
+  ,[companionHostAutomation.includes("/opt/homebrew/bin/tailscale") && companionHostAutomation.includes("/Applications/Tailscale.app/Contents/MacOS/Tailscale"), "read-only discovery must locate both CLI and packaged Mac Tailscale installations"]
   ,[companionHostAutomation.includes('environment["TAILSCALE_BE_CLI"] = "1"'), "packaged macOS Tailscale must be forced into documented CLI mode"]
-  ,[supervisor.includes("self.reconcileCompanionServe()") && supervisor.includes("@Published private(set) var companionPublicOrigin"), "sidecar readiness must automatically reconcile and publish the stable Tailscale origin"]
+  ,[supervisor.includes("func inspectCompanionServe()") && supervisor.includes("@Published private(set) var companionPublicOrigin") &&
+    providerSettings.includes("不会自动配置 Tailscale"),
+    "an explicit read-only inspection may publish an existing Tailscale origin without startup-side network mutation"]
   ,[providerSettings.includes('SecureField("新配对令牌"') && providerSettings.includes('SecureField("再次输入新令牌"') && providerSettings.includes("updateCompanionHostToken"), "custom host tokens must require masked double entry and a controlled restart"]
   ,[companionHostAutomation.includes("minimumLength = 16") && companionHostAutomation.includes("maximumLength = 128") && companionHostAutomation.includes("^[A-Za-z0-9._~-]+$"), "custom host tokens must keep the shared safe-token contract"]
   ,[supervisor.includes("@Published private(set) var companionHost") && supervisor.includes("ready.companionHost") && supervisor.includes("createCompanionPairingChallenge"), "sidecar readiness and the trusted local shell must drive local host pairing UI state"]
@@ -375,13 +610,18 @@ const checks = [
   ,[reader.includes("fetchMarkdownConflict") && reader.includes("resolveMarkdownConflict"), "the native shell must use shared Core conflict APIs"]
   ,[contractTests.includes("JSONSerialization.data(withJSONObject: eventPayload)"), "recognition event fixtures must use structured JSON serialization"]
   ,[providerPreferences.includes("ProviderPurpose") && providerPreferences.includes("assistant.settings.v1") && !providerPreferences.includes("let apiKey"), "recognition and dialogue provider preferences must stay independent and secret-free"]
-  ,[supervisor.includes("assistantProviderStatus") && supervisor.includes("restoreProviderConfiguration(.assistant") && supervisor.includes("keychainAccount"), "Mac assistant calls must restore an independent keychain-backed dialogue provider"]
-  ,[providerSettings.includes('GroupBox("学习助手对话")') && providerSettings.includes("恢复继承识别模型") && providerSettings.includes("保存对话模型"), "Mac settings must expose an independent dialogue model with recognition fallback"]
+  ,[supervisor.includes("assistantProviderStatus") &&
+    supervisor.includes("providerConnection(.assistant)") &&
+    supervisor.includes("ProviderPreferences.load(.assistant) == nil") &&
+    supervisor.includes("try await ensureProviderConfiguration(.recognition") &&
+    supervisor.includes("keychainAccount"),
+    "Mac assistant calls must lazily restore an independent keychain-backed model with recognition fallback"]
+  ,[providerSettings.includes('GroupBox("与笔记对话")') && providerSettings.includes("恢复继承识别模型") && providerSettings.includes("保存对话模型"), "Mac settings must expose an independent dialogue model with recognition fallback"]
   ,[providerPreferences.includes('case deepSeek = "deepseek"') && providerPreferences.includes("options(for purpose:") && providerPreferences.includes("supportsRecognition"), "Mac provider presets must include DeepSeek for dialogue without advertising it for recognition"]
   ,[providerSettings.includes('GroupBox("识别提示词模板")') && providerSettings.includes('GroupBox("领域记号基准")') && providerSettings.includes("只有已批准规则会进入识别上下文"), "Mac settings must expose prompt templates and approved notation rules"]
   ,[aiGuidanceModels.includes("MacPromptTemplateConfig") && aiGuidanceModels.includes("MacNotationProfileConfig") && localShellClient.includes("local/v1/ai/notation-preview") && supervisor.includes("saveNotationProfiles"), "Mac AI guidance must use the trusted Core contract rather than local-only decorative state"]
   ,[macPreferences.includes("assistantFontSize") && providerSettings.includes('Text("AI 回答")') && reader.includes("styledAssistantHTML"), "Mac settings must apply answer font and size to stored and live assistant output"]
-  ,[app.includes('Window("学习助手", id: "session-assistant")') && app.includes(".windowResizability(.contentMinSize)") && app.includes(".windowStyle(.hiddenTitleBar)"), "Mac assistant must use an independent resizable window with one MathNotes title layer"]
+  ,[app.includes('Window("与笔记对话", id: "session-assistant")') && app.includes(".windowResizability(.contentMinSize)") && app.includes(".windowStyle(.hiddenTitleBar)"), "Mac assistant must use an independent resizable window with one MathNotes title layer"]
   ,[assistantWindow.includes("AssistantWindowChromeConfigurator") && assistantWindow.includes(".fullSizeContentView") && assistantWindow.includes("titlebarSeparatorStyle = .none") && assistantWindow.includes(".ignoresSafeArea(.container, edges: .top)") && assistantWindow.includes("performDrag(with: event)") && reader.includes("AssistantWindowDragSurface"), "Mac assistant custom header must fill and move the independent window without a duplicate native title strip or replacing native edge resizing"]
   ,[reader.includes("activitySequence") &&
     reader.includes("waitMilliseconds: shouldLongPoll ? 20_000 : 0") &&
@@ -408,10 +648,10 @@ const checks = [
     reader.includes("if let replacingProposalID") &&
     reader.includes("cancelSelectionEdit(session, proposalId: replacingProposalID)"),
     "regenerating an AI candidate must supersede and cancel the previous proposal"]
-  ,[selectionEditSheetSection.includes('Button("应用修改")') &&
-    reader.includes("先生成候选并比较；只有点击“应用修改”才会写入笔记。") &&
-    reader.includes("supervisor.applySelectionEdit(session, proposalId: proposal.id)") &&
-    reader.includes("workspace.applyAISelectionEdit(response.result.block)") &&
+  ,[selectionEditSheetSection.includes('Button(requiresUnlock ? "重试" : "应用修改")') &&
+    selectionEditSheetSection.includes("原文不会自动改变；确认修改后才会写入笔记。") &&
+    reader.includes("replacementMarkdown: replacementMarkdown") &&
+    reader.includes("sourceWorkspace.applyAISelectionEdit(response.result.block)") &&
     localShellClient.includes("local/v1/session/selection-edit/apply"),
     "AI replacements must require explicit apply and write through the shared apply route"]
   ,[selectionEditSheetSection.includes('Button("取消")') &&
@@ -420,9 +660,76 @@ const checks = [
     localShellClient.includes("local/v1/session/selection-edit/cancel"),
     "AI selection edits must expose explicit cancellation of the current proposal"]
   ,[selectionEditSheetSection.includes("Keep the proposal visible so a revision conflict never destroys the user's candidate.") &&
-    selectionEditSheetSection.includes('.interactiveDismissDisabled(proposal?.status == "pending")') &&
+    selectionEditSheetSection.includes(".interactiveDismissDisabled(true)") &&
     reader.includes("原笔记没有被覆盖。请选择明确结果，冲突证据会继续保留。"),
     "apply conflicts must keep the AI proposal and original note evidence intact"]
+  ,[assistantWindow.includes("SessionAssistantSelectionEditContext") &&
+    reader.includes("selectionEditContext: SessionAssistantSelectionEditContext?") &&
+    reader.includes("MacSelectionEditWorkspace(") &&
+    reader.includes("isEditingSelection = true") &&
+    !reader.includes(".sheet(item: $selectionEditDraft)"),
+    "AI selection editing must stay inside the independent conversation window"]
+  ,[selectionEditSheetSection.indexOf('title: "原文"') < selectionEditSheetSection.indexOf('Text("修改后")') &&
+    selectionEditSheetSection.includes("TextEditor(text: $replacementMarkdown)") &&
+    selectionEditSheetSection.includes("可以继续编辑") &&
+    !selectionEditSheetSection.includes("UTF-16") &&
+    !selectionEditSheetSection.includes("providerName"),
+    "selection editing must show a vertical original-to-editable-result comparison without developer metadata"]
+  ,[localShellClient.includes("replacementMarkdown: String? = nil") &&
+    localShellClient.includes("retryAfterUnlock: Bool = false") &&
+    localShellServer.includes("replacementMarkdown: body.replacementMarkdown") &&
+    localShellServer.includes("retryAfterUnlock: body.retryAfterUnlock") &&
+    localShellServer.includes("optionalBoundedText(body.replacementMarkdown, 12_000)") &&
+    localShellServer.includes('typeof body.retryAfterUnlock === "boolean"') &&
+    supervisor.includes("retryAfterUnlock: retryAfterUnlock") &&
+    selectionEditSheetSection.includes("isSelectionEditLockConflict") &&
+    selectionEditSheetSection.includes('Button("去解锁")') &&
+    selectionEditSheetSection.includes("修改候选会保留") &&
+    reader.includes("revealSelectionLock") &&
+    reader.includes("[weak sourceWindow]") &&
+    reader.includes("sourceWindow?.makeKeyAndOrderFront(nil)"),
+    "locked AI writes must retain the candidate, reveal the source lock, and retry explicitly after unlock"]
+  ,[sidecarProtocol.includes("struct SessionAssistantRelatedSource") &&
+    sidecarProtocol.includes("let relatedSources: [SessionAssistantRelatedSource]?") &&
+    reader.includes("assistantSourceLinks(") &&
+    reader.includes('Text("Notebook：\\(source.notebookTitle) · Session：\\(source.sessionTitle)")') &&
+    !reader.includes('Text("[\\(source.refId)]') &&
+    reader.includes("onOpenRelatedSource(source)") &&
+    content.includes("private func openRelatedSource") &&
+    content.includes("requestSessionSelection(session)"),
+    "cross-Notebook AI references must be visible and navigate to the exact source Session"]
+  ,[reader.includes('Image(systemName: isLocked ? "lock.fill" : "lock.open")') &&
+    reader.includes('accessibilityLabel(isLocked ? "解除固定" : "固定这个内容段")'),
+    "whole-block lock and unlock must stay visible and keyboard-accessible in the source header"]
+  ,[selectionEditBlockSection.includes('isUnlocking ? "解除固定" : "固定选区"') &&
+    selectionEditBlockSection.includes("selectionTargetsProtectedSpan") &&
+    selectionEditBlockSection.includes("private func updateProtectedSpan") &&
+    selectionEditBlockSection.includes("workspace.isDirty(blockID: manifest.id)") &&
+    selectionEditBlockSection.includes("supervisor.protectMarkdownSelection(") &&
+    selectionEditBlockSection.includes("supervisor.unlockMarkdownProtectedSelection(") &&
+    selectionEditBlockSection.includes('workspace.setSelection("", range: nil, blockID: manifest.id)'),
+    "Mac protected-span controls must choose one minimal action, require a saved exact selection, and clear stale selection after success"]
+  ,[localShellClient.includes('action: "protect"') &&
+    localShellClient.includes('action: "unlock"') &&
+    localShellClient.includes('path: "local/v1/session/block/span/\\(action)"') &&
+    localShellClient.includes("baseRevision: baseRevision") &&
+    localShellClient.includes("from: selection.from") &&
+    localShellClient.includes("to: selection.to") &&
+    localShellClient.includes("selectedText: selection.selectedText"),
+    "Mac protected-span writes must carry the exact UTF-16 selection and base revision through the loopback contract"]
+  ,[localRouteSection.includes('path: "/local/v1/session/block/span/protect", capability: "local.workspace.manage"') &&
+    localRouteSection.includes('path: "/local/v1/session/block/span/unlock", capability: "local.workspace.manage"') &&
+    !networkRouteSection.includes("/session/block/span/") &&
+    macosSidecar.includes("protectSessionBlockSpan: (input) => sessionEditor.protectMarkdownSelection(input)") &&
+    macosSidecar.includes("unlockSessionBlockSpan: (input) => sessionEditor.unlockMarkdownProtectedSelection(input)"),
+    "protect and unlock authority must remain on the trusted local host and never enter paired-device network routes"]
+  ,[sessionEditService.includes("const spanId = `lock_${randomUUID()}`") &&
+    sessionEditService.includes("const contentHash = sha256Text(input.selection.selectedText)") &&
+    sessionEditService.includes("input.baseRevision !== currentRevision") &&
+    sessionEditService.includes('lock.kind === "span" && lock.id === span.id') &&
+    sessionEditService.includes("span.contentHash !== registeredLock.contentHash") &&
+    sessionEditService.includes("locks: remainingLocks"),
+    "Core must own protected-span identities, hashes, revision checks, registered-lock verification, and preservation of every other lock"]
   ,[selectionEditor.includes("let shouldRegisterAIUndo = context.coordinator.externalEditEpoch != externalEditEpoch") &&
     selectionEditor.includes("applyUndoableExternalText") &&
     selectionEditor.includes("textView.undoManager?.registerUndo") &&
@@ -443,6 +750,37 @@ const checks = [
     reader.includes("这个内容段已固定") &&
     reader.includes('Label("用 AI 修改选中文字"'),
     "AI selection editing must be disabled for whole-block locked content and fall back to fixed read-only text"]
+  ,[providerSettings.includes('GroupBox("笔记备份")') &&
+    providerSettings.includes('Label("备份笔记…", systemImage: "externaldrive.badge.plus")') &&
+    providerSettings.includes("editingState.hasUnsavedSourceDrafts") &&
+    providerSettings.includes("startAccessingSecurityScopedResource"),
+    "Mac settings must expose one native backup action and never snapshot unsaved source drafts"]
+  ,[localShellClient.includes('path: "local/v1/notes/backup"') &&
+    supervisor.includes("func createNotesBackup(destinationParentDir:") &&
+    macosSidecar.includes("createNotesBackup: (input) => createNotesBackup({"),
+    "Mac backup must flow through the authenticated sidecar instead of copying notes in the UI process"]
+  ,[localRouteSection.includes('path: "/local/v1/notes/backup", capability: "local.filesystem.manage"') &&
+    !networkRouteSection.includes("/notes/backup") &&
+    notesBackup.includes('const sourceNotebooksDir = path.join(notesRootDir, "notebooks")') &&
+    notesBackup.includes("containsProviderSecrets: false") &&
+    notesBackup.includes("备份拒绝符号链接"),
+    "notes backup must remain local-only, secrets-free, hash-manifested, and resistant to link traversal"]
+  ,[localShellClient.includes('path: "local/v1/session/blocks/restore"') &&
+    localShellClient.includes("baseRevision: baseRevision") &&
+    supervisor.includes("func restoreSessionBlocks(") &&
+    reader.includes("pending.manifest.revision") &&
+    reader.includes("pending.undo.deletionId"),
+    "Mac delete undo must carry the opaque deletion receipt and exact post-delete revision through Core"]
+  ,[localRouteSection.includes('path: "/local/v1/session/blocks/restore", capability: "local.workspace.manage"') &&
+    !networkRouteSection.includes("/session/blocks/restore") &&
+    macosSidecar.includes("sessionBlockOrganizer.restoreDeleted(input)"),
+    "block restore authority must remain on the trusted local host and outside paired-device routes"]
+  ,[sessionBlockOrganizer.includes('resolve(trashRoot, "delete.json")') &&
+    sessionBlockOrganizer.includes("sessionManifestRevision(stored.session)") &&
+    sessionBlockOrganizer.includes("locks: [...stored.session.locks, ...snapshot.locks]") &&
+    sessionBlockOrganizer.includes('SessionBlockOrganizeError("undo_conflict", 409)') &&
+    sessionBlockOrganizer.includes("await rm(trashRoot, { recursive: true, force: true })"),
+    "Core delete undo must be recoverable, revision-bound, lock-preserving, conflict-safe, and one-shot"]
   ,[!unsafeRawRecognitionEvent, "Markdown headings must not terminate single-hash Swift raw JSON fixtures"]
 ];
 
