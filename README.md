@@ -64,6 +64,8 @@ npm run build:android
 
 macOS 原生端必须在真实 Apple silicon Mac 与完整 Xcode 上构建：
 
+在 Mac 上接手开发或排查“连接手机”启动失败，请先读 [Mac 本地开发](apps/macos/DEVELOPMENT.md) 和 [Mac Codex 接手说明](apps/macos/CODEX_HANDOFF.md)。应克隆整个仓库；Swift 界面依赖共享 Core、协议与 PWA，不能只复制 `apps/macos`。
+
 ```bash
 npm ci
 npm run test:macos:native-package

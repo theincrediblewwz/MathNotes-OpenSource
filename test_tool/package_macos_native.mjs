@@ -4,6 +4,7 @@ import { access, chmod, copyFile, cp, mkdir, readFile, rm, stat, writeFile } fro
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { macosBuildRevision } from "./macos_build_info.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputRoot = path.join(projectRoot, "output", "macos-native");
@@ -16,7 +17,8 @@ const pwaPath = path.join(resourcesPath, "MathNotesPWA");
 const releaseRoot = path.join(projectRoot, "output", "releases");
 const rootPackage = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
 const version = rootPackage.version;
-const archiveName = `MathNotes-macOS-native-arm64-${version}-unsigned.zip`;
+const buildRevision = macosBuildRevision(projectRoot);
+const archiveName = `MathNotes-macOS-native-arm64-${version}-${buildRevision}-unsigned.zip`;
 const archivePath = path.join(releaseRoot, archiveName);
 
 if (process.platform !== "darwin") {
@@ -93,6 +95,7 @@ console.log(`MACOS_NATIVE_EXECUTABLE_BYTES_AFTER_STRIP=${executableBytesAfterStr
 console.log(`MACOS_NATIVE_NODE_BYTES_BEFORE_STRIP=${nodeBytesBeforeStrip}`);
 console.log(`MACOS_NATIVE_NODE_BYTES_AFTER_STRIP=${nodeBytesAfterStrip}`);
 console.log(`MACOS_NATIVE_PACKAGED_NODE_VERSION=${packagedNodeVersion}`);
+console.log(`MACOS_NATIVE_BUILD_REVISION=${buildRevision}`);
 
 async function createIcon(targetResourcesPath) {
   const source = path.join(projectRoot, "apps", "windows", "assets", "mathnotes.png");
@@ -146,6 +149,7 @@ function infoPlist(appVersion) {
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${appVersion}</string>
   <key>CFBundleVersion</key><string>${appVersion}</string>
+  <key>MathNotesBuildRevision</key><string>${buildRevision}</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSAppTransportSecurity</key>

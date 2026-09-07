@@ -6,6 +6,8 @@ node_modules-*-link/
 .worktrees/
 
 # Build outputs
+.build/
+.swiftpm/
 dist/
 build/
 out/

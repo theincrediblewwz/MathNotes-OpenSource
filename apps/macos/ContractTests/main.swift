@@ -3,6 +3,16 @@ import Foundation
 var failures: [String] = []
 var checks = 0
 
+let packagedVersion = MacAppVersion(info: [
+    "CFBundleShortVersionString": "0.3.1",
+    "CFBundleVersion": "0.3.1",
+    "MathNotesBuildRevision": "abc123456789"
+])
+check(packagedVersion.version == "0.3.1", "settings version must come from the installed bundle")
+check(packagedVersion.build == "abc123456789", "same-version packages must expose their source build")
+check(packagedVersion.copyText.contains("abc123456789"), "copied version must identify the build")
+check(MacAppVersion(info: [:]).version == "开发版本", "development runs must not pretend to be a release")
+
 struct TestFailure: Error {}
 
 func check(_ condition: @autoclosure () -> Bool, _ message: String) {
