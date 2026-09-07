@@ -950,6 +950,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   color: var(--green);
 }
 .capture-editor-tools button.danger { color: var(--red); }
+.capture-editor { display:flex;flex-direction:column;border-radius:20px; }
+.capture-editor-image-workspace { position:relative;min-height:0;flex:1;overflow:auto; }
+.capture-edit-canvas-stage { position:relative;height:min(46dvh,460px);min-height:190px;background:#20221f; }
+.capture-edit-canvas-stage canvas { display:block;width:100%;height:100%;touch-action:none; }
+.capture-canvas-message { position:absolute;inset:40% 20px auto;text-align:center;color:#fff;pointer-events:none; }
+.capture-edit-hint { min-height:36px;padding:7px 12px;display:flex;gap:12px;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted); }
+.capture-edit-hint label { display:flex;align-items:center;gap:6px;white-space:nowrap; }
+.capture-edit-hint input { width:90px;accent-color:var(--green); }
+.capture-edit-hint button { flex:none;padding:8px 12px;border:1px solid var(--line);border-radius:12px;background:var(--green-soft);color:var(--green); }
+.capture-editor .capture-editor-tools button { border-radius:12px;min-height:42px; }
+.capture-editor-pagination { display:flex;justify-content:center;gap:10px;padding:0 12px 6px; }
+.capture-editor-pagination button { position:static;width:42px;height:32px;transform:none;border-radius:12px;background:var(--paper);color:var(--ink);border:1px solid var(--line); }
+.capture-editor button:disabled { opacity:.5;cursor:wait; }
 .capture-editor-thumbnails {
   display: flex;
   gap: 8px;

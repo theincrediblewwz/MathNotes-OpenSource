@@ -7,7 +7,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const outputRoot = path.join(projectRoot, "output", "pwa-companion");
 const stageRoot = path.join(outputRoot, "stage");
 const siteRoot = path.join(stageRoot, "site");
-const rootPackage = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
+const pwaPackage = JSON.parse(await readFile(path.join(projectRoot, "apps/pwa/package.json"), "utf8"));
 
 await rm(outputRoot, { recursive: true, force: true });
 await mkdir(stageRoot, { recursive: true });
@@ -29,8 +29,8 @@ files.sort((left, right) => left.path.localeCompare(right.path, "en"));
 
 await writeFile(path.join(stageRoot, "artifact-manifest.json"), `${JSON.stringify({
   schemaVersion: 1,
-  product: "MathNotes PWA Read-only Companion",
-  packageVersion: rootPackage.version,
+  product: "MathNotes PWA Companion",
+  packageVersion: pwaPackage.version,
   generatedFrom: "apps/pwa/dist",
   deploymentRoot: "site",
   manifestScope: "payload files only; artifact-manifest.json is excluded",

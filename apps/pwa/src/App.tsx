@@ -16,7 +16,6 @@ import {
   QrCode,
   RefreshCw,
   RotateCcw,
-  RotateCw,
   Search,
   Settings2,
   Trash2,
@@ -41,12 +40,13 @@ import { readPwaCapabilities } from "./capabilities";
 import { retainAvailableSelection, sameTarget } from "./catalogSelection";
 import {
   applyCaptureEdit,
+  applyCapturePerspective,
   createCaptureThumbnail,
   DEFAULT_CAPTURE_EDIT,
-  rotateCapture,
-  type CaptureCrop,
   type CaptureEdit
 } from "./captureEditing";
+import { CaptureImageEditor } from "./CaptureImageEditor";
+import pwaPackage from "../package.json";
 import { createClientId } from "./clientId";
 import type {
   CachedAsset,
@@ -84,7 +84,7 @@ const LEGACY_HOST_CAPABILITIES: CompanionHostCapabilities = {
   recognitionStatus: false,
   recognitionRetry: false
 };
-const PWA_BUILD_LABEL = "2026.09.01.1";
+const PWA_BUILD_LABEL = pwaPackage.version;
 
 export default function App() {
   const [booting, setBooting] = useState(true);
@@ -1278,7 +1278,8 @@ export function CapturePanel({
     setIsPreparingBatch(true);
     setCaptureError("");
     try {
-      const edited = await Promise.all(captureDrafts.map((draft) => applyCaptureEdit(draft.file, draft.edit)));
+      const edited: File[] = [];
+      for (const draft of captureDrafts) edited.push(await applyCaptureEdit(draft.file, draft.edit));
       await onFiles(edited, "image", target);
       setCaptureDrafts([]);
       setCaptureDraftIndex(0);
@@ -1310,7 +1311,7 @@ export function CapturePanel({
               {presentation === "page" ? <div className="browser-camera-message">
                 <Camera size={38} />
                 <strong>使用系统相机拍摄</strong>
-                <small>打开厂商相机完成取景、防抖与对焦，返回后照片会立即进入当前批次。</small>
+                <small>由手机选择可用相机；也可以先用手机原相机拍摄，再从相册导入。</small>
               </div> : null}
               <div className="target-pickers camera-target-pickers">
                 <label>
@@ -1524,6 +1525,9 @@ export function CapturePanel({
         onEdit={(id, edit) => {
           setCaptureDrafts((current) => current.map((draft) => draft.id === id ? { ...draft, edit } : draft));
         }}
+        onReplaceFile={(id, file) => {
+          setCaptureDrafts(current => current.map(draft => draft.id === id ? { ...draft, file, edit: DEFAULT_CAPTURE_EDIT } : draft));
+        }}
         onDelete={(id) => {
           setCaptureDrafts((current) => current.filter((draft) => draft.id !== id));
           setCaptureDraftIndex((current) => Math.max(0, current - 1));
@@ -1556,6 +1560,7 @@ export function CaptureBatchEditor({
   isPreparing,
   onActiveIndex,
   onEdit,
+  onReplaceFile,
   onDelete,
   onCaptureMore,
   onCancel,
@@ -1568,76 +1573,72 @@ export function CaptureBatchEditor({
   isPreparing: boolean;
   onActiveIndex(index: number): void;
   onEdit(id: string, edit: CaptureEdit): void;
+  onReplaceFile?(id: string, file: File): void;
   onDelete(id: string): void;
   onCaptureMore(): void;
   onCancel(): void;
   onConfirm(): void;
 }) {
   const active = drafts[activeIndex] ?? drafts[0];
-  const previewUrl = useBlobUrl(active?.file);
+  const [applyingPerspective, setApplyingPerspective] = useState(false);
+  const [workingError, setWorkingError] = useState("");
+  const busy = isPreparing || applyingPerspective;
   if (!active) return null;
-  const setCrop = (crop: CaptureCrop) => onEdit(active.id, { ...active.edit, crop });
 
   return (
     <div className="capture-editor-layer" role="dialog" aria-modal="true" aria-label="素材预览与拍后编辑">
       <div className="capture-editor">
         <header>
-          <button type="button" onClick={onCancel} aria-label="关闭素材预览"><X size={20} /></button>
+          <button type="button" onClick={onCancel} disabled={busy} aria-label="关闭素材预览"><X size={20} /></button>
           <span>
             <strong>素材预览与编辑</strong>
             <small>{target.notebookTitle} / {target.title} · {activeIndex + 1}/{drafts.length}</small>
           </span>
-          <button type="button" onClick={onCaptureMore} disabled={isPreparing}>
+          <button type="button" onClick={onCaptureMore} disabled={busy}>
             <Camera size={18} />继续拍
           </button>
         </header>
 
-        <div className={`capture-editor-preview crop-${active.edit.crop}`}>
-          {previewUrl && (
-            <img
-              src={previewUrl}
-              alt={`待上传照片 ${activeIndex + 1}`}
-              style={{ transform: `rotate(${active.edit.rotation}deg)` }}
-            />
-          )}
+        <div className="capture-editor-image-workspace">
+          <CaptureImageEditor
+            key={active.id}
+            file={active.file}
+            edit={active.edit}
+            disabled={busy}
+            onEdit={edit => onEdit(active.id, edit)}
+            onBake={async () => {
+              if (!onReplaceFile) return false;
+              setApplyingPerspective(true); setWorkingError("");
+              try { onReplaceFile(active.id, await applyCaptureEdit(active.file, active.edit)); return true; }
+              catch (cause) { setWorkingError(userMessage(cause, "当前裁剪未能应用，请重试。")); return false; }
+              finally { setApplyingPerspective(false); }
+            }}
+            onPerspective={async corners => {
+              if (!onReplaceFile) return;
+              setApplyingPerspective(true); setWorkingError("");
+              try { onReplaceFile(active.id, await applyCapturePerspective(active.file, active.edit, corners)); }
+              catch (cause) { setWorkingError(userMessage(cause, "透视校正未完成，请重试。")); }
+              finally { setApplyingPerspective(false); }
+            }}
+          />
           {drafts.length > 1 && (
-            <>
+            <div className="capture-editor-pagination">
               <button
                 className="capture-editor-previous"
                 type="button"
+                disabled={busy}
                 onClick={() => onActiveIndex((activeIndex - 1 + drafts.length) % drafts.length)}
                 aria-label="上一张"
               ><ChevronLeft size={25} /></button>
               <button
                 className="capture-editor-next"
                 type="button"
+                disabled={busy}
                 onClick={() => onActiveIndex((activeIndex + 1) % drafts.length)}
                 aria-label="下一张"
               ><ChevronRight size={25} /></button>
-            </>
+            </div>
           )}
-        </div>
-
-        <div className="capture-editor-tools" aria-label="照片编辑工具">
-          <button type="button" onClick={() => onEdit(active.id, rotateCapture(active.edit, "left"))}>
-            <RotateCcw size={18} />左转
-          </button>
-          <button type="button" onClick={() => onEdit(active.id, rotateCapture(active.edit, "right"))}>
-            <RotateCw size={18} />右转
-          </button>
-          {(["original", "4:3", "square"] as const).map((crop) => (
-            <button
-              key={crop}
-              type="button"
-              className={active.edit.crop === crop ? "active" : ""}
-              onClick={() => setCrop(crop)}
-            >
-              {crop === "original" ? "原图" : crop === "square" ? "方形" : "4:3"}
-            </button>
-          ))}
-          <button className="danger" type="button" onClick={() => onDelete(active.id)}>
-            <Trash2 size={18} />删除
-          </button>
         </div>
 
         <div className="capture-editor-thumbnails" aria-label="本次拍摄">
@@ -1646,19 +1647,20 @@ export function CaptureBatchEditor({
               key={draft.id}
               draft={draft}
               active={index === activeIndex}
-              onClick={() => onActiveIndex(index)}
+              onClick={() => { if (!busy) onActiveIndex(index); }}
             />
           ))}
-          <button className="capture-more-thumbnail" type="button" onClick={onCaptureMore} aria-label="继续拍一张">
+          <button className="capture-more-thumbnail" type="button" onClick={onCaptureMore} disabled={busy} aria-label="继续拍一张">
             <Camera size={20} />
           </button>
+          <button className="danger" type="button" disabled={busy} onClick={() => onDelete(active.id)} aria-label="删除当前照片"><Trash2 size={18} /></button>
         </div>
 
-        {error && <p className="capture-editor-error">{error}</p>}
+        {(error || workingError) && <p className="capture-editor-error">{error || workingError}</p>}
         <footer>
           <span>原始照片只在本次编辑中使用；确认后才进入本机上传队列。</span>
-          <button type="button" onClick={onConfirm} disabled={isPreparing || drafts.length === 0}>
-            {isPreparing ? "正在准备…" : `确认上传 ${drafts.length} 张`}
+          <button type="button" onClick={onConfirm} disabled={busy || drafts.length === 0}>
+            {applyingPerspective ? "正在校正透视…" : isPreparing ? "正在准备…" : `确认上传 ${drafts.length} 张`}
           </button>
         </footer>
       </div>

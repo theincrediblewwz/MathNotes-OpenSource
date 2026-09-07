@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
-  "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-07T13:17:17.429Z",
-  "fileCount": 720,
-  "snapshotSha256": "f8276c2a47e07e91059bccdb6aef9de52569422796592740bf056d0eeec90aa9",
+  "historyPolicy": "public-history-preserved",
+  "generatedAt": "2026-09-07T14:51:33.364Z",
+  "fileCount": 727,
+  "snapshotSha256": "1cedecc0f7363ed5093f7423c94dd57d4575039094d185a7fdb68f0ce2657b0f",
   "files": [
     {
       "path": ".gitattributes",
@@ -1194,7 +1194,7 @@
     {
       "path": "apps/pwa/package.json",
       "bytes": 621,
-      "sha256": "11cc15d074f5d0adf664d82b745f375ea6993bd90990e6fce21740586ec3f85b"
+      "sha256": "2ca9b47fb0591b021e64891a0f9dd2970236a84aa0edead8d9e260b15087d0ab"
     },
     {
       "path": "apps/pwa/public/_headers",
@@ -1213,8 +1213,13 @@
     },
     {
       "path": "apps/pwa/src/App.tsx",
-      "bytes": 80032,
-      "sha256": "48424bbee95874f42fd330b1be6c589444ab518c6eefa48cb25385f48e478c0b"
+      "bytes": 80722,
+      "sha256": "6857cdcac7c2d12722041441871ec0d21750b14fb3c30d03bc30003af3a1699c"
+    },
+    {
+      "path": "apps/pwa/src/CaptureImageEditor.tsx",
+      "bytes": 10829,
+      "sha256": "42aa44dba0276d45206bf6344bb211cfcd2b5cd235a291daa05f187203c1f801"
     },
     {
       "path": "apps/pwa/src/MobileModeApp.test.tsx",
@@ -1258,13 +1263,13 @@
     },
     {
       "path": "apps/pwa/src/captureEditing.test.ts",
-      "bytes": 735,
-      "sha256": "c09b7622cc005ac42d433f57eb96d1f0c58515472578e875d534053a079ffec7"
+      "bytes": 2494,
+      "sha256": "04f3c7b36c05123ef0c1921021cb48175e04728f6a3b3e1140935f356b8d4fbb"
     },
     {
       "path": "apps/pwa/src/captureEditing.ts",
-      "bytes": 5125,
-      "sha256": "1a1528d03a4aae58ed6411a981b6e64a39ac96509de99ae30645600cccf4a734"
+      "bytes": 17637,
+      "sha256": "1e95b65c157c1aa166c41cb2af690fb1245d0e86cc5cc1fed011b25e0e54ad12"
     },
     {
       "path": "apps/pwa/src/captureWorkflow.test.tsx",
@@ -1333,13 +1338,13 @@
     },
     {
       "path": "apps/pwa/src/readerDocument.test.ts",
-      "bytes": 2101,
-      "sha256": "8e7deb18151b0392abc35a0cad78d718a86ed4df8edd589f4ad40ea6d5e95f74"
+      "bytes": 2966,
+      "sha256": "ce00d8e3f40fb9261c874a9da12ba5fa31a641f53ddd1da1a25147acbeafd63c"
     },
     {
       "path": "apps/pwa/src/readerDocument.ts",
-      "bytes": 4143,
-      "sha256": "e2226c052a360900bc72b18a2a043a51ce182976464764b83807cd330c61112d"
+      "bytes": 6494,
+      "sha256": "3854d17c0ce0dc9bd20b4a60cd48519971e0f69f69d8345c25d1b3b1e819bf07"
     },
     {
       "path": "apps/pwa/src/sessionSync.test.ts",
@@ -1393,8 +1398,8 @@
     },
     {
       "path": "apps/pwa/src/styles.css",
-      "bytes": 54937,
-      "sha256": "d857bd1fa4ba052c9aae386521c44ca70a6de69848af5694f714f85c19a3f703"
+      "bytes": 56316,
+      "sha256": "11ac21b9cb625629bd7563021ef6a8839a915c582fc26ed17a816a4dd2188a28"
     },
     {
       "path": "apps/pwa/src/uiParity.test.tsx",
@@ -2557,14 +2562,19 @@
       "sha256": "44ee781eeda3a546f77f80ee28cfc962d1fd6c6b89d7df0589d8244cf1917f7b"
     },
     {
+      "path": "deploy/pwa/MAC_CODEX_UPDATE.md",
+      "bytes": 5584,
+      "sha256": "e32c3f11ba6b6082ebec9e2da6b7d008250d7c28bf35778c394ae41addfd7efe"
+    },
+    {
       "path": "deploy/pwa/README.md",
-      "bytes": 1433,
-      "sha256": "ba25c27669e076baa9805085cf4d39f9d544988f1992c92dd754f38313d039d5"
+      "bytes": 2840,
+      "sha256": "33b29ed275fc0d6a9c65d84f46ede42bc22f847e7e6de25f27bb4a0b217a11e0"
     },
     {
       "path": "package-lock.json",
       "bytes": 345312,
-      "sha256": "3d6bd844af99c4882627f8d152c6134493d34f2bf37100137366536509f46a5b"
+      "sha256": "b4bf2da5ede261744d4c5429406d18461cff28976d19d1231f175c9b4189e1f7"
     },
     {
       "path": "package.json",
@@ -3468,8 +3478,13 @@
     },
     {
       "path": "test_tool/package_pwa_companion.mjs",
-      "bytes": 2265,
-      "sha256": "c9e238ffdb4589da747d3138912db6a9f505161f68dc3088e7ed8c64da42b773"
+      "bytes": 2262,
+      "sha256": "240519b2811b9fe4cbfc443a13a1912b1a812e5edeb2e3e090146048185815ff"
+    },
+    {
+      "path": "test_tool/package_pwa_update.mjs",
+      "bytes": 10633,
+      "sha256": "316be911e2d7850fd77add52151a286db0091b5451544508728260cd771ff2d9"
     },
     {
       "path": "test_tool/package_standalone_worker.mjs",
@@ -3507,14 +3522,29 @@
       "sha256": "177f1398884e7f8e5d8509a34612ff5a2a73d65341ff5538587926211f1b5980"
     },
     {
+      "path": "test_tool/pwa_capture_editor_smoke.mjs",
+      "bytes": 10999,
+      "sha256": "23661572db41d03aee114aa32155b1663fc8b519f5427c709d0205048b51d967"
+    },
+    {
       "path": "test_tool/pwa_package_smoke.mjs",
-      "bytes": 2548,
-      "sha256": "531e42b22995436227c2d0a8e96bb5d7ae56c564ed3899a42bb124b2fcaecfbc"
+      "bytes": 2900,
+      "sha256": "52f8539614b62ebb8e6ac4b79cc9c9563922b329703447b4d31b4eadd4a0e6b1"
+    },
+    {
+      "path": "test_tool/pwa_reader_image_smoke.mjs",
+      "bytes": 4654,
+      "sha256": "71ca7ac7ce35d3231ea4b8ff4a1850582122100f0a21e90841bd8f6b4fdc8d09"
     },
     {
       "path": "test_tool/pwa_shell_smoke.mjs",
       "bytes": 26227,
       "sha256": "aaa3b2af6eb90ff27da3556691d0cb6bd4159a335568b3cfde71548d6938550f"
+    },
+    {
+      "path": "test_tool/pwa_update_package.test.mjs",
+      "bytes": 4037,
+      "sha256": "ef0f4e8c3a72ecddc0263970ab275b175ba2717d1c90b47807230f8e82aca58d"
     },
     {
       "path": "test_tool/quality_benchmark.ts",
@@ -3580,6 +3610,11 @@
       "path": "test_tool/upload_smoke.mjs",
       "bytes": 480,
       "sha256": "6c2f2333edb74aecb251475a03ea3879da0621da06b21ba81c3358b0490799fd"
+    },
+    {
+      "path": "test_tool/verify_pwa_update.mjs",
+      "bytes": 2872,
+      "sha256": "9fe5d233b8ead1bb68fbdaa213506396735ec5ed94f01511bc5dfca7524aec99"
     },
     {
       "path": "test_tool/windows_app_smoke.mjs",

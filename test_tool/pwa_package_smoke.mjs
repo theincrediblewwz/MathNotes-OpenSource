@@ -7,7 +7,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const stageRoot = path.join(projectRoot, "output", "pwa-companion", "stage");
 const manifest = JSON.parse(await readFile(path.join(stageRoot, "artifact-manifest.json"), "utf8"));
 
-assert(manifest.product === "MathNotes PWA Read-only Companion", "PWA package product mismatch");
+assert(manifest.product === "MathNotes PWA Companion", "PWA package product mismatch");
 assert(manifest.deploymentRoot === "site", "PWA package deployment root mismatch");
 const paths = new Set(manifest.files.map((file) => file.path));
 assert(
@@ -45,7 +45,10 @@ const applicationJavaScript = (
       .map((file) => readFile(path.join(stageRoot, file.path), "utf8"))
   )
 ).join("\n");
-assert(applicationJavaScript.includes("2026.09.01.1"), "PWA package build marker is stale");
+const pwaPackage = JSON.parse(await readFile(path.join(projectRoot, "apps/pwa/package.json"), "utf8"));
+assert(manifest.packageVersion === pwaPackage.version, "PWA manifest version must match the PWA package independently of the root package");
+assert(applicationJavaScript.includes(pwaPackage.version), "PWA package version marker is stale");
+assert(!applicationJavaScript.includes("2026.09.01.1"), "PWA package still displays its obsolete date label");
 assert(applicationJavaScript.includes(".katex-html"), "PWA package is missing KaTeX HTML styles");
 assert(
   (applicationJavaScript.match(/data:font\/woff2/g) ?? []).length >= 20,
