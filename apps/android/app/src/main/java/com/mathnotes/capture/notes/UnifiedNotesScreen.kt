@@ -67,13 +67,20 @@ fun UnifiedNotesScreen(
     onPairingVerified: (PairingConfig, List<PairingTarget>) -> Unit = { _, _ -> },
     selectCaptureTarget: Boolean = false,
     onCaptureTargetSelected: (StandaloneSessionEntity) -> Unit = {},
-    onCancelCaptureTargetSelection: () -> Unit = {}
+    onCancelCaptureTargetSelection: () -> Unit = {},
+    readingRequest: NoteReadingRequest? = null,
+    onReadingTap: () -> Unit = {},
+    onReaderActive: (Boolean) -> Unit = {},
+    bottomBarHidden: Boolean = false
 ) {
     var source by rememberSaveable { mutableStateOf(NotesSource.LOCAL) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(openLocalRequest, selectCaptureTarget) {
         if (openLocalRequest > 0 || selectCaptureTarget) source = NotesSource.LOCAL
+    }
+    LaunchedEffect(readingRequest?.requestId) {
+        readingRequest?.let { source = if (it.pairing == null) NotesSource.LOCAL else NotesSource.COMPUTER }
     }
 
     val libraryHeader: @Composable () -> Unit = {
@@ -94,16 +101,24 @@ fun UnifiedNotesScreen(
             libraryHeader = libraryHeader,
             libraryQuery = searchQuery,
             onSelectSessionForCapture = onCaptureTargetSelected.takeIf { selectCaptureTarget },
-            onCancelCaptureSelection = onCancelCaptureTargetSelection.takeIf { selectCaptureTarget }
+            onCancelCaptureSelection = onCancelCaptureTargetSelection.takeIf { selectCaptureTarget },
+            readingRequest = readingRequest?.takeIf { it.pairing == null },
+            onReadingTap = onReadingTap,
+            onReaderActive = onReaderActive,
+            bottomBarHidden = bottomBarHidden
         )
         NotesSource.COMPUTER -> CompanionNotesScreen(
-            pairing = pairing,
+            pairing = readingRequest?.pairing ?: pairing,
             targets = targets,
             themeId = themeId,
             endpointCandidates = endpointCandidates,
             onPairingVerified = onPairingVerified,
             libraryHeader = libraryHeader,
-            libraryQuery = searchQuery
+            libraryQuery = searchQuery,
+            readingRequest = readingRequest?.takeIf { it.pairing != null },
+            onReadingTap = onReadingTap,
+            onReaderActive = onReaderActive,
+            bottomBarHidden = bottomBarHidden
         )
     }
 

@@ -15,7 +15,6 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
-import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
@@ -27,8 +26,7 @@ object AndroidImageTransformer {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(source.absolutePath, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0) { "无法读取图片尺寸" }
-        var sampleSize = 1
-        while (max(bounds.outWidth, bounds.outHeight) / sampleSize > maxDimension * 2) sampleSize *= 2
+        val sampleSize = previewSampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
         val decoded = BitmapFactory.decodeFile(
             source.absolutePath,
             BitmapFactory.Options().apply {
@@ -36,7 +34,9 @@ object AndroidImageTransformer {
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
         ) ?: error("无法读取图片")
-        return applyExifOrientation(decoded, source)
+        val oriented = applyExifOrientation(decoded, source)
+        if (oriented !== decoded) decoded.recycle()
+        return oriented
     }
 
     fun rotatePreview(source: Bitmap, quarterTurns: Int): Bitmap = rotateQuarterTurns(source, quarterTurns)
@@ -57,7 +57,8 @@ object AndroidImageTransformer {
             perspectiveCorners = perspectiveCorners,
             cropRect = cropRect,
             lassoPoints = lassoPoints,
-            annotations = annotations
+            annotations = annotations,
+            writeSidecar = false
         )
         rendered.sidecarFile.delete()
         return draft.copy(
@@ -74,11 +75,49 @@ object AndroidImageTransformer {
         perspectiveCorners: List<NormalizedPoint>? = null,
         cropRect: NormalizedRect?,
         lassoPoints: List<NormalizedPoint>? = null,
-        annotations: List<ImageAnnotationObject> = emptyList()
+        annotations: List<ImageAnnotationObject> = emptyList(),
+        writeSidecar: Boolean = true
     ): RenderedImageEdit {
+        val turns = ((rotationQuarterTurns % 4) + 4) % 4
+        val normalizedPerspective = perspectiveCorners?.map(ImageTransformContract::normalizePoint)
+        require(normalizedPerspective == null || ImageTransformContract.isValidPerspectiveCorners(normalizedPerspective)) {
+            "透视角点必须构成不交叉的凸四边形"
+        }
+        val normalizedLasso = lassoPoints?.takeIf { it.size >= 3 }?.map(ImageTransformContract::normalizePoint)
+        val normalizedCrop = if (normalizedLasso == null) cropRect?.let(ImageTransformContract::normalizeRect) else null
+        val operations = ImageTransformContract.normalizeOperations(buildList {
+            if (turns != 0) add(ImageTransformOperation.Rotate(turns))
+            if (normalizedPerspective != null) add(ImageTransformOperation.Perspective(normalizedPerspective))
+            if (normalizedCrop != null && normalizedCrop != FULL_RECT) add(ImageTransformOperation.Crop(normalizedCrop))
+            if (normalizedLasso != null) add(ImageTransformOperation.Lasso(normalizedLasso, ImageTransformContract.boundingBoxForPoints(normalizedLasso)))
+        })
+        val baseName = draft.sourceName.substringBeforeLast('.', draft.sourceName).ifBlank { "image" }
+            .replace(Regex("[^A-Za-z0-9._-]+"), "_")
+        outputDirectory.mkdirs()
+        val outputFile = File(outputDirectory, "${baseName}_${UUID.randomUUID()}.png")
+        val sidecarFile = File(outputDirectory, "${outputFile.nameWithoutExtension}.annotation.json")
+        val sidecar = ImageTransformSidecar(
+            sourceAsset = draft.sourceFile.name,
+            sourceSha256 = if (writeSidecar) sha256(draft.sourceFile) else "0".repeat(64),
+            outputAsset = outputFile.name,
+            operations = operations,
+            annotations = annotations.sortedBy { it is ImageAnnotationObject.Redaction },
+            createdAt = Instant.now().toString()
+        )
+        ImageTransformContract.validate(sidecar)
+        // A previously applied edit is already an EXIF-free, flattened PNG. Do not decode and
+        // compress the full photograph a second time just to put it into the queue.
+        if (draft.stageHistory.isNotEmpty() && draft.mimeType == "image/png" && operations.isEmpty() && annotations.isEmpty()) {
+            draft.sourceFile.copyTo(outputFile)
+            if (writeSidecar) writeSidecarAtomically(sidecarFile, sidecar)
+            return RenderedImageEdit(outputFile, sidecarFile, operations)
+        }
         val sourceBitmap = BitmapFactory.decodeFile(
             draft.sourceFile.absolutePath,
-            BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+            BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inMutable = true
+            }
         ) ?: error("无法读取原始图片")
         val oriented = applyExifOrientation(sourceBitmap, draft.sourceFile)
         if (oriented !== sourceBitmap) sourceBitmap.recycle()
@@ -87,64 +126,55 @@ object AndroidImageTransformer {
 
         // Annotation coordinates follow the rotated preview shown by the editor.
         // Burn them before perspective/crop/lasso so every tool shares that visible coordinate space.
-        val annotatedSource = if (annotations.isNotEmpty()) annotateBitmap(rotated, annotations) else rotated
+        val redactions = annotations.filterIsInstance<ImageAnnotationObject.Redaction>()
+        var redactionMask = if (redactions.isNotEmpty()) createRedactionMask(rotated.width, rotated.height, redactions) else null
+        val annotatedSource = if (annotations.isNotEmpty()) annotateBitmap(rotated, sidecar.annotations) else rotated
         if (annotatedSource !== rotated) rotated.recycle()
 
-        val normalizedPerspective = perspectiveCorners
-            ?.map(ImageTransformContract::normalizePoint)
-            ?.takeIf(ImageTransformContract::isValidPerspectiveCorners)
         val corrected = normalizedPerspective?.let { perspectiveBitmap(annotatedSource, it) } ?: annotatedSource
         if (corrected !== annotatedSource) annotatedSource.recycle()
-
-        val normalizedLasso = lassoPoints
-            ?.takeIf { it.size >= 3 }
-            ?.map(ImageTransformContract::normalizePoint)
-        val normalizedCrop = if (normalizedLasso == null) cropRect?.let(ImageTransformContract::normalizeRect) else null
+        if (normalizedPerspective != null) redactionMask = redactionMask?.let { mask ->
+            perspectiveBitmap(mask, normalizedPerspective, Color.TRANSPARENT).also { mask.recycle() }
+        }
         val edited = when {
             normalizedLasso != null -> lassoBitmap(corrected, normalizedLasso)
             normalizedCrop != null -> cropBitmap(corrected, normalizedCrop)
             else -> corrected
         }
         if (edited !== corrected) corrected.recycle()
-
-        val operations = ImageTransformContract.normalizeOperations(buildList {
-            val turns = ((rotationQuarterTurns % 4) + 4) % 4
-            if (turns != 0) add(ImageTransformOperation.Rotate(turns))
-            if (normalizedPerspective != null) add(ImageTransformOperation.Perspective(normalizedPerspective))
-            if (normalizedCrop != null && normalizedCrop != FULL_RECT) add(ImageTransformOperation.Crop(normalizedCrop))
-            if (normalizedLasso != null) {
-                add(
-                    ImageTransformOperation.Lasso(
-                        points = normalizedLasso,
-                        boundingBox = ImageTransformContract.boundingBoxForPoints(normalizedLasso)
-                    )
-                )
+        redactionMask = redactionMask?.let { mask ->
+            val result = when {
+                normalizedLasso != null -> lassoBitmap(mask, normalizedLasso, Color.TRANSPARENT)
+                normalizedCrop != null -> cropBitmap(mask, normalizedCrop)
+                else -> mask
             }
-        })
-        val sourceHash = sha256(draft.sourceFile)
-        val baseName = draft.sourceName.substringBeforeLast('.', draft.sourceName).ifBlank { "image" }
-            .replace(Regex("[^A-Za-z0-9._-]+"), "_")
-        outputDirectory.mkdirs()
-        val outputFile = File(outputDirectory, "${baseName}_${UUID.randomUUID()}.png")
-        val sidecarFile = File(outputDirectory, "${outputFile.nameWithoutExtension}.annotation.json")
-        writePngAtomically(edited, outputFile)
-        edited.recycle()
-        writeSidecarAtomically(
-            sidecarFile,
-            ImageTransformSidecar(
-                sourceAsset = draft.sourceFile.name,
-                sourceSha256 = sourceHash,
-                outputAsset = outputFile.name,
-                operations = operations,
-                annotations = annotations,
-                createdAt = Instant.now().toString()
-            )
-        )
+            if (result !== mask) mask.recycle()
+            result
+        }
+        // Interpolation at perspective edges must never leave a translucent redaction. Force
+        // every covered output pixel to solid black/white after all geometry and normal annotation.
+        val flattened = redactionMask?.let { mask ->
+            forceOpaqueRedactions(edited, mask).also { mask.recycle() }
+        } ?: edited
+        if (flattened !== edited) edited.recycle()
+        try {
+            writePngAtomically(flattened, outputFile)
+            if (writeSidecar) {
+                // v1 cannot express a filled rectangle. Its reproducible source is now the
+                // already flattened PNG, with no reference to the unredacted input or replay steps.
+                val portableSidecar = if (redactions.any { it.rectangular }) sidecar.copy(
+                    sourceAsset = outputFile.name, sourceSha256 = sha256(outputFile), operations = emptyList(), annotations = emptyList()
+                ) else sidecar
+                writeSidecarAtomically(sidecarFile, portableSidecar)
+            }
+        } finally {
+            flattened.recycle()
+        }
         return RenderedImageEdit(outputFile, sidecarFile, operations)
     }
 
     private fun annotateBitmap(bitmap: Bitmap, annotations: List<ImageAnnotationObject>): Bitmap {
-        val output = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val output = if (bitmap.isMutable) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(output)
         val scale = min(output.width, output.height).toFloat()
         annotations.forEach { annotation ->
@@ -164,7 +194,12 @@ object AndroidImageTransformer {
                         if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                     }
                     canvas.drawPath(path, paint)
+                    if (annotation.points.distinct().size == 1) {
+                        val point = annotation.points.first()
+                        canvas.drawPoint((point.x * output.width).toFloat(), (point.y * output.height).toFloat(), paint)
+                    }
                 }
+                is ImageAnnotationObject.Redaction -> drawRedaction(canvas, output.width, output.height, annotation, Color.parseColor(annotation.color))
                 is ImageAnnotationObject.Arrow -> {
                     val startX = (annotation.start.x * output.width).toFloat()
                     val startY = (annotation.start.y * output.height).toFloat()
@@ -194,7 +229,58 @@ object AndroidImageTransformer {
         return output
     }
 
-    private fun perspectiveBitmap(bitmap: Bitmap, corners: List<NormalizedPoint>): Bitmap {
+    private fun createRedactionMask(width: Int, height: Int, redactions: List<ImageAnnotationObject.Redaction>): Bitmap =
+        Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { mask ->
+            val canvas = Canvas(mask)
+            redactions.forEach { drawRedaction(canvas, width, height, it, Color.parseColor(it.color)) }
+        }
+
+    private fun drawRedaction(canvas: Canvas, width: Int, height: Int, annotation: ImageAnnotationObject.Redaction, fill: Int) {
+        if (annotation.rectangular) {
+            val bounds = ImageTransformContract.boundingBoxForPoints(annotation.points)
+            canvas.drawRect((bounds.x * width).toFloat(), (bounds.y * height).toFloat(),
+                ((bounds.x + bounds.width) * width).toFloat(), ((bounds.y + bounds.height) * height).toFloat(),
+                Paint().apply { color = Color.WHITE; style = Paint.Style.FILL; isAntiAlias = false })
+            return
+        }
+        val paint = Paint().apply {
+            color = fill
+            // One source-pixel guard on both sides covers sampling and antialiasing boundaries.
+            strokeWidth = (annotation.width * min(width, height)).toFloat() + 2f
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            isAntiAlias = false
+        }
+        val path = Path()
+        annotation.points.forEachIndexed { index, point ->
+            val x = (point.x * width).toFloat()
+            val y = (point.y * height).toFloat()
+            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        canvas.drawPath(path, paint)
+        // A tap/very short stroke must also remove pixels.
+        annotation.points.firstOrNull()?.let { point ->
+            canvas.drawPoint((point.x * width).toFloat(), (point.y * height).toFloat(), paint)
+        }
+    }
+
+    private fun forceOpaqueRedactions(bitmap: Bitmap, mask: Bitmap): Bitmap {
+        require(bitmap.width == mask.width && bitmap.height == mask.height) { "遮盖区域与导出图片尺寸不一致" }
+        val output = if (bitmap.isMutable) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val pixels = IntArray(output.width)
+        val maskPixels = IntArray(output.width)
+        for (y in 0 until output.height) {
+            mask.getPixels(maskPixels, 0, output.width, 0, y, output.width, 1)
+            if (maskPixels.none { Color.alpha(it) > 0 }) continue
+            output.getPixels(pixels, 0, output.width, 0, y, output.width, 1)
+            for (x in pixels.indices) if (Color.alpha(maskPixels[x]) > 0) pixels[x] = if (Color.red(maskPixels[x]) >= 128) Color.WHITE else Color.BLACK
+            output.setPixels(pixels, 0, output.width, 0, y, output.width, 1)
+        }
+        return output
+    }
+
+    private fun perspectiveBitmap(bitmap: Bitmap, corners: List<NormalizedPoint>, outsideColor: Int = Color.WHITE): Bitmap {
         require(ImageTransformContract.isValidPerspectiveCorners(corners)) {
             "透视角点必须构成不交叉的凸四边形"
         }
@@ -219,7 +305,7 @@ object AndroidImageTransformer {
         require(matrix.setPolyToPoly(source, 0, destination, 0, 4)) { "无法计算透视变换" }
         return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { output ->
             Canvas(output).apply {
-                drawColor(Color.WHITE)
+                drawColor(outsideColor)
                 drawBitmap(bitmap, matrix, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
             }
         }
@@ -231,22 +317,18 @@ object AndroidImageTransformer {
     )
 
     private fun cropBitmap(bitmap: Bitmap, rect: NormalizedRect): Bitmap {
-        val left = (rect.x * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
-        val top = (rect.y * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
-        val right = ceil((rect.x + rect.width) * bitmap.width).toInt().coerceIn(left + 1, bitmap.width)
-        val bottom = ceil((rect.y + rect.height) * bitmap.height).toInt().coerceIn(top + 1, bitmap.height)
-        return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+        val pixels = imagePixelCrop(bitmap.width, bitmap.height, rect)
+        return Bitmap.createBitmap(bitmap, pixels.left, pixels.top, pixels.width, pixels.height)
     }
 
-    private fun lassoBitmap(bitmap: Bitmap, points: List<NormalizedPoint>): Bitmap {
+    private fun lassoBitmap(bitmap: Bitmap, points: List<NormalizedPoint>, outsideColor: Int = Color.WHITE): Bitmap {
         val bounds = ImageTransformContract.boundingBoxForPoints(points)
-        val left = (bounds.x * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
-        val top = (bounds.y * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
-        val right = ceil((bounds.x + bounds.width) * bitmap.width).toInt().coerceIn(left + 1, bitmap.width)
-        val bottom = ceil((bounds.y + bounds.height) * bitmap.height).toInt().coerceIn(top + 1, bitmap.height)
-        val output = Bitmap.createBitmap(right - left, bottom - top, Bitmap.Config.ARGB_8888)
+        val pixels = imagePixelCrop(bitmap.width, bitmap.height, bounds)
+        val left = pixels.left
+        val top = pixels.top
+        val output = Bitmap.createBitmap(pixels.width, pixels.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
-        canvas.drawColor(Color.WHITE)
+        canvas.drawColor(outsideColor)
         val path = Path().apply {
             points.forEachIndexed { index, point ->
                 val x = (point.x * bitmap.width - left).toFloat()
@@ -360,6 +442,12 @@ object AndroidImageTransformer {
             .put("type", "arrow")
             .put("start", start.toJson())
             .put("end", end.toJson())
+            .put("color", color)
+            .put("width", width)
+        is ImageAnnotationObject.Redaction -> JSONObject()
+            .put("id", id)
+            .put("type", "pen")
+            .put("points", JSONArray(points.map { it.toJson() }))
             .put("color", color)
             .put("width", width)
     }

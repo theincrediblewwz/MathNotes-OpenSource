@@ -50,7 +50,8 @@ class CompanionDatabaseMigrationTest {
                 CompanionDatabase.MIGRATION_1_2,
                 CompanionDatabase.MIGRATION_2_3,
                 CompanionDatabase.MIGRATION_3_4,
-                CompanionDatabase.MIGRATION_4_5
+                CompanionDatabase.MIGRATION_4_5,
+                CompanionDatabase.MIGRATION_5_6
             )
             .build()
         val migrated = runBlocking {
@@ -84,7 +85,7 @@ class CompanionDatabaseMigrationTest {
         }
 
         val database = Room.databaseBuilder(context, CompanionDatabase::class.java, databaseName)
-            .addMigrations(CompanionDatabase.MIGRATION_3_4, CompanionDatabase.MIGRATION_4_5)
+            .addMigrations(CompanionDatabase.MIGRATION_3_4, CompanionDatabase.MIGRATION_4_5, CompanionDatabase.MIGRATION_5_6)
             .build()
         val migrated = runBlocking { database.sessionDao().listForProfile("profile") }
 
@@ -108,7 +109,7 @@ class CompanionDatabaseMigrationTest {
         }
 
         val database = Room.databaseBuilder(context, CompanionDatabase::class.java, databaseName)
-            .addMigrations(CompanionDatabase.MIGRATION_4_5)
+            .addMigrations(CompanionDatabase.MIGRATION_4_5, CompanionDatabase.MIGRATION_5_6)
             .build()
         val migrated = runBlocking { database.sessionDao().listForProfile("profile").single() }
 
@@ -116,5 +117,26 @@ class CompanionDatabaseMigrationTest {
         assertEquals("", migrated.markdown)
         assertEquals("", migrated.html)
         database.close()
+    }
+
+    @Test
+    fun addingNotebookTitlePreservesExistingOfflineRows() {
+        helper.createDatabase(databaseName, 5).apply {
+            execSQL(
+                "INSERT INTO companion_sessions " +
+                    "(profileId, notebookId, sessionId, title, revision, html, updatedAt, syncedAt, markdown) VALUES " +
+                    "('profile', '20260907_a31b', 'lecture', '泛函分析', 'r1', '<p>离线正文</p>', 'now', 1000, '# 离线正文')"
+            )
+            close()
+        }
+        helper.runMigrationsAndValidate(databaseName, 6, true, CompanionDatabase.MIGRATION_5_6).use { database ->
+            database.query("SELECT title, revision, html, notebookTitle FROM companion_sessions").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("泛函分析", cursor.getString(0))
+                assertEquals("r1", cursor.getString(1))
+                assertEquals("<p>离线正文</p>", cursor.getString(2))
+                assertEquals("", cursor.getString(3))
+            }
+        }
     }
 }

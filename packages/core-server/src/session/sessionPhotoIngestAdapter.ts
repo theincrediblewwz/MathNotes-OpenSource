@@ -91,19 +91,28 @@ export class SessionPhotoIngestAdapter implements PhotoIngestPort {
     return timedOut;
   }
 
-  async getAcceptedUpload(uploadId: string): Promise<IngestPhotoResult> {
+  async getAcceptedUpload(uploadId: string, target?: { notebookId: string; sessionId: string }): Promise<IngestPhotoResult> {
     const stored = await this.findUpload(uploadId);
     if (!stored) throw new UploadError("Upload record is unavailable", 404);
-    return stored.result;
+    if (target && (stored.notebookId !== target.notebookId || stored.sessionId !== target.sessionId)) {
+      throw new UploadError("Upload record does not belong to this note", 404);
+    }
+    const task = await this.options.recognition.get({ notebookId: stored.notebookId, sessionId: stored.sessionId, taskId: stored.result.recognitionJobId });
+    return { ...resultForTask(stored.result, task), notebookId: stored.notebookId, sessionId: stored.sessionId };
   }
 
   async retryAcceptedRecognition(uploadId: string): Promise<IngestPhotoResult> {
     const stored = await this.findUpload(uploadId);
     if (!stored) throw new UploadError("Upload record is unavailable", 404);
-    if (stored.result.recognitionStatus !== "failed" && stored.result.recognitionStatus !== "cancelled") {
-      throw new UploadError("Recognition task is not retryable", 409);
-    }
     try {
+      const current = await this.options.recognition.get({
+        notebookId: stored.notebookId,
+        sessionId: stored.sessionId,
+        taskId: stored.result.recognitionJobId
+      });
+      if (current.status !== "failed" && current.status !== "cancelled") {
+        throw new UploadError("Recognition task is not retryable", 409);
+      }
       const task = await this.options.recognition.retry({
         notebookId: stored.notebookId,
         sessionId: stored.sessionId,

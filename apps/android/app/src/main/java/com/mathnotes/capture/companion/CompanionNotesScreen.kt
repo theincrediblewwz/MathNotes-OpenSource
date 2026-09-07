@@ -31,6 +31,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,6 +55,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.mathnotes.capture.notes.NoteReadingRequest
+import com.mathnotes.capture.notes.ReaderHeading
+import com.mathnotes.capture.notes.ReaderOutlineBar
+import com.mathnotes.capture.notes.ReaderInteractionWebView
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,7 +70,11 @@ fun CompanionNotesScreen(
     onPairingVerified: (PairingConfig, List<PairingTarget>) -> Unit = { _, _ -> },
     onExit: (() -> Unit)? = null,
     libraryHeader: (@Composable () -> Unit)? = null,
-    libraryQuery: String = ""
+    libraryQuery: String = "",
+    readingRequest: NoteReadingRequest? = null,
+    onReadingTap: () -> Unit = {},
+    onReaderActive: (Boolean) -> Unit = {},
+    bottomBarHidden: Boolean = false
 ) {
     val context = LocalContext.current
     val markdownMirror = remember(context) { CompanionMarkdownMirror(context.applicationContext) }
@@ -90,6 +100,12 @@ fun CompanionNotesScreen(
     var lastManualRefreshAt by remember(pairing?.profileId) { mutableStateOf(0L) }
     var expandedNotebooks by remember(pairing?.profileId) { mutableStateOf(emptySet<String>()) }
     var verifiedPairing by remember(pairing?.profileId) { mutableStateOf(pairing) }
+
+    LaunchedEffect(readingRequest?.requestId) {
+        readingRequest?.takeIf { it.pairing != null }?.let {
+            selected = PairingTarget(it.notebookId, it.sessionId, it.sessionId)
+        }
+    }
 
     BackHandler(enabled = selected != null || onExit != null) {
         if (selected != null) selected = null else onExit?.invoke()
@@ -185,7 +201,11 @@ fun CompanionNotesScreen(
                 selected = null
                 if (!catalogSyncing) catalogRefreshRequest += 1
             },
-            onManualRefresh = ::requestManualRefresh
+            onManualRefresh = ::requestManualRefresh,
+            readingRequest = readingRequest?.takeIf { it.sessionId == active.sessionId && it.notebookId == active.notebookId },
+            onReadingTap = onReadingTap,
+            onReaderActive = onReaderActive,
+            bottomBarHidden = bottomBarHidden
         )
         return
     }
@@ -193,8 +213,14 @@ fun CompanionNotesScreen(
     val advertisedKeys = catalogTargets.mapTo(mutableSetOf()) { it.notebookId to it.sessionId }
     val offlineTargets = cached
         .filterNot { (it.notebookId to it.sessionId) in advertisedKeys }
-        .map { PairingTarget(it.notebookId, it.sessionId, it.title) }
-    val visibleTargets = (catalogTargets + offlineTargets).filter { target ->
+        .map { PairingTarget(it.notebookId, it.sessionId, it.title, it.notebookTitle) }
+    val visibleTargets = (catalogTargets + offlineTargets).map { target ->
+        target.copy(notebookTitle = resolveNotebookTitle(
+            target.notebookId,
+            target.notebookTitle,
+            cached.firstOrNull { it.notebookId == target.notebookId }?.notebookTitle.orEmpty()
+        ))
+    }.filter { target ->
         libraryQuery.isBlank() || target.notebookTitle.contains(libraryQuery, ignoreCase = true) ||
             target.title.contains(libraryQuery, ignoreCase = true)
     }
@@ -249,7 +275,7 @@ fun CompanionNotesScreen(
                         }
                 ) {
                     Text(
-                        "${if (expanded) "▾" else "▸"}  $notebookId",
+                        "${if (expanded) "▾" else "▸"}  ${notebookTargets.first().notebookTitle}",
                         style = MaterialTheme.typography.titleMedium,
                         color = MathNotesColors.Ink
                     )
@@ -297,8 +323,13 @@ private fun CompanionReader(
     themeId: MathNotesThemeId,
     onConnectionVerified: (PairingConfig) -> Unit,
     onDeleted: () -> Unit,
-    onManualRefresh: () -> Unit
+    onManualRefresh: () -> Unit,
+    readingRequest: NoteReadingRequest? = null,
+    onReadingTap: () -> Unit = {},
+    onReaderActive: (Boolean) -> Unit = {},
+    bottomBarHidden: Boolean = false
 ) {
+    DisposableEffect(Unit) { onReaderActive(true); onDispose { onReaderActive(false) } }
     var syncing by remember(target) { mutableStateOf(false) }
     var error by remember(target) { mutableStateOf<String?>(null) }
     var refreshRequest by remember(target) { mutableStateOf(0) }
@@ -361,7 +392,7 @@ private fun CompanionReader(
         Column(
             Modifier
                 .fillMaxSize()
-                .padding(bottom = COMPANION_READER_BOTTOM_INSET)
+                .padding(bottom = if (bottomBarHidden) 0.dp else COMPANION_READER_BOTTOM_INSET)
         ) {
             if (syncing || error != null) {
                 MathNotesPaper(Modifier.fillMaxWidth().padding(12.dp)) {
@@ -401,7 +432,11 @@ private fun CompanionReader(
                     pairing = pairing,
                     target = target,
                     assetStore = assetStore,
-                    modifier = Modifier.fillMaxWidth().weight(1f)
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    readingRequest = readingRequest,
+                    assetRevision = cached.syncedAt,
+                    assetsSyncing = syncing,
+                    onReadingTap = onReadingTap
                 )
             }
         }
@@ -427,19 +462,51 @@ internal const val COMPANION_READER_BASE_URL = "https://appassets.androidplatfor
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun ReadOnlyWebView(
+internal fun ReadOnlyWebView(
     html: String,
     themeId: MathNotesThemeId,
     pairing: PairingConfig,
     target: PairingTarget,
     assetStore: CompanionAssetStore,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    readingRequest: NoteReadingRequest? = null,
+    assetRevision: Long = 0L,
+    assetsSyncing: Boolean = false,
+    onReadingTap: () -> Unit = {}
 ) {
-    val readerHtml = remember(html, themeId) { prepareCompanionReaderHtml(html, themeId) }
+    val outlined = remember(html) { addReaderOutline(ensureCompanionBlockAnchors(html)) }
+    val headings = remember(outlined) { companionReaderHeadings(outlined) }
+    val readerHtml = remember(outlined, themeId) { prepareCompanionReaderHtml(outlined, themeId)
+        .replace("<details class=\"mathnotes-outline\">", "<details class=\"mathnotes-outline\" hidden>") }
+    val currentTap by rememberUpdatedState(onReadingTap)
+    val currentRequest by rememberUpdatedState(readingRequest)
+    val currentHtml by rememberUpdatedState(readerHtml)
+    val currentSourceHtml by rememberUpdatedState(html)
+    val currentAssetsSyncing by rememberUpdatedState(assetsSyncing)
+    val currentPairing by rememberUpdatedState(pairing)
+    val currentTarget by rememberUpdatedState(target)
+    var locationError by remember(readingRequest?.requestId) { mutableStateOf<String?>(null) }
+    var browser by remember { mutableStateOf<ReaderInteractionWebView?>(null) }
+    val pendingScroll = remember { intArrayOf(-1) }
+    val locatedRequest = remember { arrayOfNulls<String>(1) }
+    var materializedAssets by remember(pairing.profileId, target.notebookId, target.sessionId) { mutableStateOf<CompanionReaderAssets?>(null) }
+    val currentMaterializedAssets by rememberUpdatedState(materializedAssets)
+    val currentAssetRevision by rememberUpdatedState(assetRevision)
+    LaunchedEffect(html, assetRevision, pairing.profileId, target.notebookId, target.sessionId) {
+        val assetIds = Regex("mathnotes-companion-asset://([A-Za-z0-9_-]+)").findAll(html).map { it.groupValues[1] }.toList()
+        materializedAssets = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            CompanionReaderAssets(html, assetRevision, assetStore.contentRevision(pairing, target, assetIds))
+        }
+    }
+    Column(modifier) {
+    ReaderOutlineBar(headings) { browser?.loadUrl(COMPANION_READER_BASE_URL + "#" + it.anchor) }
+    locationError?.let { Text(it, Modifier.padding(horizontal = 16.dp), color = MathNotesColors.Warning) }
     AndroidView(
-        modifier = modifier,
+        modifier = Modifier.fillMaxWidth().weight(1f),
         factory = { context ->
-            WebView(context).apply {
+            ReaderInteractionWebView(context).apply {
+                browser = this
+                this.onReadingTap = { currentTap() }
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 settings.javaScriptEnabled = false
                 settings.allowFileAccess = false
@@ -454,16 +521,40 @@ private fun ReadOnlyWebView(
                 isHorizontalScrollBarEnabled = false
                 overScrollMode = View.OVER_SCROLL_NEVER
                 webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String?) {
+                        val restoreY = pendingScroll[0]
+                        pendingScroll[0] = -1
+                        if (restoreY >= 0) view.post { view.scrollTo(0, restoreY) }
+                        // Catalog entries arrive before their body cache. The placeholder must
+                        // not consume a deep link; a later hydrated page gets the same request.
+                        currentRequest?.takeIf { it.requestId != locatedRequest[0] && currentSourceHtml.isNotBlank() && !currentAssetsSyncing &&
+                            currentMaterializedAssets?.let { assets -> assets.html == currentSourceHtml && assets.sourceRevision == currentAssetRevision } == true }?.let { request ->
+                            val anchor = companionReadingAnchor(currentHtml, request.blockId, request.targetAnchor)
+                            if (currentMaterializedAssets?.fingerprint?.contains(":missing") == true) {
+                                locationError = "照片尚未同步完成，请刷新后重试定位"
+                            } else if (anchor != null) {
+                                locatedRequest[0] = request.requestId
+                                locationError = null
+                                view.loadUrl(COMPANION_READER_BASE_URL + "#" + anchor)
+                            } else locationError = "对应正文块已删除或不可定位"
+                        }
+                    }
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean =
+                        !isReaderOutlineNavigation(request?.url?.toString().orEmpty())
+
                     override fun shouldInterceptRequest(
                         view: WebView?,
                         request: WebResourceRequest?
                     ): WebResourceResponse? {
                         val uri = request?.url ?: return null
+                        if (request.isForMainFrame && uri.scheme == "https" && uri.host == "appassets.androidplatform.net" && uri.path == "/assets/" && uri.query == null && uri.port == -1) {
+                            return WebResourceResponse("text/html", "utf-8", 200, "OK", mapOf("Cache-Control" to "no-store"), java.io.ByteArrayInputStream(currentHtml.toByteArray(Charsets.UTF_8)))
+                        }
                         if (uri.scheme == "mathnotes-companion-asset") {
                             val assetId = uri.host.orEmpty().ifBlank {
                                 uri.schemeSpecificPart.removePrefix("//")
                             }
-                            val cachedAsset = assetStore.read(pairing, target, assetId) ?: return null
+                            val cachedAsset = assetStore.read(currentPairing, currentTarget, assetId) ?: return null
                             return WebResourceResponse(
                                 cachedAsset.mimeType,
                                 null,
@@ -475,13 +566,48 @@ private fun ReadOnlyWebView(
                 }
             }
         },
-        update = { view ->
-            if (view.tag != readerHtml.hashCode()) {
-                view.tag = readerHtml.hashCode()
-                view.loadDataWithBaseURL(COMPANION_READER_BASE_URL, readerHtml, "text/html", "utf-8", null)
+        update = update@{ view ->
+            val assets = materializedAssets
+            val pendingLocation = readingRequest != null && locatedRequest[0] != readingRequest.requestId
+            // Do not start the first queue document from the catalog placeholder or an
+            // intermediate image cache. This also avoids reloading a WebView before its
+            // first real URL has been committed.
+            if (pendingLocation && (assetsSyncing || assets == null || assets.html != html || assets.sourceRevision != assetRevision)) return@update
+            // During the first deep link, preceding photographs must finish loading before
+            // their final heights can determine the target's position. Later periodic syncs
+            // never re-arm a request the reader has already followed.
+            val initialLocationReady = readingRequest == null || !assetsSyncing || locatedRequest[0] == readingRequest.requestId
+            val pageKey = CompanionReaderPageKey(readerHtml, readingRequest?.requestId, assets?.fingerprint.orEmpty(), initialLocationReady)
+            if (view.tag != pageKey) {
+                val previous = view.tag as? CompanionReaderPageKey
+                view.tag = pageKey
+                // A real, locally intercepted document URL keeps native fragment navigation in
+                // this cached document. No network request or page-provided script is permitted.
+                if (previous != null && previous.requestId == pageKey.requestId && view.url?.startsWith(COMPANION_READER_BASE_URL) == true) {
+                    // Text can arrive before its images. A completed asset cache refresh must
+                    // retry failed image loads even when the HTML is identical, without losing
+                    // the reader's position or the active native fragment.
+                    pendingScroll[0] = view.scrollY
+                    view.reload()
+                } else view.loadUrl(COMPANION_READER_BASE_URL)
             }
         }
-    )
+    , onRelease = { it.destroy() })
+    }
+}
+
+private data class CompanionReaderPageKey(val html: String, val requestId: String?, val assetRevision: String, val initialLocationReady: Boolean)
+private data class CompanionReaderAssets(val html: String, val sourceRevision: Long, val fingerprint: String)
+
+internal fun companionReaderHeadings(outlinedHtml: String): List<ReaderHeading> =
+    Regex("""<a href="#(mathnotes-heading-[0-9]+)" style="--outline-level:([0-9]+)">([\s\S]*?)</a>""")
+        .findAll(outlinedHtml).map { match -> ReaderHeading(match.groupValues[1],
+            android.text.Html.fromHtml(match.groupValues[3], android.text.Html.FROM_HTML_MODE_LEGACY).toString(),
+            match.groupValues[2].toInt() + 1) }.toList()
+
+internal fun ensureCompanionBlockAnchors(html: String): String = Regex("""<section\b[^>]*\bdata-block-id=["']([A-Za-z0-9_-]+)["'][^>]*>""").replace(html) { match ->
+    val withoutId = match.value.replace(Regex("""\s+id=["'][^"']*["']"""), "")
+    withoutId.replaceFirst("<section", "<section id=\"mathnotes-block-${match.groupValues[1]}\"")
 }
 
 internal fun prepareCompanionReaderHtml(html: String, themeId: MathNotesThemeId): String {
@@ -495,12 +621,14 @@ internal fun prepareCompanionReaderHtml(html: String, themeId: MathNotesThemeId)
         <meta name="color-scheme" content="${palette.colorScheme}">
         <link id="mathnotes-android-katex" rel="stylesheet" href="katex/katex.min.css">
         <style id="mathnotes-android-reader">
+        $READER_OUTLINE_STYLE
         :root{color-scheme:${palette.colorScheme}!important;--android-page:${palette.page};--android-paper:${palette.paper};--android-ink:${palette.ink};--android-muted:${palette.muted};--android-line:${palette.line};--android-code:${palette.code};--android-accent:${palette.accent}}
         html,body{width:100%!important;min-width:0!important;max-width:100%!important;overflow-x:hidden!important;background:var(--android-page)!important;color:var(--android-ink)!important}
         body{margin:0!important;padding:18px 16px 48px!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif!important;font-size:16px!important;line-height:1.72!important;letter-spacing:0!important}
         .session-title,.note-block,h1,h2,h3,h4,h5,h6,p,li,blockquote{min-width:0!important;max-width:100%!important;overflow-wrap:anywhere!important;word-break:normal!important;white-space:normal!important}
         .session-title{font-size:clamp(22px,6vw,28px)!important;line-height:1.28!important;margin:0 0 14px!important}
         .note-block{max-width:100%!important;padding:14px 2px!important;border-color:var(--android-line)!important}
+        [id^="mathnotes-block-"]{scroll-margin-top:12px}[id^="mathnotes-block-"]:target{outline:2px solid var(--android-accent);outline-offset:2px}
         h1{font-size:1.55em!important}h2{font-size:1.32em!important}h3{font-size:1.16em!important}h1,h2,h3,h4{line-height:1.34!important;margin:12px 0 10px!important}
         p{margin:9px 0!important}ul,ol{max-width:100%!important;padding-left:1.45em!important}li{padding-left:.08em!important}
         blockquote{border-color:var(--android-accent)!important;color:var(--android-muted)!important}

@@ -7,7 +7,7 @@ import type { RecognitionProvider } from "@mathnotes/shared";
 import { BlockStore } from "./blockStore";
 import { MockRecognitionProvider } from "./mockRecognitionProvider";
 import { PhotoIngestPipeline, UploadError } from "./photoIngestPipeline";
-import { readRecognitionJobs } from "./recognitionJobLog";
+import { readRecognitionJobs, upsertRecognitionJob } from "./recognitionJobLog";
 
 describe("PhotoIngestPipeline", () => {
   let root: string;
@@ -32,6 +32,51 @@ describe("PhotoIngestPipeline", () => {
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("returns the exact target and latest persisted retry status instead of stale upload or queue state", async () => {
+    const args = { notebookId: "functional_analysis", sessionId: "lecture", originalName: "state.png", mimeType: "image/png",
+      bytes: Buffer.from("synthetic photo"), receivedAt: "2026-09-07T01:00:00Z" };
+    const accepted = await pipeline.acceptPhoto(args);
+    expect(accepted).toMatchObject({ notebookId: args.notebookId, sessionId: args.sessionId, recognitionStatus: "pending" });
+    const completed = await pipeline.processAcceptedRecognition(accepted);
+    const [job] = await readRecognitionJobs({ rootDir: root, ...args });
+    const restarted = new PhotoIngestPipeline({ store, provider: new MockRecognitionProvider() });
+    for (const status of ["running", "failed", "cancelled", "succeeded"] as const) {
+      await upsertRecognitionJob({ rootDir: root, job: { ...job, status, attempts: 2 } });
+      expect(await restarted.getAcceptedUpload(accepted.uploadId, args)).toMatchObject({ notebookId: args.notebookId,
+        sessionId: args.sessionId, recognitionStatus: status, transcriptBlockId: completed.transcriptBlockId,
+        sha256: accepted.sha256, mimeType: "image/png", assetPath: accepted.assetPath, imageBlockId: accepted.imageBlockId });
+      expect(await restarted.acceptPhoto(args)).toMatchObject({ duplicate: true, recognitionStatus: status, notebookId: args.notebookId, sessionId: args.sessionId });
+    }
+    expect(await restarted.getAcceptedUpload(accepted.uploadId)).toMatchObject({ notebookId: args.notebookId, sessionId: args.sessionId });
+  });
+
+  it("requires an explicit target when the same hash-based upload ID exists in two sessions", async () => {
+    await store.createSession({ notebookId: "functional_analysis", sessionId: "other", title: "Other", now: "2026-09-07T01:00:00Z" });
+    const common = { notebookId: "functional_analysis", originalName: "same.png", mimeType: "image/png", bytes: Buffer.from("same bytes"), receivedAt: "2026-09-07T01:00:00Z" };
+    const first = await pipeline.acceptPhoto({ ...common, sessionId: "lecture" });
+    const second = await pipeline.acceptPhoto({ ...common, sessionId: "other" });
+    expect(first.uploadId).toBe(second.uploadId);
+    await expect(pipeline.getAcceptedUpload(first.uploadId)).rejects.toMatchObject({ statusCode: 409 });
+    expect(await pipeline.getAcceptedUpload(first.uploadId, { notebookId: common.notebookId, sessionId: "lecture" })).toMatchObject({ sessionId: "lecture" });
+    expect(await pipeline.getAcceptedUpload(first.uploadId, { notebookId: common.notebookId, sessionId: "other" })).toMatchObject({ sessionId: "other" });
+    await expect(pipeline.getAcceptedUpload(first.uploadId, { notebookId: common.notebookId, sessionId: "missing" })).rejects.toMatchObject({ statusCode: 404 });
+    await expect(pipeline.getAcceptedUpload(first.uploadId, { notebookId: "../elsewhere", sessionId: "lecture" })).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it.each([false, true])("processes same-ID uploads in their exact sessions (reverse: %s)", async (reverse) => {
+    await store.createSession({ notebookId: "functional_analysis", sessionId: "other", title: "Other", now: "2026-09-07T01:00:00Z" });
+    const common = { notebookId: "functional_analysis", originalName: "same.png", mimeType: "image/png", bytes: Buffer.from("same bytes"), receivedAt: "2026-09-07T01:00:00Z" };
+    const first = await pipeline.acceptPhoto({ ...common, sessionId: "lecture" });
+    const second = await pipeline.acceptPhoto({ ...common, sessionId: "other" });
+    expect(first.recognitionJobId).toBe(second.recognitionJobId);
+    for (const accepted of reverse ? [second, first] : [first, second]) {
+      const result = await pipeline.processAcceptedRecognition(accepted);
+      expect(result).toMatchObject({ notebookId: accepted.notebookId, sessionId: accepted.sessionId, recognitionStatus: "succeeded" });
+      const [job] = await readRecognitionJobs({ rootDir: root, notebookId: common.notebookId, sessionId: accepted.sessionId! });
+      expect(job).toMatchObject({ sessionId: accepted.sessionId, status: "succeeded", transcriptBlockId: result.transcriptBlockId });
+    }
   });
 
   it("saves a photo, appends an image block, and appends a mock AI transcript block", async () => {

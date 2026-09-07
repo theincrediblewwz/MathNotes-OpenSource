@@ -7,6 +7,15 @@ import { StreamingOutputGuard, type OutputGuardReason } from "./streamingOutputG
 
 export type RecognitionJobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
 export type RecognitionFailureKind = "output_anomaly";
+export type RecognitionJobTarget = { notebookId: string; sessionId: string };
+
+export function recognitionTaskKey(target: RecognitionJobTarget, jobId: string): string {
+  return JSON.stringify([target.notebookId, target.sessionId, jobId]);
+}
+
+function matchesTarget(job: RecognitionJob, target?: RecognitionJobTarget): boolean {
+  return !target || (job.notebookId === target.notebookId && job.sessionId === target.sessionId);
+}
 
 export type RecognitionTiming = {
   acceptedAt: string;
@@ -34,6 +43,7 @@ export type RecognitionJob = {
   providerName?: string;
   providerLabel?: string;
   transcriptBlockId?: string;
+  hasSuccessfulTranscript?: boolean;
   warnings?: string[];
   error?: string;
   failureKind?: RecognitionFailureKind;
@@ -105,7 +115,7 @@ export class RecognitionQueue {
   }
 
   restorePersisted(job: RecognitionJob): RecognitionJob {
-    const existing = this.jobs.find((candidate) => candidate.id === job.id);
+    const existing = this.jobs.find((candidate) => candidate.id === job.id && matchesTarget(candidate, job));
     if (existing) {
       return { ...existing };
     }
@@ -118,8 +128,8 @@ export class RecognitionQueue {
     return { ...restored };
   }
 
-  getJob(id: string): RecognitionJob | undefined {
-    const job = this.jobs.find((candidate) => candidate.id === id);
+  getJob(id: string, target?: RecognitionJobTarget): RecognitionJob | undefined {
+    const job = this.jobs.find((candidate) => candidate.id === id && matchesTarget(candidate, target));
     return job ? { ...job } : undefined;
   }
 
@@ -127,8 +137,8 @@ export class RecognitionQueue {
     return this.jobs.map((job) => ({ ...job }));
   }
 
-  cancel(jobId: string): RecognitionJob | undefined {
-    const job = this.jobs.find((candidate) => candidate.id === jobId);
+  cancel(jobId: string, target?: RecognitionJobTarget): RecognitionJob | undefined {
+    const job = this.jobs.find((candidate) => candidate.id === jobId && matchesTarget(candidate, target));
     if (!job || (job.status !== "running" && job.status !== "pending")) {
       return job ? { ...job } : undefined;
     }
@@ -136,15 +146,16 @@ export class RecognitionQueue {
     const wasRunning = job.status === "running";
     job.status = "cancelled";
     job.error = "用户已中断识别。";
-    if (wasRunning) this.abortControllers.get(jobId)?.abort();
+    if (wasRunning) this.abortControllers.get(recognitionTaskKey(job, jobId))?.abort();
     void this.notifyJobChanged(job);
     return { ...job };
   }
 
-  async processNext(jobId?: string): Promise<RecognitionJob | null> {
+  async processNext(jobId?: string, target?: RecognitionJobTarget): Promise<RecognitionJob | null> {
     const job = this.jobs.find(
       (candidate) =>
         (!jobId || candidate.id === jobId) &&
+        matchesTarget(candidate, target) &&
         (candidate.status === "pending" || candidate.status === "failed") &&
         candidate.attempts < candidate.maxAttempts
     );
@@ -165,7 +176,7 @@ export class RecognitionQueue {
       queueMs: elapsedFromIso(job.timing?.acceptedAt ?? job.now, runningAtMs)
     };
     const abortController = new AbortController();
-    this.abortControllers.set(job.id, abortController);
+    this.abortControllers.set(recognitionTaskKey(job, job.id), abortController);
     await this.notifyJobChanged(job);
 
     let transcriptBlock: BlockRef | undefined = transcriptBlockFromJob(job);
@@ -339,6 +350,7 @@ export class RecognitionQueue {
       if (outputAnomaly) {
         throw new Error("Recognition output anomaly");
       }
+      abortController.signal.throwIfAborted();
       await flushPendingDraft();
 
       const block: BlockRef =
@@ -427,7 +439,7 @@ export class RecognitionQueue {
       });
       await this.notifyJobChanged(job);
     } finally {
-      this.abortControllers.delete(job.id);
+      this.abortControllers.delete(recognitionTaskKey(job, job.id));
     }
 
     return { ...job };

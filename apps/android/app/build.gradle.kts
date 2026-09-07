@@ -13,8 +13,8 @@ android {
         applicationId = "com.mathnotes.capture"
         minSdk = 26
         targetSdk = 34
-        versionCode = 14
-        versionName = "0.3.1"
+        versionCode = 17
+        versionName = "0.3.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

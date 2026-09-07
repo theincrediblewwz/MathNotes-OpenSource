@@ -65,7 +65,7 @@ class StandaloneProviderCatalogTest {
     fun `faithful prompt preserves the Windows transcription contract`() {
         assertTrue(STANDALONE_FAITHFUL_TRANSCRIPTION_PROMPT.contains("不要总结、润色、改写或补充证明"))
         assertTrue(STANDALONE_FAITHFUL_TRANSCRIPTION_PROMPT.contains("分栏/列表/推导布局"))
-        assertTrue(STANDALONE_FAITHFUL_TRANSCRIPTION_PROMPT.contains("[图片：...]"))
+        assertTrue(STANDALONE_FAITHFUL_TRANSCRIPTION_PROMPT.contains("[[mathnotes:source-image]]"))
         assertTrue(STANDALONE_FAITHFUL_TRANSCRIPTION_PROMPT.contains("行内公式统一使用 `\$...\$`"))
         assertTrue(STANDALONE_FAITHFUL_TRANSCRIPTION_PROMPT.contains("不要生成完整 LaTeX 文档"))
     }

@@ -10,6 +10,7 @@ export type ReorderSessionBlocksInput = Readonly<{
   sessionId: string;
   blockIds: readonly string[];
   direction: "up" | "down";
+  targetBlockId?: string;
 }>;
 
 export type TransferSessionBlocksInput = Readonly<{
@@ -97,8 +98,16 @@ export class SessionBlockOrganizeService {
       const selected = requireSelectedBlocks(stored.session, input.blockIds);
       if (selected.size === 0) throw new SessionBlockOrganizeError("invalid_input", 400);
       assertNoLockedBlocks(stored.session, selected);
-      const blocks = [...stored.session.blocks];
-      if (input.direction === "up") {
+      if (input.direction !== "up" && input.direction !== "down") throw new SessionBlockOrganizeError("invalid_input", 400);
+      let blocks = [...stored.session.blocks];
+      if (input.targetBlockId !== undefined) {
+        if (!blocks.some((block) => block.id === input.targetBlockId)) throw new SessionBlockOrganizeError("block_not_found", 404);
+        if (selected.has(input.targetBlockId)) return stored.session;
+        const moved = blocks.filter((block) => selected.has(block.id));
+        blocks = blocks.filter((block) => !selected.has(block.id));
+        const index = blocks.findIndex((block) => block.id === input.targetBlockId) + (input.direction === "down" ? 1 : 0);
+        blocks.splice(index, 0, ...moved);
+      } else if (input.direction === "up") {
         for (let index = 1; index < blocks.length; index += 1) {
           if (selected.has(blocks[index].id) && !selected.has(blocks[index - 1].id)) {
             [blocks[index - 1], blocks[index]] = [blocks[index], blocks[index - 1]];

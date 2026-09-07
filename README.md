@@ -2,7 +2,11 @@
 
 MathNotes 是一个 GPLv3、本地优先的数学笔记项目，包含 Windows、macOS、Android 与 PWA。它围绕“图片/PDF → 忠实 Markdown 草稿 → 人工校订与锁定 → 连续阅读与导出”工作。
 
-当前开发版本：`0.3.1 alpha`；最新公开预发布为 `v0.3.1-alpha.1`。源码可以使用和修改，但自动测试不能替代真实 Windows、Apple silicon Mac、Android 与 iPhone 验收。
+当前开发版本：`0.3.4`，处于试用阶段。最新整合分支为 `codex/release-v0.3.4-integration`，发行包见 [MathNotes 0.3.4](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/v0.3.4)。源码可以使用和修改，但自动测试不能替代真实 Windows、Apple silicon Mac、Android 与 iPhone 验收。
+
+本版提供 Windows 便携 ZIP、Android APK 和独立 PWA 更新包。Windows 为未签名测试包，Android 沿用既有测试签名；覆盖安装前请备份笔记。Mac 源码与交接材料保留，Mac 安装包由真实 Mac 上的工作另行构建。
+
+0.3.4 修复了块拖动原地放下误报导入、重新识别未实际执行，并补齐已上传素材预览与正文定位、左上角可滚动气泡目录、阅读底栏显隐和画笔内矩形遮盖。各包的版本、SHA-256、验证范围与已知限制以该发行页为准。
 
 ## 核心闭环
 
@@ -26,7 +30,7 @@ MathNotes 是一个 GPLv3、本地优先的数学笔记项目，包含 Windows�
 需要 Node.js 22+、npm 与 Git。Windows 桌面开发还需要 Windows 11；Android 构建需要 JDK 17 与 Android SDK 34。
 
 ```powershell
-git clone https://github.com/theincrediblewwz/MathNotes-OpenSource.git
+git clone --branch codex/release-v0.3.4-integration https://github.com/theincrediblewwz/MathNotes-OpenSource.git
 cd MathNotes-OpenSource
 npm ci
 ```

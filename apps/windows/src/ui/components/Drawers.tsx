@@ -1,5 +1,6 @@
 import { Archive, Check, Clock3, ExternalLink, FolderOpen, Plus, Settings as SettingsIcon, X } from "lucide-react";
 import QRCode from "qrcode";
+import { createPortal } from "react-dom";
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { PROVIDER_CATALOG, type ProviderDescriptor } from "@mathnotes/shared";
 import type {
@@ -29,6 +30,7 @@ import {
 import { defaultMathPromptTemplate, type PromptTemplate } from "../../common/promptTemplates";
 import { createEmptyNotationProfileConfig, type NotationProfile, type NotationRule } from "../../common/notationProfiles";
 import { getRecognitionProviderCapability } from "../providerCapabilities";
+import { version as appVersion } from "../../../package.json";
 
 type DrawerProps = {
   openLayer: string | null;
@@ -52,6 +54,8 @@ const fontOptions = [
 type NotebookDrawerProps = DrawerProps & {
   recentSessions?: RecentSessionSummary[];
   onOpenRecentSession?: (session: RecentSessionSummary) => void;
+  onRenameRecentSession?: (session: RecentSessionSummary) => void;
+  onDeleteRecentSession?: (session: RecentSessionSummary) => void;
   onOpenNotebooks?: () => void;
   onOpenSettings?: () => void;
 };
@@ -61,9 +65,28 @@ export function NotebookDrawer({
   onClose,
   recentSessions = [],
   onOpenRecentSession,
+  onRenameRecentSession,
+  onDeleteRecentSession,
   onOpenNotebooks,
   onOpenSettings
 }: NotebookDrawerProps) {
+  const [menu, setMenu] = useState<{ session: RecentSessionSummary; x: number; y: number } | null>(null);
+  useEffect(() => {
+    setMenu(null);
+  }, [openLayer, recentSessions]);
+  useEffect(() => {
+    if (!menu) return;
+    const dismiss = () => setMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") dismiss(); };
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("blur", dismiss);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("blur", dismiss);
+    };
+  }, [menu]);
   return (
     <aside
       aria-label="最近阅读"
@@ -85,6 +108,16 @@ export function NotebookDrawer({
             className="recent-reading-row"
             key={`${session.notebookId}/${session.sessionId}`}
             onClick={() => onOpenRecentSession?.(session)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setMenu({ session, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 218)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 94)) });
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+              event.preventDefault();
+              const bounds = event.currentTarget.getBoundingClientRect();
+              setMenu({ session, x: bounds.left + 12, y: bounds.bottom });
+            }}
             type="button"
           >
             <Clock3 aria-hidden="true" />
@@ -102,6 +135,12 @@ export function NotebookDrawer({
           </div>
         )}
       </div>
+      {menu ? createPortal(
+        <div className="editor-context-menu recent-reading-context-menu" role="menu" aria-label="最近阅读操作" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()}>
+          <button role="menuitem" type="button" onClick={() => { onRenameRecentSession?.(menu.session); setMenu(null); }}>重命名</button>
+          <button role="menuitem" type="button" onClick={() => { onDeleteRecentSession?.(menu.session); setMenu(null); }}>删除</button>
+        </div>, document.body
+      ) : null}
       <div className="recent-reading-actions">
         <button className="recent-reading-settings" onClick={onOpenSettings} type="button">
           <SettingsIcon /> 设置
@@ -600,6 +639,7 @@ export function UserSettingsForm({
 
   return (
     <div className="settings-form" data-testid="user-settings">
+      <p className="muted" data-testid="app-version">MathNotes · 当前版本 {appVersion}</p>
       <a
         aria-label={`打开 ${MATHNOTES_AUTHOR_ID} 的 GitHub 主页`}
         className="settings-owner-card"

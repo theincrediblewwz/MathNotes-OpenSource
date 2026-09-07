@@ -174,7 +174,9 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun cancel(capture: CaptureEntity) {
-        uploadScheduler.cancel(capture.captureId)
-        viewModelScope.launch { repository.markCancelled(capture.captureId) }
+        viewModelScope.launch {
+            repository.markCancelled(capture.captureId)
+            uploadScheduler.cancel(capture.captureId)
+        }
     }
 }

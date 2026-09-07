@@ -33,6 +33,8 @@ export type NetworkApiServerOptions = {
   token: string;
   pipeline?: PhotoIngestPort;
   createPipeline?: () => PhotoIngestPort | Promise<PhotoIngestPort>;
+  /** Read persisted upload state without initializing a recognition provider. */
+  getUploadStatus?: NonNullable<PhotoIngestPort["getAcceptedUpload"]>;
   acceptPdf?: (input: IngestPdfArgs) => Promise<IngestPdfResult>;
   maxUploadBytes?: number;
   pairingTarget?: {
@@ -334,9 +336,24 @@ export class NetworkApiServer {
   private async handleUploadStatus(response: ServerResponse, url: URL): Promise<void> {
     const uploadId = url.searchParams.get("uploadId")?.trim();
     if (!uploadId) throw new UploadError("uploadId is required", 400);
-    const pipeline = await this.pipelineForUpload();
-    if (!pipeline.getAcceptedUpload) throw new UploadError("Upload status is not available", 503);
-    writeJson(response, 200, uploadResponse(await pipeline.getAcceptedUpload(uploadId)));
+    const hasTarget = url.searchParams.has("notebookId") || url.searchParams.has("sessionId");
+    const target = hasTarget ? await this.authorizeCompanionTarget(response, url) : undefined;
+    if (hasTarget && !target) return;
+    const result = this.options.getUploadStatus
+      ? await this.options.getUploadStatus(uploadId, target)
+      : await (async () => {
+        const pipeline = await this.pipelineForUpload();
+        if (!pipeline.getAcceptedUpload) throw new UploadError("Upload status is not available", 503);
+        return pipeline.getAcceptedUpload(uploadId, target);
+      })();
+    if (target && (result.notebookId !== target.notebookId || result.sessionId !== target.sessionId)) {
+      throw new UploadError("Upload record does not belong to this note", 404);
+    }
+    if (this.options.getPairingTargets) {
+      const allowed = (await this.options.getPairingTargets()).some(item => item.notebookId === result.notebookId && item.sessionId === result.sessionId);
+      if (!allowed) throw new UploadError("Upload target is unavailable", 404);
+    }
+    writeJson(response, 200, uploadResponse(result));
   }
 
   private async handleRecognitionRetry(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -404,7 +421,7 @@ export class NetworkApiServer {
           pdf: Boolean(this.options.acceptPdf)
         },
         recognition: {
-          status: Boolean(this.options.pipeline?.getAcceptedUpload),
+          status: Boolean(this.options.getUploadStatus || this.options.pipeline?.getAcceptedUpload),
           retry: Boolean(this.options.pipeline?.retryAcceptedRecognition)
         }
       }
@@ -930,6 +947,11 @@ function requiredField(fields: Record<string, string>, name: string): string {
 function uploadResponse(result: IngestPhotoResult): Record<string, unknown> {
   return {
     uploadId: result.uploadId,
+    notebookId: result.notebookId,
+    sessionId: result.sessionId,
+    sha256: result.sha256,
+    mimeType: result.mimeType,
+    originalName: result.originalName,
     duplicate: result.duplicate,
     assetPath: result.assetPath,
     imageBlockId: result.imageBlockId,

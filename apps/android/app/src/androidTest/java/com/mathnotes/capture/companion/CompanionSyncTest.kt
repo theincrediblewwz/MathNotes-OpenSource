@@ -69,7 +69,7 @@ class CompanionSyncTest {
             transport = "private_http",
             profileId = "test-pc"
         )
-        val target = PairingTarget("analysis", "lecture", "泛函分析")
+        val target = PairingTarget("analysis", "lecture", "泛函分析", "广义函数讨论班")
         val assetStore = CompanionAssetStore(ApplicationProvider.getApplicationContext())
         val repository = CompanionRepository(
             database.sessionDao(),
@@ -80,6 +80,7 @@ class CompanionSyncTest {
 
         val cached = repository.sessions(pairing).first().single()
         assertEquals("r1", cached.revision)
+        assertEquals("广义函数讨论班", cached.notebookTitle)
         assertTrue(cached.html.contains("note"))
         assertTrue(cached.html.contains("mathnotes-companion-asset://asset-1"))
         assertTrue(cached.html.length < 1_000)
@@ -350,7 +351,7 @@ class CompanionSyncTest {
         )
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
-                """{"ok":true,"version":1,"activeTarget":{"notebookId":"analysis","sessionId":"lecture","title":"新标题"},"targets":[{"notebookId":"analysis","sessionId":"lecture","title":"新标题"}]}"""
+                """{"ok":true,"version":1,"activeTarget":{"notebookId":"analysis","sessionId":"lecture","title":"新标题"},"targets":[{"notebookId":"analysis","notebookTitle":"论文阅读","sessionId":"lecture","title":"新标题"}]}"""
             )
         )
         val repository = CompanionRepository(database.sessionDao(), CompanionApiClient())
@@ -361,6 +362,7 @@ class CompanionSyncTest {
         assertEquals(1, cached.size)
         assertEquals("lecture", cached.single().sessionId)
         assertEquals("新标题", cached.single().title)
+        assertEquals("论文阅读", cached.single().notebookTitle)
         val request = server.takeRequest()
         assertEquals("/api/v1/pairing/verify", request.requestUrl?.encodedPath)
         assertEquals("Bearer 0123456789abcdef", request.getHeader("Authorization"))

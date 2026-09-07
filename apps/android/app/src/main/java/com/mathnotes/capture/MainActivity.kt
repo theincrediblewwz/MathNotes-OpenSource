@@ -1,6 +1,9 @@
 package com.mathnotes.capture
 
 import android.os.Bundle
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -66,6 +69,7 @@ import androidx.core.content.FileProvider
 import com.mathnotes.capture.notification.rememberNotificationPermissionController
 import com.mathnotes.capture.imageedit.ImageEditDraft
 import com.mathnotes.capture.imageedit.ImageEditScreen
+import com.mathnotes.capture.companion.resolveNotebookTitle
 import com.mathnotes.capture.notes.UnifiedNotesScreen
 import com.mathnotes.capture.pairing.PairingConfig
 import com.mathnotes.capture.pairing.PairingParseResult
@@ -213,7 +217,7 @@ fun MathNotesCaptureApp(
             }
         (uploadItems + localItems).sortedByDescending(CaptureGalleryItem::createdAt).take(80)
     }
-    var section by remember { mutableStateOf(AppSection.NOTES) }
+    var section by rememberSaveable { mutableStateOf(AppSection.NOTES) }
     var openLocalNotesRequest by remember { mutableStateOf(0) }
     var selectingLocalCaptureTarget by rememberSaveable { mutableStateOf(false) }
     var pairedConfig by remember { mutableStateOf(pairingStore.load()) }
@@ -237,9 +241,13 @@ fun MathNotesCaptureApp(
     var imageEditLocalSessionId by remember { mutableStateOf<String?>(null) }
     var editAfterCapture by rememberSaveable { mutableStateOf(false) }
     var systemCameraSessionActive by rememberSaveable { mutableStateOf(false) }
+    var originalCameraImportPending by rememberSaveable { mutableStateOf(false) }
     var launchNextSystemCamera by remember { mutableStateOf(false) }
     var previewGalleryOpen by remember { mutableStateOf(false) }
     var queueFocusCaptureId by remember { mutableStateOf<String?>(null) }
+    var noteReadingRequest by remember { mutableStateOf<com.mathnotes.capture.notes.NoteReadingRequest?>(null) }
+    var readerActive by remember { mutableStateOf(false) }
+    var readingBottomBarHidden by remember { mutableStateOf(false) }
     LaunchedEffect(previewGalleryOpen) {
         onMediaPreviewChange(previewGalleryOpen)
     }
@@ -251,6 +259,7 @@ fun MathNotesCaptureApp(
     )
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
+        originalCameraImportPending = false
         val destination = captureDestination
         captureMessage = "正在保存所选图片…"
         captureViewModel.stageImage(uri) { result ->
@@ -516,6 +525,10 @@ fun MathNotesCaptureApp(
                 targets = availableTargets,
                 themeId = themeId,
                 openLocalRequest = openLocalNotesRequest,
+                readingRequest = noteReadingRequest,
+                onReadingTap = { if (readerActive) readingBottomBarHidden = !readingBottomBarHidden },
+                onReaderActive = { active -> readerActive = active; if (!active) readingBottomBarHidden = false },
+                bottomBarHidden = readingBottomBarHidden,
                 selectCaptureTarget = selectingLocalCaptureTarget,
                 onCaptureTargetSelected = { session ->
                     standaloneViewModel.selectSession(session.id)
@@ -572,10 +585,26 @@ fun MathNotesCaptureApp(
                 },
                 onScanComputer = { scannerOpen = true },
                 onOpenSystemCamera = {
+                    originalCameraImportPending = false
                     systemCameraSessionActive = true
                     launchNextSystemCamera = true
                     captureMessage = "已切换到系统相机；退出系统相机即可返回 MathNotes"
                 },
+                onOpenOriginalCamera = {
+                    systemCameraSessionActive = false
+                    launchNextSystemCamera = false
+                    try {
+                        context.startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))
+                        originalCameraImportPending = true
+                        captureMessage = null
+                    } catch (_: ActivityNotFoundException) {
+                        captureMessage = "无法打开原相机，请先用手机相机拍摄，再从相册选择照片"
+                    } catch (_: SecurityException) {
+                        captureMessage = "手机未允许打开原相机，请先拍摄，再从相册选择照片"
+                    }
+                },
+                originalCameraImportPending = originalCameraImportPending,
+                onDismissOriginalCameraImport = { originalCameraImportPending = false },
                 onOpenQueue = {
                     val upload = captures.firstOrNull { isActiveQueueState(it.state) }
                     if (upload != null) {
@@ -691,7 +720,13 @@ fun MathNotesCaptureApp(
                         standaloneState.activeSession?.title
                     ).joinToString(" · ").ifBlank { "本机笔记" }
                 },
-                onContinueCapture = { section = AppSection.CAPTURE }
+                onContinueCapture = { section = AppSection.CAPTURE },
+                onOpenNote = { request ->
+                    noteReadingRequest = request
+                    readingBottomBarHidden = false
+                    section = AppSection.NOTES
+                },
+                findPairing = { capture -> pairingStore.findForCapture(capture.pairingProfileId, capture.endpointId) }
             )
             AppSection.SETTINGS -> PairingSettingsScreen(
                 pairedConfig = pairedConfig,
@@ -730,12 +765,13 @@ fun MathNotesCaptureApp(
             )
         }
 
-            MathNotesFloatingNavigation(
+            if (section != AppSection.NOTES || !readerActive || !readingBottomBarHidden) MathNotesFloatingNavigation(
                 items = AppSection.entries.map { MathNotesNavItem(it.key, it.label, it.icon) },
                 selectedKey = section.key,
                 onSelect = { key ->
                     val next = AppSection.entries.first { it.key == key }
                     if (next != AppSection.NOTES) selectingLocalCaptureTarget = false
+                    if (next != AppSection.NOTES) noteReadingRequest = null
                     section = next
                 },
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -793,6 +829,9 @@ private fun CaptureScreen(
     onOpenLocalNotebooks: () -> Unit,
     onScanComputer: () -> Unit,
     onOpenSystemCamera: () -> Unit,
+    onOpenOriginalCamera: () -> Unit,
+    originalCameraImportPending: Boolean,
+    onDismissOriginalCameraImport: () -> Unit,
     onOpenQueue: () -> Unit,
     createOutputFile: () -> File,
     onPhotoSaved: (File) -> Unit,
@@ -853,6 +892,16 @@ private fun CaptureScreen(
             }
         }
         Spacer(Modifier.height(10.dp))
+        if (originalCameraImportPending) {
+            MathNotesPaper(Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+                Text("原相机拍摄完成后", style = MaterialTheme.typography.titleSmall, color = MathNotesColors.Ink)
+                Text("从相册选择刚拍的照片，裁剪或遮盖后再加入队列。", style = MaterialTheme.typography.bodySmall, color = MathNotesColors.Muted)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MathNotesSecondaryButton("选择刚拍的照片", onPickImage, Modifier.weight(1f))
+                    androidx.compose.material3.TextButton(onClick = onDismissOriginalCameraImport) { Text("取消") }
+                }
+            }
+        }
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
             InlineCaptureCamera(
                 createOutputFile = createOutputFile,
@@ -983,7 +1032,7 @@ private fun CaptureScreen(
             ) {
                 val notebookRows = if (routesToWindows) {
                     targets.groupBy { it.notebookId }.map { (id, grouped) ->
-                        Triple(id, grouped.firstOrNull()?.notebookTitle.orEmpty().ifBlank { id }, grouped.size)
+                        Triple(id, resolveNotebookTitle(id, grouped.firstOrNull()?.notebookTitle.orEmpty()), grouped.size)
                     }
                 } else {
                     localNotebooks.map { notebook ->
@@ -1056,7 +1105,15 @@ private fun CaptureScreen(
             ) {
                 DropdownMenuItem(
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
-                    text = { Text("使用系统相机（厂商算法）") },
+                    text = { Text("打开手机原相机 · 拍完后导入") },
+                    onClick = {
+                        importMenuOpen = false
+                        onOpenOriginalCamera()
+                    }
+                )
+                DropdownMenuItem(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).clip(RoundedCornerShape(12.dp)),
+                    text = { Text("系统相机快捷拍摄 · 自动返回") },
                     onClick = {
                         importMenuOpen = false
                         onOpenSystemCamera()

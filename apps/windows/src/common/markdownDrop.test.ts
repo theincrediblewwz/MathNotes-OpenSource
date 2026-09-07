@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { markdownDropRenderBlocks, markdownDropTitle, readMarkdownDropFiles } from "./markdownDrop";
+import { isExternalFileDrop, markdownDropRenderBlocks, markdownDropTitle, readMarkdownDropFiles } from "./markdownDrop";
 
 describe("Markdown desktop drop", () => {
+  it("keeps internal block and selection drags out of the external file importer", () => {
+    expect(isExternalFileDrop({ types: ["application/x-mathnotes-assistant-context", "text/plain"] })).toBe(false);
+    expect(isExternalFileDrop({ types: ["application/x-mathnotes-assistant-context", "Files"] })).toBe(false);
+    expect(isExternalFileDrop({ types: ["text/plain"] })).toBe(false);
+    expect(isExternalFileDrop({ types: ["Files"] })).toBe(true);
+  });
   it("reads md and markdown files in drop order", async () => {
     const documents = await readMarkdownDropFiles([
       new File(["# One"], "One.MD"),

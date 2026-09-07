@@ -35,6 +35,22 @@ describe("NotebookDrawer", () => {
     }
   ];
 
+  it("offers rename and delete for the exact recent session without opening it", () => {
+    const onRenameRecentSession = vi.fn();
+    const onDeleteRecentSession = vi.fn();
+    const onOpenRecentSession = vi.fn();
+    render(<NotebookDrawer openLayer="notebook" onClose={vi.fn()} recentSessions={recentSessions}
+      onOpenRecentSession={onOpenRecentSession} onRenameRecentSession={onRenameRecentSession} onDeleteRecentSession={onDeleteRecentSession} />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: /泛函分析 第 3 讲/ }), { clientX: 90, clientY: 80 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "重命名" }));
+    expect(onRenameRecentSession).toHaveBeenCalledWith(recentSessions[0]);
+    fireEvent.contextMenu(screen.getByRole("button", { name: /泛函分析 第 3 讲/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
+    expect(onDeleteRecentSession).toHaveBeenCalledWith(recentSessions[0]);
+    expect(onOpenRecentSession).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
   it("shows only recent reading in the old directory position", () => {
     render(
       <NotebookDrawer

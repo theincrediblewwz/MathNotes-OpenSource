@@ -8,6 +8,17 @@ import org.junit.Test
 
 class StandaloneMarkdownReaderTest {
     @Test
+    fun `full reader builds a collapsed heading outline while card previews stay compact`() {
+        val full = prepareStandaloneMarkdownReaderHtml("# 第一章\n\n## 子节", MathNotesThemeId.READING)
+        val compact = prepareStandaloneMarkdownReaderHtml("# 第一章\n\n## 子节", MathNotesThemeId.READING, compact = true)
+        assertTrue(full.contains("outline.className = 'mathnotes-outline'"))
+        assertTrue(full.contains("link.textContent = heading.textContent"))
+        assertTrue(full.contains("outline.open = false"))
+        assertFalse(full.contains("outline.open = true"))
+        assertFalse(compact.contains("outline.className = 'mathnotes-outline'"))
+    }
+
+    @Test
     fun `local reader uses bundled Markdown and KaTeX without embedding raw note markup`() {
         val html = prepareStandaloneMarkdownReaderHtml("# 标题\n\n${'$'}${'$'}x_i^2${'$'}${'$'}\n<script>alert(1)</script>", MathNotesThemeId.READING)
 

@@ -6,6 +6,7 @@ import { StreamingOutputGuard } from "../domain/streamingOutputGuard";
 import { SessionWriteCoordinator } from "./sessionWriteCoordinator";
 import { buildSessionRecognitionContext } from "./sessionRecognitionContext";
 import { sessionManifestRevision } from "./sessionRevision";
+import { bindSourceImageMarkers } from "../domain/sourceImageMarkers";
 
 export type SessionRecognitionStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
 export type SessionRecognitionFailureKind = "output_anomaly" | "provider_unavailable";
@@ -787,7 +788,7 @@ export class SessionRecognitionService {
       const timestamp = this.now();
       const blockPath = resolve(context.sessionDir, block.path);
       const beforeMarkdown = await readFile(blockPath, "utf8");
-      await writeAtomically(blockPath, markdown);
+      await writeAtomically(blockPath, bindSourceImageMarkers(markdown, task.assetPath));
       block.updatedAt = timestamp;
       context.session.updatedAt = timestamp;
       try {

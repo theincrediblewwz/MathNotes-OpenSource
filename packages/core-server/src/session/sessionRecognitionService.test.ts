@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RecognitionProvider, SessionRecord } from "@mathnotes/shared";
+import { SessionWriteCoordinator } from "./sessionWriteCoordinator";
 import {
   SessionRecognitionError,
   SessionRecognitionService,
@@ -64,6 +65,27 @@ describe("SessionRecognitionService", () => {
       afterSequence: settledSequence,
       timeoutMs: 5
     })).resolves.toBe(settledSequence);
+  });
+
+  it("binds diagram markers to the task image in streaming and final writes without changing other notes", async () => {
+    const provider: RecognitionProvider = {
+      name: "diagram-fixture",
+      async transcribe() { throw new Error("stream expected"); },
+      async transcribeWithEvents(input) {
+        expect(input.imagePaths).toEqual([join(sessionDir, "assets", "photos", "board.png")]);
+        input.onEvent({ type: "stdout", text: "[图片：坐标轴与曲线]\n\n[[mathnotes:source-image]]\n" });
+        return { markdown: "[图片：坐标轴与曲线]\n\n[[mathnotes:source-image]]\n\n$x^2+y^2=1$" };
+      }
+    };
+    const service = new SessionRecognitionService(root, async () => provider);
+    const started = await service.start({ notebookId: "analysis", sessionId: "lecture", imageBlockId: "0002" });
+    const completed = await waitForTerminal(service, started.id);
+    expect(completed.status).toBe("succeeded");
+    expect(await readFile(join(sessionDir, "blocks", `${started.transcriptBlockId}_ai_transcript.md`), "utf8")).toBe(
+      "[图片：坐标轴与曲线]\n\n![识别照片（已处理）](../assets/photos/board.png)\n\n$x^2+y^2=1$"
+    );
+    expect(await readFile(join(sessionDir, "blocks", "0001.md"), "utf8")).toBe("## 用户原文\n\n不可覆盖\n");
+    expect(await readFile(join(sessionDir, "assets", "photos", "board.png"))).toEqual(Buffer.from([1, 2, 3]));
   });
 
   it("rejects invalid targets, missing assets and duplicate active work without creating residue", async () => {
@@ -168,6 +190,7 @@ describe("SessionRecognitionService", () => {
   });
 
   it("stops writing as soon as a user protects any span in the active transcript", async () => {
+    const coordinator = new SessionWriteCoordinator();
     let releaseProvider!: () => void;
     const gate = new Promise<void>((resolve) => { releaseProvider = resolve; });
     const provider: RecognitionProvider = {
@@ -182,22 +205,26 @@ describe("SessionRecognitionService", () => {
         return { markdown: "## 不得覆盖锁定内容\n" };
       }
     };
-    const service = new SessionRecognitionService(root, async () => provider);
+    const service = new SessionRecognitionService(root, async () => provider, coordinator);
     const started = await service.start({ notebookId: "analysis", sessionId: "lecture", imageBlockId: "0002" });
     const transcriptPath = join(sessionDir, "blocks", `${started.transcriptBlockId}_ai_transcript.md`);
     await waitForFileText(transcriptPath, "## 锁定前草稿\n");
 
-    const protectedSession = await readSession();
-    protectedSession.locks.push({
-      id: `lock_span_${started.transcriptBlockId}`,
-      blockId: started.transcriptBlockId,
-      kind: "span",
-      contentHash: "1".repeat(64),
-      createdAt: "2026-07-24T01:00:00.000Z",
-      createdBy: "user",
-      aiEditable: false
+    // Real lock commands use this same queue; bypassing it races the draft's
+    // manifest write and can expose a partially written test fixture on Windows.
+    await coordinator.run("analysis", "lecture", async () => {
+      const protectedSession = await readSession();
+      protectedSession.locks.push({
+        id: `lock_span_${started.transcriptBlockId}`,
+        blockId: started.transcriptBlockId,
+        kind: "span",
+        contentHash: "1".repeat(64),
+        createdAt: "2026-07-24T01:00:00.000Z",
+        createdBy: "user",
+        aiEditable: false
+      });
+      await writeFile(join(sessionDir, "session.json"), `${JSON.stringify(protectedSession, null, 2)}\n`);
     });
-    await writeFile(join(sessionDir, "session.json"), `${JSON.stringify(protectedSession, null, 2)}\n`);
     releaseProvider();
 
     const failed = await waitForTerminal(service, started.id);

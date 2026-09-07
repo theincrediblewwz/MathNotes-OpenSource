@@ -24,6 +24,19 @@ interface CaptureDao {
     @Query("SELECT * FROM capture_queue WHERE state IN ('pending', 'uploading', 'retryable') ORDER BY createdAt ASC")
     suspend fun findRecoverable(): List<CaptureEntity>
 
+    @Query("UPDATE capture_queue SET state = 'uploading', attemptCount = attemptCount + 1, nextAttemptAt = NULL, lastError = NULL, updatedAt = :now " +
+        "WHERE captureId = :captureId AND state IN ('pending', 'uploading', 'retryable') AND attemptCount < :maxAttempts " +
+        "AND (nextAttemptAt IS NULL OR nextAttemptAt <= :now)")
+    suspend fun startAutomaticAttempt(captureId: String, maxAttempts: Int, now: Long): Int
+
+    @Query("UPDATE capture_queue SET state = :state, nextAttemptAt = :nextAttemptAt, lastHttpStatus = :httpStatus, lastError = :message, updatedAt = :now " +
+        "WHERE captureId = :captureId AND state IN ('pending', 'uploading', 'retryable')")
+    suspend fun recordAutomaticFailure(captureId: String, state: String, httpStatus: Int?, message: String, nextAttemptAt: Long?, now: Long): Int
+
+    @Query("UPDATE capture_queue SET state = 'paused', nextAttemptAt = NULL, lastError = :message, updatedAt = :now " +
+        "WHERE captureId = :captureId AND state != 'uploaded'")
+    suspend fun pauseUnlessUploaded(captureId: String, message: String, now: Long): Int
+
     @Query(
         "SELECT * FROM capture_queue " +
             "WHERE pairingProfileId = :profileId AND notebookId = :notebookId " +

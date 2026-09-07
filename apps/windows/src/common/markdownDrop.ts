@@ -2,6 +2,10 @@ import { markdownToRenderBlock, type RenderBlock } from "./sessionDocument";
 
 export const maxMarkdownDropBytes = 2 * 1024 * 1024;
 
+export function isExternalFileDrop(transfer: Pick<DataTransfer, "types">): boolean {
+  return transfer.types.includes("Files") && !transfer.types.some(type => type.startsWith("application/x-mathnotes-"));
+}
+
 export type MarkdownDropDocument = Readonly<{
   name: string;
   markdown: string;

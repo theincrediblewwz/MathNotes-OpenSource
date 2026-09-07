@@ -39,6 +39,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.mathnotes.capture.R
+import com.mathnotes.capture.BuildConfig
 import com.mathnotes.capture.companion.CompanionDatabase
 import com.mathnotes.capture.companion.CompanionMarkdownMirror
 import com.mathnotes.capture.notification.NotificationPermissionAction
@@ -103,7 +104,7 @@ fun PairingSettingsScreen(
         MathNotesPageHeader(
             eyebrow = "MathNotes",
             title = "设置",
-            detail = "管理电脑连接、识别模型与阅读外观。"
+            detail = "当前版本 ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · 管理电脑连接、识别模型与阅读外观。"
         )
         Spacer(Modifier.height(22.dp))
 

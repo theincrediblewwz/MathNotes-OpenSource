@@ -30,11 +30,11 @@ class CompanionRepository(
     suspend fun refresh(pairing: PairingConfig, target: PairingTarget) = sessionRefreshMutex.withLock {
         val cached = dao.find(profileKey(pairing), target.notebookId, target.sessionId)?.let { hydrate(pairing, it) }
         val snapshot = try {
-            client.fetchSession(pairing, target, cached?.usableRevision()) { cacheSnapshot(pairing, it) }
+            client.fetchSession(pairing, target, cached?.usableRevision()) { cacheSnapshot(pairing, it, target.notebookTitle) }
         } catch (_: CompanionNotModifiedException) {
             cached?.toSnapshot() ?: throw CompanionSyncException("本地笔记缓存缺失，请重新同步。")
         }
-        cacheSnapshot(pairing, snapshot)
+        cacheSnapshot(pairing, snapshot, target.notebookTitle)
     }
 
     suspend fun refresh(
@@ -47,11 +47,11 @@ class CompanionRepository(
             try {
                 val cached = dao.find(profileKey(candidate), target.notebookId, target.sessionId)?.let { hydrate(candidate, it) }
                 val snapshot = try {
-                    client.fetchSession(candidate, target, cached?.usableRevision()) { cacheSnapshot(candidate, it) }
+                    client.fetchSession(candidate, target, cached?.usableRevision()) { cacheSnapshot(candidate, it, target.notebookTitle) }
                 } catch (_: CompanionNotModifiedException) {
                     cached?.toSnapshot() ?: throw CompanionSyncException("本地笔记缓存缺失，请重新同步。")
                 }
-                cacheSnapshot(candidate, snapshot)
+                cacheSnapshot(candidate, snapshot, target.notebookTitle)
                 return@withLock ResolvedCompanionSession(candidate, snapshot)
             } catch (error: CompanionAuthenticationException) {
                 throw error
@@ -106,8 +106,9 @@ class CompanionRepository(
         contentStore?.delete(pairing, target)
     }
 
-    private suspend fun cacheSnapshot(pairing: PairingConfig, snapshot: CompanionSessionSnapshot) {
+    private suspend fun cacheSnapshot(pairing: PairingConfig, snapshot: CompanionSessionSnapshot, notebookTitle: String) {
         contentStore?.write(pairing, snapshot)
+        val previous = dao.find(profileKey(pairing), snapshot.notebookId, snapshot.sessionId)
         val entity = CompanionSessionEntity(
                 profileId = profileKey(pairing),
                 notebookId = snapshot.notebookId,
@@ -117,7 +118,8 @@ class CompanionRepository(
                 markdown = if (contentStore == null) snapshot.markdown else "",
                 html = if (contentStore == null) snapshot.html else "",
                 updatedAt = snapshot.updatedAt,
-                syncedAt = System.currentTimeMillis()
+                syncedAt = System.currentTimeMillis(),
+                notebookTitle = resolveNotebookTitle(snapshot.notebookId, notebookTitle, previous?.notebookTitle.orEmpty())
             )
         dao.upsert(entity)
         if (snapshot.markdown.isNotBlank()) runCatching { markdownMirror?.writeSnapshot(snapshot) }
@@ -136,8 +138,11 @@ class CompanionRepository(
                     pairing,
                     PairingTarget(cached.notebookId, cached.sessionId, cached.title)
                 )
-            } else if (cached.title != target.title) {
-                dao.upsert(cached.copy(title = target.title))
+            } else {
+                val notebookTitle = resolveNotebookTitle(target.notebookId, target.notebookTitle, cached.notebookTitle)
+                if (cached.title != target.title || cached.notebookTitle != notebookTitle) {
+                    dao.upsert(cached.copy(title = target.title, notebookTitle = notebookTitle))
+                }
             }
         }
         catalog.targets.forEach { target ->
@@ -152,7 +157,8 @@ class CompanionRepository(
                         markdown = "",
                         html = "",
                         updatedAt = "",
-                        syncedAt = 0L
+                        syncedAt = 0L,
+                        notebookTitle = resolveNotebookTitle(target.notebookId, target.notebookTitle)
                     )
                 )
             }

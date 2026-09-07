@@ -60,14 +60,23 @@ export function findMarkdownImageReferenceAtPosition(markdown: string, position:
 
 export function normalizeSessionAssetPath(target: string): string | null {
   const withoutAnchor = target.trim().split("#", 1)[0]?.split("?", 1)[0] ?? "";
-  const normalized = withoutAnchor.replace(/\\/g, "/");
+  let decoded: string;
+  try {
+    // Markdown-it URL-encodes image destinations. Decode once, then validate
+    // the resulting path before the local asset protocol encodes it again.
+    decoded = decodeURIComponent(withoutAnchor);
+  } catch {
+    return null;
+  }
+  const normalized = decoded.replace(/\\/g, "/");
   const assetPath = normalized.startsWith("../assets/")
     ? normalized.slice(3)
     : normalized.startsWith("assets/")
       ? normalized
       : null;
 
-  if (!assetPath || assetPath.includes("../")) {
+  if (!assetPath || /[\u0000-\u001f\u007f:]/.test(assetPath)
+    || assetPath.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
     return null;
   }
   return assetPath;

@@ -89,6 +89,7 @@ function normalizeRecognitionJob(job: RecognitionJob, recoverRunning: boolean): 
     providerName: job.providerName,
     providerLabel: job.providerLabel,
     transcriptBlockId: job.transcriptBlockId,
+    hasSuccessfulTranscript: job.hasSuccessfulTranscript,
     warnings: job.warnings,
     error: job.error,
     failureKind: job.failureKind,

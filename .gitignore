@@ -24,6 +24,7 @@ coverage/
 
 # Android / Gradle outputs
 .gradle/
+.kotlin/
 **/build/
 local.properties
 *.apk

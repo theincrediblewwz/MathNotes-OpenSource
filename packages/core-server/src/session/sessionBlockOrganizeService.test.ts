@@ -13,6 +13,18 @@ afterEach(async () => {
 });
 
 describe("SessionBlockOrganizeService", () => {
+  it("drops a block before or after a distant target in one write without altering markdown", async () => {
+    const root = await fixture();
+    const service = new SessionBlockOrganizeService(root);
+    const before = await service.reorder({ notebookId: "notes", sessionId: "source", blockIds: ["0003"], direction: "up", targetBlockId: "0001" });
+    expect(before.blocks.map((block) => block.id)).toEqual(["0003", "0001", "0002"]);
+    const after = await service.reorder({ notebookId: "notes", sessionId: "source", blockIds: ["0003"], direction: "down", targetBlockId: "0002" });
+    expect(after.blocks.map((block) => block.id)).toEqual(["0001", "0002", "0003"]);
+    expect(await markdown(root, "notes", "source", "0003_c.md")).toBe("C");
+    await expect(service.reorder({ notebookId: "notes", sessionId: "source", blockIds: ["0003"], direction: "up", targetBlockId: "missing" })).rejects.toMatchObject({ code: "block_not_found" });
+    expect((await session(root, "notes", "source")).blocks).toEqual(after.blocks);
+  });
+
   it("reorders selected blocks while keeping stable ids", async () => {
     const root = await fixture();
     const service = new SessionBlockOrganizeService(root, () => "2026-07-28T10:00:00.000Z");
@@ -178,6 +190,10 @@ describe("SessionBlockOrganizeService", () => {
       sessionId: "source",
       blockIds: ["0002"],
       direction: "up"
+    })).rejects.toMatchObject({ code: "block_locked", statusCode: 423 });
+
+    await expect(service.reorder({
+      notebookId: "notes", sessionId: "source", blockIds: ["0002"], direction: "down", targetBlockId: "0003"
     })).rejects.toMatchObject({ code: "block_locked", statusCode: 423 });
 
     await expect(service.transfer({

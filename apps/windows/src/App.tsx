@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { FloatingButton } from "./ui/components/FloatingButton";
 import { MoreDrawer, NotebookDrawer, SettingsModal } from "./ui/components/Drawers";
 import { NotebookBrowserDialog } from "./ui/components/NotebookBrowserDialog";
+import { RoundedSelect } from "./ui/components/RoundedSelect";
 import { ExportPopover, type ExportOptions, SearchPopover } from "./ui/components/Popovers";
 import { PreviewPane, renderMarkdownPreview, type PreviewFocusRequest, type PreviewSourceLocationInput } from "./ui/components/PreviewPane";
 import { SessionSourceEditor, type SourceCaretLocation, type SourceDocumentProjectionChange } from "./ui/components/SessionSourceEditor";
@@ -12,6 +13,7 @@ import { ImageAnnotationEditor, type ImageAnnotationConfirmInput, type ImageAnno
 import { PdfImportDialog, type PdfImportConfirmInput, type PdfImportDraft } from "./ui/components/PdfImportDialog";
 import { PdfDocumentPreview } from "./ui/components/PdfDocumentPreview";
 import { type AssistantWorkspaceSubmitInput } from "./ui/components/AssistantWorkspace";
+import type { SessionRevisionDraft } from "./ui/components/SessionRevisionPanel";
 import { AssistantWorkspaceWithRuntime, TaskPopoverWithEvents } from "./ui/components/RuntimeEventConsumers";
 import { appendRecognitionRuntimeEvent, clearRecognitionRuntimeEvents } from "./ui/runtimeEventStore";
 import { openAssistantNativeWindow, type AssistantNativeWindow } from "./ui/assistantNativeWindow";
@@ -31,6 +33,7 @@ import {
 import { parseSessionSourceText, type SessionSourceDocument, type SessionSourceMarkdownBlock } from "./common/sessionSourceDocument";
 import {
   markdownDropRenderBlocks,
+  isExternalFileDrop,
   markdownDropTitle,
   readMarkdownDropFiles,
   type MarkdownDropDocument
@@ -279,6 +282,17 @@ export function App() {
   const [readingMode, setReadingMode] = useState(false);
   const [sourceWidth, setSourceWidth] = useState(50);
   const [currentSession, setCurrentSession] = useState({ notebookId: "functional_analysis", sessionId: "lecture", title: "泛函分析 第 3 讲" });
+  const currentSessionKey = `${currentSession.notebookId}/${currentSession.sessionId}`;
+  const currentSessionKeyRef = useRef(currentSessionKey);
+  currentSessionKeyRef.current = currentSessionKey;
+  const [sessionRevisionDraft, setSessionRevisionDraft] = useState<SessionRevisionDraft | null>(null);
+  const sessionRevisionTaskRef = useRef<string | null>(null);
+  useEffect(() => {
+    setSessionRevisionDraft(null);
+    const taskId = sessionRevisionTaskRef.current;
+    sessionRevisionTaskRef.current = null;
+    if (taskId) void window.mathNotes?.cancelAssistantTask({ taskId });
+  }, [currentSessionKey]);
   const [nativeSessionLoaded, setNativeSessionLoaded] = useState(!hasNativeApi);
   const [previewSessionLoaded, setPreviewSessionLoaded] = useState(!hasNativeApi);
   const [notebooks, setNotebooks] = useState<NotebookSummary[]>(hasNativeApi ? [] : sampleNotebooks);
@@ -911,16 +925,14 @@ export function App() {
   }, [loadSystemState]);
 
   useEffect(() => {
-    void loadNotebookSessions();
-  }, [loadNotebookSessions, currentSession.sessionId]);
-
-  useEffect(() => {
+    if (!nativeSessionLoaded) return;
     void loadNotebooks();
-  }, [loadNotebooks, currentSession.notebookId, currentSession.sessionId]);
+  }, [loadNotebooks, nativeSessionLoaded, currentSession.notebookId, currentSession.sessionId]);
 
   useEffect(() => {
+    if (!nativeSessionLoaded) return;
     void loadRecentSessions();
-  }, [loadRecentSessions, currentSession.notebookId, currentSession.sessionId]);
+  }, [loadRecentSessions, nativeSessionLoaded, currentSession.notebookId, currentSession.sessionId]);
 
   useEffect(() => {
     void loadRecognitionTasks();
@@ -1479,10 +1491,11 @@ export function App() {
         sessionId: session.sessionId,
         title
       });
-      if (session.sessionId === currentSession.sessionId) {
-        applySessionDocument(document);
+      if (session.notebookId === currentSession.notebookId && session.sessionId === currentSession.sessionId) {
+        // Renaming metadata must not replace an unsaved editor document.
+        setCurrentSession((current) => ({ ...current, title: document.title }));
       }
-      await loadNotebookSessions();
+      await Promise.all([loadRecentSessions(), loadNotebooks()]);
       showToast(`已重命名：${title}`);
     } catch (error) {
       showToast(`重命名失败：${error instanceof Error ? error.message : "unknown error"}`);
@@ -1507,12 +1520,12 @@ export function App() {
         sessionId: session.sessionId
       });
       setOpenLayer(null);
-      setUndoAction(null);
-      setRecognitionTasks([]);
-      clearRuntimeEvents();
-      setLastExportResult(null);
 
-      if (session.sessionId === currentSession.sessionId) {
+      if (session.notebookId === currentSession.notebookId && session.sessionId === currentSession.sessionId) {
+        setUndoAction(null);
+        setRecognitionTasks([]);
+        clearRuntimeEvents();
+        setLastExportResult(null);
         const nextSession = result.remainingSessions[0];
         const document = nextSession
           ? await window.mathNotes.openSession({
@@ -1525,7 +1538,7 @@ export function App() {
         applySessionDocument(document);
       }
 
-      await loadNotebookSessions();
+      await Promise.all([loadRecentSessions(), loadNotebooks()]);
       showToast(`已删除 Session：${session.title || session.sessionId}`);
     } catch (error) {
       showToast(`删除 Session 失败：${error instanceof Error ? error.message : "unknown error"}`);
@@ -2112,6 +2125,8 @@ export function App() {
       return;
     }
 
+    if (sourceSaveStateRef.current !== "saved" && !await saveSourceDocument({ revealExport: false })) return;
+
     setLoadingTasks(true);
     clearRuntimeEvents();
     setOpenLayer("task");
@@ -2154,6 +2169,12 @@ export function App() {
 
   async function runLearningAssistant(input: AssistantWorkspaceSubmitInput) {
     if (!window.mathNotes || runningAssistantTaskId) return;
+    const question = input.question?.trim() ?? "";
+    if (input.operation === "session_edit" ||
+      (/(全文|整篇|整节|整个\s*(session|section)|全部.*块)/i.test(question) && /(改|润色|统一|整理|补充|修订)/.test(question))) {
+      await generateSessionRevision(question);
+      return;
+    }
     const taskId = `assistant_${Date.now()}`;
     setAssistantPendingQuestion(input.question?.trim() || null);
     setAssistantLastError(null);
@@ -2237,6 +2258,76 @@ export function App() {
       setAssistantPendingQuestion(null);
       setRunningAssistantTaskId(null);
     }
+  }
+
+  async function generateSessionRevision(instruction = sessionRevisionDraft?.instruction ?? "") {
+    if (!window.mathNotes || !instruction.trim() || sessionRevisionTaskRef.current) return;
+    const targetKey = currentSessionKey;
+    const taskId = `session_revision_${Date.now()}`;
+    sessionRevisionTaskRef.current = taskId;
+    setSelectionEditDraft(null);
+    setSessionRevisionDraft({ instruction, status: "generating", proposal: null });
+    setRunningAssistantTaskId(taskId);
+    try {
+      if (sourceSaveStateRef.current !== "saved") {
+        const saved = await saveSourceDocument({ revealExport: false });
+        if (!saved) throw new Error("请先保存当前编辑后再生成全文修改。");
+      }
+      if (sessionRevisionTaskRef.current !== taskId || currentSessionKeyRef.current !== targetKey) return;
+      const proposal = await window.mathNotes.proposeSessionRevision({
+        notebookId: currentSession.notebookId, sessionId: currentSession.sessionId, taskId, instruction
+      });
+      if (sessionRevisionTaskRef.current === taskId && currentSessionKeyRef.current === targetKey) {
+        setSessionRevisionDraft({ instruction, status: "idle", proposal });
+      } else {
+        await window.mathNotes.cancelSessionRevision({ ...proposal, proposalId: proposal.id });
+      }
+    } catch (error) {
+      if (sessionRevisionTaskRef.current === taskId && currentSessionKeyRef.current === targetKey) {
+        setSessionRevisionDraft({ instruction, status: "idle", proposal: null, error: error instanceof Error ? error.message : "生成失败，请重试。" });
+      }
+    } finally {
+      if (sessionRevisionTaskRef.current === taskId) sessionRevisionTaskRef.current = null;
+      setRunningAssistantTaskId((current) => current === taskId ? null : current);
+    }
+  }
+
+  async function applySessionRevision() {
+    const draft = sessionRevisionDraft;
+    const proposal = draft?.proposal;
+    if (!window.mathNotes || !draft || proposal?.status !== "proposed" || draft.status !== "idle") return;
+    const targetKey = `${proposal.notebookId}/${proposal.sessionId}`;
+    if (targetKey !== currentSessionKeyRef.current) return;
+    if (sourceSaveStateRef.current !== "saved") {
+      setSessionRevisionDraft({ ...draft, error: "生成候选后你又编辑了笔记。请先保存，再按要求重新生成，避免覆盖新内容。" });
+      return;
+    }
+    setSessionRevisionDraft({ ...draft, status: "applying", error: undefined });
+    setSavingSource(true);
+    try {
+      const result = await window.mathNotes.applySessionRevision({ notebookId: proposal.notebookId, sessionId: proposal.sessionId, proposalId: proposal.id });
+      if (targetKey === currentSessionKeyRef.current) {
+        applySessionDocument(result.document, { preserveViewport: true });
+        setSessionRevisionDraft({ ...draft, status: "idle", proposal: result.proposal, error: result.proposal.reportWarning });
+        showToast(`已应用 ${proposal.changes.length} 个块的修改，锁定内容保持原文`);
+        await loadAssistantRemarks();
+      }
+    } catch (error) {
+      if (targetKey === currentSessionKeyRef.current) setSessionRevisionDraft({ ...draft, status: "idle",
+        error: `未应用本次修改：${error instanceof Error && error.message.includes("revision_conflict") ? "笔记或锁定状态已变化，请重新生成" : error instanceof Error ? error.message : "请重试"}。候选仍保留。` });
+    } finally { setSavingSource(false); }
+  }
+
+  async function closeSessionRevision() {
+    const taskId = sessionRevisionTaskRef.current;
+    sessionRevisionTaskRef.current = null;
+    if (taskId) {
+      await window.mathNotes?.cancelAssistantTask({ taskId });
+      setRunningAssistantTaskId((current) => current === taskId ? null : current);
+    }
+    const proposal = sessionRevisionDraft?.proposal;
+    setSessionRevisionDraft(null);
+    if (proposal?.status === "proposed") await window.mathNotes?.cancelSessionRevision({ ...proposal, proposalId: proposal.id });
   }
 
   async function promoteAssistantRemark(remarkId: string) {
@@ -2479,7 +2570,7 @@ export function App() {
     void retryRecognitionTask(task.recognitionJobId);
   }
 
-  async function reorderSessionBlocks(blockIds: string[], direction: "up" | "down") {
+  async function reorderSessionBlocks(blockIds: string[], direction: "up" | "down", targetBlockId?: string) {
     if (!window.mathNotes || blockIds.length === 0) return;
     setSavingSource(true);
     setSourceSaveState("saving");
@@ -2493,7 +2584,8 @@ export function App() {
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
         blockIds,
-        direction
+        direction,
+        ...(targetBlockId ? { targetBlockId } : {})
       });
       applySessionDocument(document, { preserveViewport: true });
       showToast(`已将 ${blockIds.length} 个块${direction === "up" ? "上移" : "下移"}，块编号按新顺序显示`);
@@ -2750,8 +2842,9 @@ export function App() {
   }
 
   async function handleMarkdownDrop(event: React.DragEvent<HTMLElement>) {
-    event.preventDefault();
     setMarkdownDragActive(false);
+    if (!isExternalFileDrop(event.dataTransfer)) return;
+    event.preventDefault();
     if (markdownDropBusy) return;
     setMarkdownDropBusy(true);
     try {
@@ -2856,6 +2949,7 @@ export function App() {
 
   return (
     <main
+      inert={sessionRevisionDraft?.status === "applying"}
       className={`app-shell ${openLayer ? "has-open-layer" : ""} ${readingMode ? "reading-only" : ""}`}
       onPointerCancelCapture={(event) => endManualWindowDrag(event, true)}
       onPointerDownCapture={(event) => {
@@ -2865,10 +2959,10 @@ export function App() {
       onPointerMoveCapture={updateManualWindowDrag}
       onPointerUpCapture={endManualWindowDrag}
       onDragEnter={(event) => {
-        if (event.dataTransfer.types.includes("Files")) setMarkdownDragActive(true);
+        if (isExternalFileDrop(event.dataTransfer)) setMarkdownDragActive(true);
       }}
       onDragOver={(event) => {
-        if (event.dataTransfer.types.includes("Files")) {
+        if (isExternalFileDrop(event.dataTransfer)) {
           event.preventDefault();
           event.dataTransfer.dropEffect = "copy";
         }
@@ -3007,7 +3101,7 @@ export function App() {
               onDeleteBlockRequest={(blockId) => void deleteMarkdownBlock(blockId)}
               onCreateBlockAfterRequest={(blockId) => void createUserTextBlock(blockId)}
               onAiSelectionEditRequest={openSelectionEdit}
-              onReorderBlocksRequest={(blockIds, direction) => void reorderSessionBlocks(blockIds, direction)}
+              onReorderBlocksRequest={(blockIds, direction, targetBlockId) => void reorderSessionBlocks(blockIds, direction, targetBlockId)}
               onRerecognizeBlockRequest={rerecognizeBlock}
               onTransferBlocksRequest={(blockIds, mode) => void openBlockTransfer(blockIds, mode)}
               assistantOpen={assistantWorkspaceOpen}
@@ -3097,6 +3191,7 @@ export function App() {
               onHover={handleHover}
               onLeave={() => setHoverTip((current) => ({ ...current, visible: false }))}
               onLocateSource={locateSource}
+              onAssetPreview={openAssetPreview}
             />
           </RenderCommitProbe>
         ) : (
@@ -3125,6 +3220,8 @@ export function App() {
           setSettingsOpen(true);
         }}
         onOpenRecentSession={(session) => void openNotebookSession(session)}
+        onRenameRecentSession={(session) => { setOpenLayer(null); void renameNotebookSession(session); }}
+        onDeleteRecentSession={(session) => { setOpenLayer(null); void deleteNotebookSession(session); }}
         openLayer={openLayer}
         recentSessions={recentSessions}
       />
@@ -3233,6 +3330,7 @@ export function App() {
         onCancel={() => void cancelLearningAssistant()}
         onClose={() => {
           if (selectionEditDraft) void cancelSelectionEdit();
+          if (sessionRevisionDraft) void closeSessionRevision();
           setAssistantWorkspaceOpen(false);
         }}
         onDeleteRemark={(remarkId) => void deleteAssistantRemark(remarkId)}
@@ -3263,6 +3361,11 @@ export function App() {
         runtimeTaskId={runningAssistantTaskId}
         selectedRemarkId={selectedAssistantRemarkId}
         selectionEdit={selectionEditDraft}
+        sessionRevision={sessionRevisionDraft}
+        onSessionRevisionInstructionChange={(instruction) => setSessionRevisionDraft((draft) => draft ? { ...draft, instruction, error: undefined } : null)}
+        onSessionRevisionGenerate={() => void generateSessionRevision()}
+        onSessionRevisionApply={() => void applySessionRevision()}
+        onSessionRevisionClose={() => void closeSessionRevision()}
         running={Boolean(runningAssistantTaskId)}
         sessionDir={sessionDir}
       />
@@ -3830,16 +3933,11 @@ function BlockTransferDialog({
         <p>
           已选 {request?.blockIds.length ?? 0} 个块。移动会先写入目标，再从当前 Session 移除，避免中途失败造成内容丢失。
         </p>
-        <label className="block-transfer-target">
+        <div className="block-transfer-target">
           <span>目标笔记</span>
-          <select disabled={busy} onChange={(event) => setTargetKey(event.target.value)} value={targetKey}>
-            {(request?.targets ?? []).map((candidate) => (
-              <option key={candidate.key} value={candidate.key}>
-                {candidate.notebookTitle} / {candidate.sessionTitle}
-              </option>
-            ))}
-          </select>
-        </label>
+          <RoundedSelect disabled={busy} label="目标笔记" onChange={setTargetKey} value={targetKey}
+            options={(request?.targets ?? []).map((candidate) => ({ value: candidate.key, label: `${candidate.notebookTitle} / ${candidate.sessionTitle}` }))} />
+        </div>
         <div className="close-confirm-actions">
           <button disabled={busy} onClick={onCancel} type="button">取消</button>
           <button disabled={busy || !target} onClick={() => target && onConfirm(target)} type="button">

@@ -37,6 +37,7 @@ import {
   type MutableRefObject,
   type RefCallback,
   useEffect,
+  useCallback,
   useMemo,
   useRef,
   useState
@@ -57,6 +58,7 @@ import {
 } from "./sessionSourceEditorModel";
 import { createSourceBlockDisplays } from "./sourceBlockDisplay";
 import { assistantDragMime, writeAssistantDragPayload } from "../assistantDragPayload";
+import { BlockReorderPreview, type BlockReorderDrag } from "./BlockReorderPreview";
 
 const SourceTanStackLab = lazy(async () => {
   const module = await import("./SourceTanStackLab");
@@ -97,7 +99,7 @@ type SessionSourceEditorProps = {
     to: number;
     selectedText: string;
   }) => void;
-  onReorderBlocksRequest?: (blockIds: string[], direction: "up" | "down") => void;
+  onReorderBlocksRequest?: (blockIds: string[], direction: "up" | "down", targetBlockId?: string) => void;
   onRerecognizeBlockRequest?: (blockId: string) => void;
   onTransferBlocksRequest?: (blockIds: string[], mode: "copy" | "move") => void;
   assistantRemarks?: AssistantRemark[];
@@ -368,6 +370,20 @@ export function SessionSourceEditor({
 }: SessionSourceEditorProps) {
   const requestedEditorWindowingLabMode = getEditorWindowingPerformanceLabMode();
   const editorScrollerRef = useRef<HTMLDivElement>(null);
+  const [reorderDrag, setReorderDrag] = useState<BlockReorderDrag | null>(null);
+  const reorderStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelReorderDrag = useCallback(() => {
+    if (reorderStartTimer.current !== null) clearTimeout(reorderStartTimer.current);
+    reorderStartTimer.current = null;
+    setReorderDrag(null);
+  }, []);
+  useEffect(() => {
+    window.addEventListener("dragend", cancelReorderDrag);
+    return () => {
+      window.removeEventListener("dragend", cancelReorderDrag);
+      if (reorderStartTimer.current !== null) clearTimeout(reorderStartTimer.current);
+    };
+  }, [cancelReorderDrag]);
   const blockElementsRef = useRef(new Map<string, HTMLElement>());
   const editorViewsRef = useRef(new Map<string, EditorView>());
   const editorStateCacheRef = useRef(new Map<string, EditorStateSnapshot>());
@@ -1051,6 +1067,16 @@ export function SessionSourceEditor({
       <SourceBlockSection
         block={block}
         assistantOpen={assistantOpen}
+        onReorderDragStart={onReorderBlocksRequest ? (blockId) => {
+          const bounds = editorScrollerRef.current?.getBoundingClientRect();
+          // Wait until Chromium has captured the native drag image. Covering the
+          // source during dragstart can cancel the drag before it has begun.
+          if (bounds) reorderStartTimer.current = setTimeout(() => {
+            reorderStartTimer.current = null;
+            setReorderDrag({ blockId, bounds: { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height } });
+          }, 0);
+          setContextMenu(null);
+        } : undefined}
         displayBlockId={displayByBlockId.get(block.blockId) ?? block.blockId}
         selected={selectedBlockIds.has(block.blockId)}
         selectionMode={selectionMode}
@@ -1105,6 +1131,12 @@ export function SessionSourceEditor({
       data-testid="session-source-editor"
       ref={editorScrollerRef}
     >
+      {reorderDrag ? <BlockReorderPreview drag={reorderDrag} blocks={document.markdownBlocks}
+        markdownByBlockId={markdownByBlockId} displayByBlockId={displayByBlockId} onCancel={cancelReorderDrag}
+        onDrop={(targetBlockId, direction) => {
+          onReorderBlocksRequest?.([reorderDrag.blockId], direction, targetBlockId);
+          cancelReorderDrag();
+        }} /> : null}
       {selectionMode ? (
         <div className="source-block-organize-toolbar" data-testid="source-block-organize-toolbar">
           <strong>已选 {selectedBlockIds.size} 块</strong>
@@ -1241,6 +1273,7 @@ export function groupAssistantRemarksByBlockId(remarks: AssistantRemark[]): Map<
 function SourceBlockSection({
   block,
   assistantOpen,
+  onReorderDragStart,
   cachedEditorState,
   cachedHeight,
   displayBlockId,
@@ -1269,6 +1302,7 @@ function SourceBlockSection({
 }: {
   block: SessionSourceMarkdownBlock;
   assistantOpen: boolean;
+  onReorderDragStart?: (blockId: string) => void;
   cachedEditorState?: EditorStateSnapshot;
   cachedHeight?: number;
   displayBlockId: string;
@@ -1319,7 +1353,7 @@ function SourceBlockSection({
             className="source-block-header"
             data-testid="source-block-header"
             role="button"
-            draggable={assistantOpen}
+            draggable={assistantOpen || Boolean(onReorderDragStart && !block.locked)}
             tabIndex={0}
             title={`source: ${block.header}\ndisplay block: ${displayBlockId}\ninternal block: ${block.blockId}\npath: ${block.path}\nkind: ${block.source}`}
             onClick={() => onSourceHeaderClick(block)}
@@ -1329,12 +1363,13 @@ function SourceBlockSection({
               onHeaderContextMenu(block, event.clientX, event.clientY);
             }}
             onDragStart={(event) => {
-              if (!assistantOpen) return;
               writeAssistantDragPayload(event.dataTransfer, {
                 kind: "block",
                 blockId: block.blockId,
                 label: `block ${displayBlockId} · ${block.header}`
               });
+              event.dataTransfer.effectAllowed = "copyMove";
+              if (!block.locked) onReorderDragStart?.(block.blockId);
             }}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {

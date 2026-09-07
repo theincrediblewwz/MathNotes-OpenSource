@@ -31,6 +31,8 @@ try {
   browser = await connectWithRetry(port, child, () => childOutput);
   const page = await waitForRendererPage(browser, child, () => childOutput);
   await page.waitForLoadState("domcontentloaded");
+  // The HTML shell loads before the dynamically imported editor is ready.
+  await page.locator(".cm-editor").first().waitFor({ state: "visible", timeout: 20_000 });
   const title = await page.title();
   const body = await page.locator("body").innerText();
   if (!body.includes("Session")) throw new Error("Packaged renderer did not load the MathNotes workspace");

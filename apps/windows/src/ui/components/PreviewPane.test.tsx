@@ -11,6 +11,32 @@ import {
 } from "./PreviewPane";
 
 describe("PreviewPane", () => {
+  it("opens a bound inline session photo with mouse or keyboard without locating source", () => {
+    const onAssetPreview = vi.fn();
+    const onLocateSource = vi.fn();
+    render(<PreviewPane forceStatic blocks={[{ id: "inline-photo", sourceId: "src-1", sourceBlockId: "0001", sourceLine: 1,
+      markdown: "图形说明\n\n![识别照片](../assets/photos/processed.png)\n\n下面继续推导。" }]}
+      sessionDir="C:/Notes/session" onAssetPreview={onAssetPreview} onLocateSource={onLocateSource} onHover={vi.fn()} onLeave={vi.fn()} />);
+    const image = screen.getByAltText("识别照片");
+    fireEvent.pointerDown(image, { pointerId: 1, clientX: 40, clientY: 60 });
+    fireEvent.pointerUp(image, { pointerId: 1, clientX: 40, clientY: 60 });
+    fireEvent.click(image);
+    fireEvent.keyDown(image, { key: "Enter" });
+    expect(onAssetPreview).toHaveBeenCalledTimes(2);
+    expect(onAssetPreview).toHaveBeenLastCalledWith({ target: "assets/photos/processed.png" });
+    expect(onLocateSource).not.toHaveBeenCalled();
+    expect(image.getAttribute("src")).toBe("mathnotes-asset://local/C:/Notes/session/assets/photos/processed.png");
+    expect(renderMarkdownPreview("![other](../../secret.png)", "C:/Notes/session")).not.toContain("data-session-asset");
+  });
+
+  it("resolves Chinese and space-containing Markdown image URLs without double encoding", () => {
+    const html = renderMarkdownPreview("![图](<../assets/photos/图 片.png>)", "C:/Notes/session");
+    expect(html).toContain('src="mathnotes-asset://local/C:/Notes/session/assets/photos/%E5%9B%BE%20%E7%89%87.png"');
+    expect(html).toContain('data-session-asset="assets/photos/%E5%9B%BE%20%E7%89%87.png"');
+    expect(renderMarkdownPreview("![图](../assets/photos/100%25.png)", "C:/Notes/session")).toContain('data-session-asset="assets/photos/100%25.png"');
+    expect(renderMarkdownPreview("![other](../assets/%2e%2e/secret.png)", "C:/Notes/session")).not.toContain("data-session-asset");
+  });
+
   beforeEach(() => {
     window.localStorage.setItem("mathnotes:preview-windowing-lab", "off");
   });
