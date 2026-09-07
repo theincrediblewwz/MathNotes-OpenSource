@@ -227,7 +227,7 @@ describe("IngestServer", () => {
       targets: [{ notebookId: "functional_analysis", sessionId: "lecture", title: "Lecture" }],
       capabilities: {
         upload: { image: true, pdf: true },
-        recognition: { status: false, retry: false }
+        recognition: { status: true, retry: false }
       }
     });
   });
