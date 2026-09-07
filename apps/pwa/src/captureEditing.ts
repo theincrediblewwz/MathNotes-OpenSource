@@ -1,7 +1,8 @@
 export type CaptureCrop = "original" | "4:3" | "square";
 export type CapturePoint = Readonly<{ x: number; y: number }>;
 export type CaptureRect = Readonly<{ x: number; y: number; width: number; height: number }>;
-export type CaptureMark = Readonly<{ type: "pen" | "arrow" | "redaction"; points: readonly CapturePoint[]; width: number }>;
+export type CaptureMark = Readonly<{ type: "pen" | "arrow" | "redaction" | "rectangleRedaction"; points: readonly CapturePoint[]; width: number }>;
+export const isCaptureRedaction = (mark: CaptureMark): boolean => mark.type === "redaction" || mark.type === "rectangleRedaction";
 export type CaptureQuad = readonly [CapturePoint, CapturePoint, CapturePoint, CapturePoint];
 
 export type CaptureEdit = Readonly<{
@@ -118,7 +119,7 @@ function renderCaptureSelection(image: DecodedImage, edit: CaptureEdit): HTMLCan
   outputContext.restore();
   drawCaptureMarks(outputContext, edit.marks ?? [], rotated.width, rotated.height);
   outputContext.restore();
-  if (edit.marks?.some(mark => mark.type === "redaction")) {
+  if (edit.marks?.some(isCaptureRedaction)) {
     const mask = document.createElement("canvas"); mask.width = output.width; mask.height = output.height;
     const maskContext = mask.getContext("2d")!;
     if (edit.lasso && edit.lasso.length >= 3) {
@@ -128,7 +129,7 @@ function renderCaptureSelection(image: DecodedImage, edit: CaptureEdit): HTMLCan
       }); maskContext.closePath(); maskContext.clip();
     }
     maskContext.scale(output.width/crop.width,output.height/crop.height); maskContext.translate(-crop.x,-crop.y);
-    drawCaptureMarks(maskContext,edit.marks.filter(mark => mark.type === "redaction"),rotated.width,rotated.height);
+    drawCaptureMarks(maskContext,edit.marks.filter(isCaptureRedaction),rotated.width,rotated.height);
     enforceOpaqueRedaction(output,mask);
   }
   return output;
@@ -138,15 +139,25 @@ function enforceOpaqueRedaction(canvas: HTMLCanvasElement, mask: HTMLCanvasEleme
   const context=canvas.getContext("2d")!,pixels=context.getImageData(0,0,canvas.width,canvas.height);
   const coverage=mask.getContext("2d")!.getImageData(0,0,canvas.width,canvas.height).data;
   for (let index=0; index<coverage.length; index+=4) {
-    if (coverage[index+3]) { pixels.data[index]=0; pixels.data[index+1]=0; pixels.data[index+2]=0; pixels.data[index+3]=255; }
+    if (coverage[index+3]) {
+      const opaque = coverage[index] >= 128 ? 255 : 0;
+      pixels.data[index]=opaque; pixels.data[index+1]=opaque; pixels.data[index+2]=opaque; pixels.data[index+3]=255;
+    }
   }
   context.putImageData(pixels,0,0);
 }
 
 export function drawCaptureMarks(context: CanvasRenderingContext2D, marks: readonly CaptureMark[], width: number, height: number): void {
   // Privacy masks always cover every other mark. They are opaque pixels, never reversible pixelation.
-  for (const mark of [...marks.filter(m => m.type !== "redaction"), ...marks.filter(m => m.type === "redaction")]) {
+  for (const mark of [...marks.filter(m => !isCaptureRedaction(m)), ...marks.filter(isCaptureRedaction)]) {
     if (!mark.points.length) continue;
+    if (mark.type === "rectangleRedaction") {
+      if (mark.points.length < 2) continue;
+      const rect = pointsRect(mark.points);
+      context.fillStyle = "#ffffff";
+      context.fillRect(rect.x * width, rect.y * height, rect.width * width, rect.height * height);
+      continue;
+    }
     context.lineCap = "round"; context.lineJoin = "round";
     context.strokeStyle = context.fillStyle = mark.type === "redaction" ? "#000000" : "#d33f35";
     context.lineWidth = mark.width * Math.min(width, height);
@@ -180,9 +191,9 @@ export function renderCaptureSurface(image: DecodedImage, edit: CaptureEdit, max
   context.save(); context.translate(canvas.width / 2, canvas.height / 2); context.rotate(edit.rotation * Math.PI / 180);
   context.drawImage(image.source, -image.width * scale / 2, -image.height * scale / 2, image.width * scale, image.height * scale); context.restore();
   drawCaptureMarks(context, edit.marks ?? [], canvas.width, canvas.height);
-  if (edit.marks?.some(mark => mark.type === "redaction")) {
+  if (edit.marks?.some(isCaptureRedaction)) {
     const mask=document.createElement("canvas");mask.width=canvas.width;mask.height=canvas.height;
-    drawCaptureMarks(mask.getContext("2d")!,edit.marks.filter(mark => mark.type === "redaction"),canvas.width,canvas.height);
+    drawCaptureMarks(mask.getContext("2d")!,edit.marks.filter(isCaptureRedaction),canvas.width,canvas.height);
     enforceOpaqueRedaction(canvas,mask);
   }
   return canvas;

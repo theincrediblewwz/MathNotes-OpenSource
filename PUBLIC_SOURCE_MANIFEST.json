@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "public-history-preserved",
-  "generatedAt": "2026-09-07T14:51:33.364Z",
-  "fileCount": 727,
-  "snapshotSha256": "1cedecc0f7363ed5093f7423c94dd57d4575039094d185a7fdb68f0ce2657b0f",
+  "generatedAt": "2026-09-07T16:25:39.105Z",
+  "fileCount": 735,
+  "snapshotSha256": "8ef86567f8be8266c7aadaf83b49bd9bf805fce50344f28a23a43f40dfdaaa26",
   "files": [
     {
       "path": ".gitattributes",
@@ -1194,7 +1194,7 @@
     {
       "path": "apps/pwa/package.json",
       "bytes": 621,
-      "sha256": "2ca9b47fb0591b021e64891a0f9dd2970236a84aa0edead8d9e260b15087d0ab"
+      "sha256": "5a79dc5b23f2494720894ba6a30b6d0b87faa166ee6f53f8cc0108a775ca2bfb"
     },
     {
       "path": "apps/pwa/public/_headers",
@@ -1213,13 +1213,13 @@
     },
     {
       "path": "apps/pwa/src/App.tsx",
-      "bytes": 80722,
-      "sha256": "6857cdcac7c2d12722041441871ec0d21750b14fb3c30d03bc30003af3a1699c"
+      "bytes": 85642,
+      "sha256": "e733b365793b4c7619117c17d8863c45531aa4b637d04a84bc1fcb8c74798e5b"
     },
     {
       "path": "apps/pwa/src/CaptureImageEditor.tsx",
-      "bytes": 10829,
-      "sha256": "42aa44dba0276d45206bf6344bb211cfcd2b5cd235a291daa05f187203c1f801"
+      "bytes": 11124,
+      "sha256": "75da77eb5ad004a9e44f8ee075f7f7d3acbb812e9fe229c0e465bf81d39ffada"
     },
     {
       "path": "apps/pwa/src/MobileModeApp.test.tsx",
@@ -1237,14 +1237,19 @@
       "sha256": "666fb09bc01175e4fde6b028c733aa58a5f80ea6ba52698bf937108436d7d821"
     },
     {
+      "path": "apps/pwa/src/UploadPreviewDialog.tsx",
+      "bytes": 2978,
+      "sha256": "91780a1a5d1cf8e2955ad82318d301622d096fae95030827570db161a6751bc7"
+    },
+    {
       "path": "apps/pwa/src/apiClient.test.ts",
       "bytes": 9648,
       "sha256": "95873c71dec28a8603a1495e3481e65c57f085d3d1cb5aa7e955ede554ddaa2b"
     },
     {
       "path": "apps/pwa/src/apiClient.ts",
-      "bytes": 15320,
-      "sha256": "70026234ed06454a0fb12213a6114cb106faa2c93b00fd263778737523df25cc"
+      "bytes": 16594,
+      "sha256": "41d68d38283815864f07da9b325576cbbc8aa2d4706ee5546b79e42236a07f54"
     },
     {
       "path": "apps/pwa/src/appStorage.ts",
@@ -1268,8 +1273,8 @@
     },
     {
       "path": "apps/pwa/src/captureEditing.ts",
-      "bytes": 17637,
-      "sha256": "1e95b65c157c1aa166c41cb2af690fb1245d0e86cc5cc1fed011b25e0e54ad12"
+      "bytes": 18094,
+      "sha256": "52812d6171b44dc137df5b4f1d816c3b76cbf767bf91e7cb5bcc78741ba60ee2"
     },
     {
       "path": "apps/pwa/src/captureWorkflow.test.tsx",
@@ -1308,8 +1313,8 @@
     },
     {
       "path": "apps/pwa/src/domain.ts",
-      "bytes": 2975,
-      "sha256": "890bb2b501132a77a95d3afeeec70273b1ff22650aa7c81987abf28737a21186"
+      "bytes": 3128,
+      "sha256": "145739f40595ffd85688c4afbb28e9119dd6cbf6ee0e4fb4af3b4917ad3f0f09"
     },
     {
       "path": "apps/pwa/src/katexReaderStyle.ts",
@@ -1337,14 +1342,29 @@
       "sha256": "751b35e0a334c4c56ae21fd0a24978eea6b59229d3282e83695a0e9ae4664d90"
     },
     {
+      "path": "apps/pwa/src/readerBridge.ts",
+      "bytes": 4995,
+      "sha256": "d4214280a5eea78fddfe02353ab45573f8c8213ac668b8418228cfc2ede39299"
+    },
+    {
       "path": "apps/pwa/src/readerDocument.test.ts",
       "bytes": 2966,
       "sha256": "ce00d8e3f40fb9261c874a9da12ba5fa31a641f53ddd1da1a25147acbeafd63c"
     },
     {
       "path": "apps/pwa/src/readerDocument.ts",
-      "bytes": 6494,
-      "sha256": "3854d17c0ce0dc9bd20b4a60cd48519971e0f69f69d8345c25d1b3b1e819bf07"
+      "bytes": 10484,
+      "sha256": "a5bdb00d197fbca965a1f17b033b0e6f745af9aa5c1fc4902fc7e93059cce245"
+    },
+    {
+      "path": "apps/pwa/src/readerInteraction.test.ts",
+      "bytes": 2758,
+      "sha256": "455b1b790127bfa39be84ca9e88e93761e105f3d3cd102e98ded1a87a8644f93"
+    },
+    {
+      "path": "apps/pwa/src/reconnectingStream.test.ts",
+      "bytes": 883,
+      "sha256": "1826b735cee8fcd6bd6cdd14ca959332fe52b70fe61ae00e4d2e24f2da028510"
     },
     {
       "path": "apps/pwa/src/sessionSync.test.ts",
@@ -1398,13 +1418,28 @@
     },
     {
       "path": "apps/pwa/src/styles.css",
-      "bytes": 56316,
-      "sha256": "11ac21b9cb625629bd7563021ef6a8839a915c582fc26ed17a816a4dd2188a28"
+      "bytes": 58004,
+      "sha256": "8e0819c9797a33552d5326e1666d2feed59d398334f518eb108030495692f0a6"
     },
     {
       "path": "apps/pwa/src/uiParity.test.tsx",
       "bytes": 2016,
       "sha256": "f1cbe39740e35d9e4590281c4ef2b6a208ddcaed9145b7d4459cfa8604eb76f6"
+    },
+    {
+      "path": "apps/pwa/src/uploadLocation.ts",
+      "bytes": 1483,
+      "sha256": "58812974a261ef02531fc2e11e99f3a5d26898438161511d130a8f8c2e0b23b4"
+    },
+    {
+      "path": "apps/pwa/src/uploadPreview.test.ts",
+      "bytes": 4195,
+      "sha256": "ca529b1dc3251ee8a804c21184ecd5f86007a92257ae7fb6781b180ba6d7efa3"
+    },
+    {
+      "path": "apps/pwa/src/uploadPreview.ts",
+      "bytes": 5202,
+      "sha256": "9fb2f9d6c3db06f735de8163a3af56ff4103189105d2d47ae00be9d21f34f329"
     },
     {
       "path": "apps/pwa/src/uploadQueue.test.ts",
@@ -2563,8 +2598,8 @@
     },
     {
       "path": "deploy/pwa/MAC_CODEX_UPDATE.md",
-      "bytes": 5584,
-      "sha256": "e32c3f11ba6b6082ebec9e2da6b7d008250d7c28bf35778c394ae41addfd7efe"
+      "bytes": 8091,
+      "sha256": "fe3f8fef2b4935175a7f48446ac7ee7816933863900bf80b1faf7740754cbc73"
     },
     {
       "path": "deploy/pwa/README.md",
@@ -2574,7 +2609,7 @@
     {
       "path": "package-lock.json",
       "bytes": 345312,
-      "sha256": "b4bf2da5ede261744d4c5429406d18461cff28976d19d1231f175c9b4189e1f7"
+      "sha256": "17e5b89147749e85c029c794d70de7ce4e9aa0a460205f5c7675e7fc4ccf1fe3"
     },
     {
       "path": "package.json",
@@ -3523,8 +3558,13 @@
     },
     {
       "path": "test_tool/pwa_capture_editor_smoke.mjs",
-      "bytes": 10999,
-      "sha256": "23661572db41d03aee114aa32155b1663fc8b519f5427c709d0205048b51d967"
+      "bytes": 13551,
+      "sha256": "c5603b28073f1e8484717ff24e6b0ae096dc73eb0ec3d287ed8d3f10faef979c"
+    },
+    {
+      "path": "test_tool/pwa_feedback_v034_smoke.mjs",
+      "bytes": 19136,
+      "sha256": "1640763424d9599a8598f0c4657f61b88d8d683a2b6616524c74e26ba55cdabe"
     },
     {
       "path": "test_tool/pwa_package_smoke.mjs",

@@ -1912,6 +1912,21 @@ button:not(:disabled):active {
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   backdrop-filter: blur(22px);
 }
+
+.upload-product-title{font:inherit;font-weight:650;text-align:left;color:inherit;display:block;max-width:100%;padding:0;border:0;background:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.upload-product-layer{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:16px;background:#1c251ccc}
+.upload-product-dialog{display:flex;flex-direction:column;width:min(960px,100%);height:min(880px,94dvh);min-height:0;background:var(--paper);border-radius:22px;overflow:hidden}
+.upload-product-dialog>header,.upload-product-dialog>footer{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 18px;flex:none}
+.upload-product-dialog>header div{display:flex;flex-direction:column;min-width:0;gap:4px}
+.upload-product-dialog small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70vw;color:var(--muted)}
+.upload-product-dialog button{border:1px solid var(--line);padding:10px 14px;border-radius:13px;background:var(--green-soft);color:var(--green);cursor:pointer}
+.upload-product-dialog button:disabled{opacity:.5;cursor:default}
+.upload-product-content{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:auto;background:#242a24;color:#f3f5ef;padding:14px}
+.upload-product-content>img{display:block;max-width:100%;max-height:100%;object-fit:contain}
+.upload-product-content [role=status]{max-width:550px;text-align:center}
+.upload-product-dialog>footer{flex-wrap:wrap;font-size:13px}
+.upload-product-dialog>footer button{margin-left:auto}
+.reader-location-notice{margin:0;padding:8px 16px;background:var(--green-soft);font-size:12px;flex:none}
 .android-bottom-navigation > button {
   display: flex;
   min-width: 0;

@@ -66,6 +66,9 @@ import {
 } from "./pairing";
 import { registerMathNotesPwa, type PwaUpdateState } from "./pwaRegistration";
 import { createReaderDocument } from "./readerDocument";
+import { parseReaderBridgeMessage } from "./readerBridge";
+import { UploadPreviewDialog } from "./UploadPreviewDialog";
+import { locateUploadInSession } from "./uploadLocation";
 import { syncCatalog, syncSession, type SessionSyncStage } from "./sessionSync";
 import type { SseMessage } from "./sse";
 import {
@@ -95,6 +98,13 @@ export default function App() {
   const [session, setSession] = useState<CachedSession>();
   const [assets, setAssets] = useState<CachedAsset[]>([]);
   const [readerHtml, setReaderHtml] = useState("");
+  const readerFrame = useRef<HTMLIFrameElement>(null);
+  const readerChannel = useRef("");
+  const [readerFocus, setReaderFocus] = useState<{ key: string; anchor: string }>();
+  const [readerNotice, setReaderNotice] = useState("");
+  const [readerControlsHidden, setReaderControlsHidden] = useState(false);
+  const [previewTask, setPreviewTask] = useState<UploadTask>();
+  const previewGeneration = useRef(0);
   const [pairingOpen, setPairingOpen] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [syncMessage, setSyncMessage] = useState("");
@@ -336,6 +346,21 @@ export default function App() {
   }, [credential, profileId, refreshSession, selected]);
 
   useEffect(() => {
+    setReaderControlsHidden(false);
+    if (!selected || sessionCacheKey(profileId, selected.notebookId, selected.sessionId) !== readerFocus?.key) setReaderNotice("");
+  }, [selected?.notebookId, selected?.sessionId, activeTab]);
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      const message = parseReaderBridgeMessage(event, readerFrame.current?.contentWindow, readerChannel.current);
+      if (!message) return;
+      if (message.kind === "toggle") setReaderControlsHidden(hidden => !hidden);
+      if (message.kind === "located" && !message.found) setReaderNotice("这次识别对应的位置已不存在，请刷新笔记后重试。");
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, []);
+
+  useEffect(() => {
     const target = catalog?.activeTarget;
     if (!profileId || !target) {
       setContinuePreview("");
@@ -356,12 +381,16 @@ export default function App() {
       return;
     }
     let active = true;
+    const channel = createClientId();
+    readerChannel.current = channel;
     let document: Awaited<ReturnType<typeof createReaderDocument>> | undefined;
     void (async () => {
       try {
         document = await createReaderDocument(
           session,
-          assets.filter((asset) => asset.mimeType !== "application/pdf")
+          assets.filter((asset) => asset.mimeType !== "application/pdf"),
+          undefined,
+          { channel, anchor: readerFocus?.key === session.key ? readerFocus.anchor : undefined }
         );
         if (active) setReaderHtml(document.html);
         else document.dispose();
@@ -375,7 +404,7 @@ export default function App() {
       active = false;
       document?.dispose();
     };
-  }, [assets, session]);
+  }, [assets, session, readerFocus]);
 
   useEffect(() => {
     if (!credential || !navigator.onLine) return;
@@ -555,9 +584,11 @@ export default function App() {
     const api = new CompanionApiClient(credential.origin);
     await Promise.all(pending.map(async (task) => {
       try {
-        const result = await api.fetchUploadStatus(credential.token, task.uploadId!);
+        const result = await api.fetchUploadStatus(credential.token, task.uploadId!, task);
+        const current = await companionStorage.loadUploadTask(task.id);
+        if (!current || current.profileId !== task.profileId) return;
         await companionStorage.saveUploadTask({
-          ...task,
+          ...current,
           ...result,
           lastError: result.recognitionStatus === "failed" || result.recognitionStatus === "cancelled"
             ? result.recognitionWarnings?.[0] ?? "电脑端识别没有完成，可以重新识别。"
@@ -570,6 +601,34 @@ export default function App() {
     }));
     await loadUploadTasks(credential.deviceId);
   }, [catalog?.capabilities?.recognitionStatus, credential, loadUploadTasks, loseAuthorization]);
+
+  const openUploadPreview = (task: UploadTask) => { previewGeneration.current += 1; setPreviewTask(task); };
+  const closeUploadPreview = () => { previewGeneration.current += 1; setPreviewTask(undefined); };
+  const jumpToUpload = async (task: UploadTask) => {
+    if (task.profileId !== profileId) throw new Error("请切换回原来的电脑后再打开这份笔记。");
+    const generation = previewGeneration.current;
+    const target: PairingTarget = { notebookId: task.notebookId, notebookTitle: task.notebookTitle, sessionId: task.sessionId, title: task.sessionTitle };
+    const key = sessionCacheKey(profileId, task.notebookId, task.sessionId);
+    let body = await companionStorage.loadSession(key);
+    let offline = !navigator.onLine || !credential;
+    if (credential && navigator.onLine) {
+      try { body = (await syncSession({ api: new CompanionApiClient(credential.origin), storage: companionStorage, credential, target })).session; }
+      catch (error) {
+        if (isTargetUnavailable(error)) throw new Error("目标笔记已经移动或删除，无法跳转。");
+        if (isUnauthorized(error)) throw error;
+        if (!body) throw error;
+        offline = true;
+      }
+    }
+    if (!body) throw new Error("这份笔记尚未缓存在本机，请连接原电脑后重试。");
+    const cachedAssets = await companionStorage.loadSessionAssets(profileId, task.notebookId, task.sessionId);
+    const location = locateUploadInSession(body, task, cachedAssets);
+    if (generation !== previewGeneration.current) return;
+    setReaderFocus({ key, anchor: location.anchor }); setReaderNotice(location.notice);
+    setSelected(target); setSession(body); setAssets(cachedAssets); setActiveTab("notes");
+    setReaderControlsHidden(false); setPreviewTask(undefined);
+    setSyncState(offline ? "offline" : "live"); setSyncMessage(offline ? "离线缓存" : "");
+  };
 
   const retryRecognition = useCallback(async (task: UploadTask) => {
     if (!credential || !task.uploadId) return;
@@ -807,10 +866,11 @@ export default function App() {
           )}
           {session && readerHtml ? (
             <iframe
+              ref={readerFrame}
               className="reader-frame"
               title={session.title}
               srcDoc={readerHtml}
-              sandbox=""
+              sandbox="allow-scripts"
               referrerPolicy="no-referrer"
             />
           ) : (
@@ -820,6 +880,7 @@ export default function App() {
               <p>{syncMessage || "正文会保存在本机，断网后仍可重新打开。"}</p>
             </div>
           )}
+          {readerNotice ? <p className="reader-location-notice" role="status">{readerNotice}</p> : null}
         </section> : null}
 
         {activeTab === "capture" ? <section className="android-tab-page capture-tab" aria-label="拍摄">
@@ -835,6 +896,7 @@ export default function App() {
               onFiles={queueMaterials}
               onRetry={(id) => void uploadQueue.current?.retry(id)}
               onRetryRecognition={(task) => void retryRecognition(task)}
+              onPreview={openUploadPreview}
               onRemove={(id) => void uploadQueue.current?.remove(id)}
               onClearSucceeded={() => void uploadQueue.current?.clearSucceeded()}
             />
@@ -856,6 +918,7 @@ export default function App() {
           onOpenCapture={openCapture}
           onRetry={(id) => void uploadQueue.current?.retry(id)}
           onRetryRecognition={(task) => void retryRecognition(task)}
+          onPreview={openUploadPreview}
           onRemove={(id) => void uploadQueue.current?.remove(id)}
           onClearSucceeded={() => void uploadQueue.current?.clearSucceeded()}
         /> : null}
@@ -901,11 +964,13 @@ export default function App() {
         </section> : null}
       </div>
 
-      <CompanionBottomNavigation
+      {!(activeTab === "notes" && selected && readerControlsHidden) ? <CompanionBottomNavigation
         activeTab={activeTab}
         queueCount={activeTaskCount}
         onSelect={(tab) => { setActiveTab(tab); if (tab !== "notes") setSearchOpen(false); }}
-      />
+      /> : null}
+
+      {previewTask ? <UploadPreviewDialog task={uploadTasks.find(task => task.id === previewTask.id) ?? previewTask} credential={credential} onClose={closeUploadPreview} onJump={jumpToUpload} /> : null}
 
       {showPairing && (
         <PairingSheet
@@ -985,6 +1050,7 @@ export function QueuePanel({
   onOpenCapture,
   onRetry,
   onRetryRecognition,
+  onPreview,
   onRemove,
   onClearSucceeded
 }: {
@@ -995,6 +1061,7 @@ export function QueuePanel({
   onOpenCapture(): void;
   onRetry(id: string): void;
   onRetryRecognition(task: UploadTask): void;
+  onPreview?(task: UploadTask): void;
   onRemove(id: string): void;
   onClearSucceeded(): void;
 }) {
@@ -1019,6 +1086,7 @@ export function QueuePanel({
               key={task.id}
               task={task}
               canRetryRecognition={capabilities.recognitionRetry}
+              onPreview={onPreview ? () => onPreview(task) : undefined}
               onRetry={() => onRetry(task.id)}
               onRetryRecognition={() => onRetryRecognition(task)}
               onRemove={() => onRemove(task.id)}
@@ -1185,6 +1253,7 @@ export function CapturePanel({
   onFiles,
   onRetry,
   onRetryRecognition,
+  onPreview,
   onRemove,
   onClearSucceeded
 }: {
@@ -1198,6 +1267,7 @@ export function CapturePanel({
   onFiles(files: readonly File[], kind: UploadMaterialKind, target: PairingTarget): Promise<void>;
   onRetry(id: string): void;
   onRetryRecognition(task: UploadTask): void;
+  onPreview?(task: UploadTask): void;
   onRemove(id: string): void;
   onClearSucceeded(): void;
 }) {
@@ -1500,6 +1570,7 @@ export function CapturePanel({
                     key={task.id}
                     task={task}
                     canRetryRecognition={capabilities.recognitionRetry}
+                    onPreview={onPreview ? () => onPreview(task) : undefined}
                     onRetry={() => onRetry(task.id)}
                     onRetryRecognition={() => onRetryRecognition(task)}
                     onRemove={() => onRemove(task.id)}
@@ -1731,12 +1802,14 @@ function UploadTaskCard({
   canRetryRecognition,
   onRetry,
   onRetryRecognition,
+  onPreview,
   onRemove
 }: {
   task: UploadTask;
   canRetryRecognition: boolean;
   onRetry(): void;
   onRetryRecognition(): void;
+  onPreview?(): void;
   onRemove(): void;
 }) {
   const previewUrl = useBlobUrl(task.kind === "image" ? task.previewBytes ?? task.bytes : undefined);
@@ -1745,7 +1818,7 @@ function UploadTaskCard({
     (task.recognitionStatus === "failed" || task.recognitionStatus === "cancelled");
   return (
     <article className={`upload-task ${task.status} recognition-${task.recognitionStatus ?? "none"}`}>
-      <div className="upload-thumbnail" aria-hidden="true">
+      <button type="button" className="upload-thumbnail" onClick={onPreview} disabled={!onPreview} aria-label={`预览 ${task.fileName}`}>
         {previewUrl
           ? <img src={previewUrl} alt="" />
           : task.kind === "pdf"
@@ -1753,9 +1826,9 @@ function UploadTaskCard({
             : task.status === "succeeded"
               ? <CheckCircle2 size={21} />
               : <ImagePlus size={21} />}
-      </div>
+      </button>
       <div className="upload-task-copy">
-        <strong title={task.fileName}>{task.fileName}</strong>
+        <button type="button" className="upload-product-title" onClick={onPreview} disabled={!onPreview} title={task.fileName}>{task.fileName}</button>
         <small>{task.notebookTitle} / {task.sessionTitle}</small>
         <span>{uploadStatusLabel(task)} · {formatBytes(task.byteLength)}</span>
         {task.lastError && <em>{task.lastError}</em>}
@@ -2063,7 +2136,7 @@ async function requestPersistentStorage(): Promise<PersistenceState> {
   }
 }
 
-async function reconnectingStream(args: {
+export async function reconnectingStream(args: {
   api: CompanionApiClient;
   path: string;
   token: string;
@@ -2098,6 +2171,8 @@ async function reconnectingStream(args: {
         }
       });
       backoff = 1_000;
+      // A clean EOF is still a disconnected stream. Avoid spinning on short proxy responses.
+      await wait(backoff, args.signal);
     } catch (error) {
       if (args.signal.aborted) return;
       if (isUnauthorized(error)) {
@@ -2112,11 +2187,14 @@ async function reconnectingStream(args: {
 }
 
 function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = window.setTimeout(resolve, milliseconds);
-    signal.addEventListener("abort", () => {
+    const finish = () => { signal.removeEventListener("abort", abort); resolve(); };
+    const timer = window.setTimeout(finish, milliseconds);
+    const abort = () => {
       window.clearTimeout(timer);
-      resolve();
-    }, { once: true });
+      finish();
+    };
+    signal.addEventListener("abort", abort, { once: true });
   });
 }

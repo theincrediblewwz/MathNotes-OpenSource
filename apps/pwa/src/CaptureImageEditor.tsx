@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import {
-  acquireCaptureImage, captureCropRect, capturePointInRect, drawCaptureMarks,
+  acquireCaptureImage, captureCropRect, capturePointInRect,
   fittedCaptureRect, FULL_CAPTURE_RECT, moveCaptureCropCorner, rectPoints,
   releaseCaptureImage, renderCaptureSurface, rotateCapture,
   type CaptureEdit, type CaptureMark, type CapturePoint, type CaptureQuad, type DecodedImage
 } from "./captureEditing";
 
-type Tool = "crop" | "pen" | "arrow" | "redaction" | "lasso" | "perspective";
+type Tool = "crop" | "pen" | "arrow" | "rectangleRedaction" | "lasso" | "perspective";
 type Gesture = { pointer: number; corner: number; points: CapturePoint[]; before: CaptureEdit };
 
 export function CaptureImageEditor({ file, edit, disabled, onEdit, onPerspective, onBake }: {
@@ -21,7 +21,7 @@ export function CaptureImageEditor({ file, edit, disabled, onEdit, onPerspective
   const [loadError, setLoadError] = useState("");
   const [size, setSize] = useState({ width: 640, height: 420 });
   const [tool, setTool] = useState<Tool>("crop");
-  const [brushWidth, setBrushWidth] = useState(.05);
+  const [penMenuOpen, setPenMenuOpen] = useState(false);
   const [quad, setQuad] = useState<CaptureQuad>(rectPoints(FULL_CAPTURE_RECT));
   const [history, setHistory] = useState<CaptureEdit[]>([]);
   const gesture = useRef<Gesture | null>(null);
@@ -31,8 +31,8 @@ export function CaptureImageEditor({ file, edit, disabled, onEdit, onPerspective
   const imageHeight = image ? quarter ? image.width : image.height : 1;
   const fitted = fittedCaptureRect(size.width, size.height, imageWidth, imageHeight);
   const crop = captureCropRect(imageWidth, imageHeight, edit);
-  const base = useMemo(() => image ? renderCaptureSurface(image, { rotation: edit.rotation, crop: "original" }, Math.max(fitted.width, fitted.height) * Math.min(window.devicePixelRatio || 1, 2)) : null,
-    [image, edit.rotation, size.width, size.height]);
+  const base = useMemo(() => image ? renderCaptureSurface(image, { rotation: edit.rotation, crop: "original", marks: edit.marks }, Math.max(fitted.width, fitted.height) * Math.min(window.devicePixelRatio || 1, 2)) : null,
+    [image, edit.rotation, edit.marks, size.width, size.height]);
 
   useEffect(() => {
     let disposed = false;
@@ -57,9 +57,6 @@ export function CaptureImageEditor({ file, edit, disabled, onEdit, onPerspective
     const context = element.getContext("2d"); if (!context) return;
     context.scale(ratio, ratio); context.fillStyle = "#20221f"; context.fillRect(0, 0, size.width, size.height);
     context.drawImage(base, fitted.x, fitted.y, fitted.width, fitted.height);
-    context.save(); context.translate(fitted.x, fitted.y);
-    context.beginPath(); context.rect(0, 0, fitted.width, fitted.height); context.clip();
-    drawCaptureMarks(context, edit.marks ?? [], fitted.width, fitted.height); context.restore();
     const points = tool === "perspective" ? quad : edit.lasso?.length ? edit.lasso : rectPoints(crop);
     if (points.length > 1) {
       context.fillStyle = "#00000070"; context.beginPath();
@@ -108,7 +105,7 @@ export function CaptureImageEditor({ file, edit, disabled, onEdit, onPerspective
       if (Math.hypot(point.x - active.points[active.points.length - 1].x, point.y - active.points[active.points.length - 1].y) > .001) active.points.push(point);
       if (tool === "lasso") onEdit({ ...active.before, lasso: [...active.points] });
       else {
-        const mark: CaptureMark = { type: tool, points: [...active.points], width: tool === "redaction" ? brushWidth : .007 };
+        const mark: CaptureMark = { type: tool, points: tool === "rectangleRedaction" ? [active.points[0], point] : [...active.points], width: .007 };
         onEdit({ ...active.before, marks: [...(active.before.marks ?? []), mark] });
       }
     }
@@ -131,21 +128,26 @@ export function CaptureImageEditor({ file, edit, disabled, onEdit, onPerspective
       {!image && <p className="capture-canvas-message">{loadError || "正在打开照片…"}</p>}
     </div>
     <div className="capture-editor-tools" aria-label="照片编辑工具">
-      {([['crop','矩形裁剪'],['perspective','透视'],['lasso','套索'],['pen','画笔'],['arrow','箭头'],['redaction','马赛克']] as const).map(([value, label]) =>
+      {([['crop','矩形裁剪'],['perspective','透视'],['lasso','套索']] as const).map(([value, label]) =>
         <button key={value} type="button" disabled={disabled} className={tool === value ? "active" : ""} aria-pressed={tool === value} onClick={() => {
+          setPenMenuOpen(false);
           if (value === "perspective" && (edit.crop !== "original" || edit.cropRect || edit.lasso?.length)) {
             pendingTool.current = "perspective";
             void onBake().then(applied => { if (!applied) pendingTool.current = null; });
           } else setTool(value);
           if (value === "crop" && edit.lasso) change({ ...edit, lasso: undefined });
         }}>{label}</button>)}
+      <button type="button" disabled={disabled} className={penMenuOpen ? "active" : ""} aria-expanded={penMenuOpen} onClick={() => { setPenMenuOpen(open => !open); if (tool !== "pen" && tool !== "arrow" && tool !== "rectangleRedaction") setTool("pen"); }}>画笔</button>
       <button type="button" disabled={disabled} onClick={() => { change(rotateCapture(edit, "left")); setQuad(rectPoints(FULL_CAPTURE_RECT)); }}>左转</button>
       <button type="button" disabled={disabled} onClick={() => { change(rotateCapture(edit, "right")); setQuad(rectPoints(FULL_CAPTURE_RECT)); }}>右转</button>
       {(["original", "4:3", "square"] as const).map(value => <button key={value} type="button" disabled={disabled} onClick={() => { change({ ...edit, crop: value, cropRect: undefined, lasso: undefined }); setTool("crop"); }}>{value === "original" ? "原图" : value === "square" ? "方形" : value}</button>)}
       <button type="button" disabled={disabled || !history.length} onClick={() => { const previous = history[history.length - 1]; setHistory(items => items.slice(0,-1)); onEdit(previous); }}>撤销</button>
     </div>
+    {penMenuOpen ? <div className="capture-editor-tools capture-pen-menu" role="group" aria-label="画笔选项">
+      {([['pen','自由画笔'],['arrow','箭头'],['rectangleRedaction','马赛克']] as const).map(([value,label]) => <button key={value} type="button" disabled={disabled} aria-pressed={tool === value} className={tool === value ? "active" : ""} onClick={() => setTool(value)}>{label}</button>)}
+    </div> : null}
     <div className="capture-edit-hint">
-      {tool === "redaction" ? <><span>遮盖区域会替换成纯黑后再上传</span><label>粗细 <input aria-label="马赛克粗细" type="range" min="0.02" max="0.1" step="0.01" value={brushWidth} onChange={event => setBrushWidth(Number(event.target.value))} disabled={disabled} /></label></>
+      {tool === "rectangleRedaction" ? <span>拖出矩形，用不透明白色遮盖不想识别的内容。</span>
         : tool === "perspective" ? <><span>四角对齐纸张边缘，应用后继续裁剪或标注。</span><button type="button" disabled={disabled || !image} onClick={() => void onPerspective(quad)}>应用透视</button></>
         : <span>{tool === "crop" ? "拖动四角调整范围，绿色边框就是保留范围。" : tool === "lasso" ? "圈出要保留的区域，圈外会变为白色。" : "在照片上拖动即可标注；可撤销上一步。"}</span>}
     </div>

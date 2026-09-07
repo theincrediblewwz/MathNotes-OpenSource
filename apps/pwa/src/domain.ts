@@ -103,6 +103,10 @@ export type UploadTask = Readonly<{
   byteLength: number;
   bytes?: Blob;
   previewBytes?: Blob;
+  /** Verified full upload product, cached only after opening an accepted upload. */
+  uploadedBytes?: Blob;
+  sha256?: string;
+  originalName?: string;
   notebookId: string;
   notebookTitle: string;
   sessionId: string;
