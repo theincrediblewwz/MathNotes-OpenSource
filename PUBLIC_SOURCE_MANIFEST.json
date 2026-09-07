@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "public-history-preserved",
-  "generatedAt": "2026-09-07T17:40:34.581Z",
-  "fileCount": 778,
-  "snapshotSha256": "c53cee919610ffdb30c7ab552e4a6e3d98b49986e0d5c3ad6d885b505724ae5e",
+  "generatedAt": "2026-09-07T18:01:36.390Z",
+  "fileCount": 779,
+  "snapshotSha256": "22c756ae46e928a63efe4e0a6a67ddedffdfbba283f0d6ff6331ea34b9377058",
   "files": [
     {
       "path": ".gitattributes",
@@ -63,8 +63,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 5508,
-      "sha256": "b78b082c686368c9920183d2e0197c4e043b46513d6caa3cf531bde73d774bbe"
+      "bytes": 8913,
+      "sha256": "25bd0b138cf056f7375e5168a4cee8f7a12c802e1f7c1177e939fd9a74c2c4a2"
     },
     {
       "path": "SECURITY.md",
@@ -2772,9 +2772,14 @@
       "sha256": "33b29ed275fc0d6a9c65d84f46ede42bc22f847e7e6de25f27bb4a0b217a11e0"
     },
     {
+      "path": "deploy/releases/v0.3.4-acceptance.md",
+      "bytes": 9400,
+      "sha256": "8881f26a2092a31fa5cdc69e5c4708b6e569623572b70082e5a9de4e068474d8"
+    },
+    {
       "path": "deploy/releases/v0.3.4.md",
-      "bytes": 3982,
-      "sha256": "3c10d3bec23c2897054106cd967162c2f7a7bb44cc27e66bd90111097f4804ef"
+      "bytes": 4289,
+      "sha256": "f707868eb0f8d0cc9e62085386ea50262b9aec713601e8e4ec8e037f925dbd03"
     },
     {
       "path": "package-lock.json",

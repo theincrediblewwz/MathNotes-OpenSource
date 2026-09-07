@@ -2,11 +2,43 @@
 
 MathNotes 是一个 GPLv3、本地优先的数学笔记项目，包含 Windows、macOS、Android 与 PWA。它围绕“图片/PDF → 忠实 Markdown 草稿 → 人工校订与锁定 → 连续阅读与导出”工作。
 
-当前开发版本：`0.3.4`，处于试用阶段。最新整合分支为 `codex/release-v0.3.4-integration`，发行包见 [MathNotes 0.3.4](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/v0.3.4)。源码可以使用和修改，但自动测试不能替代真实 Windows、Apple silicon Mac、Android 与 iPhone 验收。
+**最新发行版：0.3.4 试用版。当前 Windows / Android / PWA 开发版本：0.3.4。**
+
+[下载最新发行版](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/latest) · [0.3.4 固定发行页](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/v0.3.4) · [逐项操作验收表](deploy/releases/v0.3.4-acceptance.md)
+
+公开默认分支 `main` 与 `codex/release-v0.3.4-integration` 均包含本轮整合源码。源码可以使用和修改，但自动测试不能替代真实 Windows、Apple silicon Mac、Android 与 iPhone 验收。
+
+| 平台 | 本次可用版本 | 交付内容 |
+| --- | --- | --- |
+| Windows | 0.3.4 | 已内置新版 PWA 的便携 ZIP，解压后运行 MathNotes.exe |
+| Android | 0.3.4，versionCode 17 | APK，沿用既有测试签名 |
+| PWA | 0.3.4 | 独立网页/源码更新 ZIP，附 Mac 接手说明 |
+| macOS | 本次没有新安装包 | 保留 Mac 源码与接手材料，Mac 本体由 Mac 端任务继续处理 |
 
 本版提供 Windows 便携 ZIP、Android APK 和独立 PWA 更新包。Windows 为未签名测试包，Android 沿用既有测试签名；覆盖安装前请备份笔记。Mac 源码与交接材料保留，Mac 安装包由真实 Mac 上的工作另行构建。
 
 0.3.4 修复了块拖动原地放下误报导入、重新识别未实际执行，并补齐已上传素材预览与正文定位、左上角可滚动气泡目录、阅读底栏显隐和画笔内矩形遮盖。各包的版本、SHA-256、验证范围与已知限制以该发行页为准。
+
+## 这次改了什么，怎么自己验
+
+本表包括前后两轮改动，便于逐项复测。“已测”指合成笔记、受控 Provider、Windows 成品、浏览器或 Android 模拟器的对应测试，不等于你的真机已经通过。完整操作和反馈编号见[验收表](deploy/releases/v0.3.4-acceptance.md)。
+
+| 平台 | 已修改内容 | 你可以怎样验 | 当前验证范围 |
+| --- | --- | --- | --- |
+| Windows | 启动显示与初始化优化 | 完全退出后重开，观察白屏和正文出现时间 | 小型测试库已测；真实大库速度待复测 |
+| Windows | 最近阅读重命名、删除 | 右键一条测试笔记记录 | 菜单/重命名/取消与删除服务已测 |
+| Windows | 拖动时四行预览、修复原位放下误报 | 拖标题换位，再原地放下或取消 | 实际拖动与外部 Markdown 导入已测 |
+| Windows | 重新识别真正执行 | 重识别已完成照片，观察进行中与新结果 | 实际测试 Provider 请求、失败/取消/锁保护已测 |
+| Windows | AI 修改全文与锁定说明 | 在 AI 模式选择“修改全文”，让它统一多个块的记号 | 修改报告、锁定原文保留已测 |
+| Windows | 移动/复制目标选择器圆角 | 展开“目标笔记”菜单 | 实际样式已测 |
+| Android / PWA | 已上传素材预览、跳到正文位置 | 点已上传记录，再跳到所在笔记 | 成品取回/校验与真实正文定位已测 |
+| Android / PWA | 左上角滚动气泡目录、轻点显隐底栏 | 在长笔记点目录按钮、滚动目录、选标题；轻点正文 | 本机/电脑阅读与浏览器流程已测 |
+| Android / PWA | 编辑留白、裁剪边缘一致、画笔内白色矩形遮盖 | 拖裁剪圈、遮盖文字后加入队列，对照成品 | 几何/像素/实际上传成品已测；真机处理耗时待复测 |
+| Android | 完整原相机入口与中文笔记本名 | 选“打开手机原相机 · 拍完后导入”；刷新电脑笔记目录 | 入口/同步逻辑已测；Vivo 高倍率画质待真机复测 |
+| 三端 | 图形识别处显示完整处理后照片、点开放大 | 用含图形的照片识别，检查正文图片 | 图片标记、绑定与渲染已测；实际模型结果可继续反馈 |
+| Android | 重启/恢复网络续传、暂停保护 | 排队后正常重启；断网后恢复；已暂停项应保持暂停 | 正常重启与两轮无进程联网恢复通过，约 6.1 秒收到测试回执；厂商后台策略待真机复测 |
+
+仍未验证的项目没有算作完成：Vivo 厂商高倍率画质、真实手机大照片处理耗时、真实大库启动表现、Safari/Mac 真机与新的 Mac 安装包。遮盖的 8 张盲测没有发现误判，但不能保证所有模型都不会误判。
 
 ## 核心闭环
 
