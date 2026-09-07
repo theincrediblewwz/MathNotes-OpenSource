@@ -210,6 +210,7 @@ export type ProviderRuntimeState = {
 };
 
 export type SaveMarkdownBlockInput = {
+  revisionBaseline: string;
   notebookId: string;
   sessionId: string;
   blockId: string;
@@ -243,6 +244,7 @@ export type SelectionEditProposalCommand = {
 };
 
 export type SaveSessionSourceInput = {
+  revisionBaseline: string;
   notebookId: string;
   sessionId: string;
   sourceText: string;
@@ -619,6 +621,7 @@ export type MathNotesApi = {
   cancelSelectionEdit(input: SelectionEditProposalCommand): Promise<SelectionEditProposal>;
   saveMarkdownBlock(input: SaveMarkdownBlockInput): Promise<SessionDocument>;
   saveSessionSource(input: SaveSessionSourceInput): Promise<SessionDocument>;
+  unlockProtectedSpan(input: { notebookId: string; sessionId: string; blockId: string; spanId: string; revisionBaseline: string }): Promise<SessionDocument>;
   setMarkdownBlockLock(input: SetMarkdownBlockLockInput): Promise<SessionDocument>;
   deleteMarkdownBlock(input: DeleteMarkdownBlockInput): Promise<DeleteMarkdownBlockResult>;
   restoreDeletedMarkdownBlock(input: RestoreDeletedMarkdownBlockInput): Promise<SessionDocument>;
@@ -655,6 +658,7 @@ export type MathNotesApi = {
   stopIngestServer(): Promise<IngestServerState>;
   onCompanionUploadActivity(callback: (event: CompanionUploadActivityEvent) => void): () => void;
   onUploadCompleted(callback: (event: UploadCompletedEvent) => void): () => void;
+  onWorkspaceChanged(callback: (event: { notebookId: string; sessionId: string }) => void): () => void;
   onRecognitionJobChanged(callback: (event: RecognitionJobChangedEvent) => void): () => void;
   onRecognitionRuntimeEvent(callback: (event: RecognitionRuntimeEvent) => void): () => void;
   onCodexRuntimeStateChanged(callback: (event: CodexRuntimeState) => void): () => void;

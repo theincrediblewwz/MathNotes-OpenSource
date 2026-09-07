@@ -12,6 +12,7 @@ export type CoreApiCapability =
   | "companion.session.read"
   | "companion.asset.read"
   | "companion.events.read"
+  | "workspace.sync"
   | "local.workspace.manage"
   | "local.provider.manage"
   | "local.filesystem.manage";
@@ -29,7 +30,13 @@ export type NetworkApiRouteId =
   | "companion.session.document.v2"
   | "companion.asset"
   | "companion.session.events"
-  | "companion.catalog.events";
+  | "companion.catalog.events"
+  | "workspace.identity"
+  | "workspace.catalog"
+  | "workspace.snapshot"
+  | "workspace.asset"
+  | "workspace.asset.stage"
+  | "workspace.push";
 
 export type LocalShellApiRouteId =
   | "local.health"
@@ -123,7 +130,13 @@ export const NETWORK_API_ROUTES: readonly NetworkApiRoute[] = [
   route("companion.session.document.v2", "GET", "/api/v2/companion/session/document", "companion.session.read", "paired-device"),
   route("companion.asset", "GET", "/api/v1/companion/asset", "companion.asset.read", "paired-device"),
   route("companion.session.events", "GET", "/api/v1/companion/events", "companion.events.read", "paired-device"),
-  route("companion.catalog.events", "GET", "/api/v1/companion/catalog-events", "companion.events.read", "paired-device")
+  route("companion.catalog.events", "GET", "/api/v1/companion/catalog-events", "companion.events.read", "paired-device"),
+  route("workspace.identity", "GET", "/api/v3/workspace/identity", "workspace.sync", "trusted-host"),
+  route("workspace.catalog", "GET", "/api/v3/workspace/catalog", "workspace.sync", "trusted-host"),
+  route("workspace.snapshot", "GET", "/api/v3/workspace/snapshot", "workspace.sync", "trusted-host"),
+  route("workspace.asset", "GET", "/api/v3/workspace/asset", "workspace.sync", "trusted-host"),
+  route("workspace.asset.stage", "POST", "/api/v3/workspace/asset", "workspace.sync", "trusted-host"),
+  route("workspace.push", "POST", "/api/v3/workspace/push", "workspace.sync", "trusted-host")
 ];
 
 export const LOCAL_SHELL_API_ROUTES: readonly LocalShellApiRoute[] = [
@@ -211,6 +224,7 @@ const grants: Readonly<Record<CoreApiPrincipal, ReadonlySet<CoreApiCapability>>>
     "companion.events.read"
   ]),
   "trusted-local-host": new Set([
+    "workspace.sync",
     "service.health.read",
     "pairing.challenge",
     "pairing.verify",

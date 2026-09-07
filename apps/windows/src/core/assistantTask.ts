@@ -1,3 +1,4 @@
+import { continuationContexts, continuationInstructions } from "./continuationContext";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -5,6 +6,7 @@ import {
   buildAssistantContextPacket,
   extractAssistantBlockOrdinals,
   type AssistantContextUsage,
+  type AssistantContextPacket,
   type AssistantMode,
   type AssistantProvider,
   type AssistantProviderEvent,
@@ -89,7 +91,7 @@ export async function runAssistantTask(args: {
     currentSessionId: args.input.sessionId
   });
   const relatedSources = relatedKnowledge.references.map(toRemarkRelatedSource);
-  const contextPacket = buildAssistantContextPacket({
+  const baseContextPacket = buildAssistantContextPacket({
     focus,
     question: args.input.question,
     blocks: readableBlocks.map((block) => ({
@@ -99,6 +101,7 @@ export async function runAssistantTask(args: {
     })),
     relatedSources: relatedKnowledge.references
   });
+  const contextPacket = withContinuationContext(baseContextPacket, session.blocks, markdownByBlockId);
   const imagePaths = await collectImagePaths({
     store: args.store,
     notebookId: args.input.notebookId,
@@ -247,7 +250,7 @@ export function buildMarkdownContext(args: {
   readableBlocks: BlockRef[];
   markdownByBlockId: Map<string, string>;
 }): string {
-  return buildAssistantContextPacket({
+  const packet = buildAssistantContextPacket({
     focus: args.focus,
     question: args.question,
     blocks: args.readableBlocks.map((block) => ({
@@ -255,7 +258,8 @@ export function buildMarkdownContext(args: {
       source: block.source,
       markdown: args.markdownByBlockId.get(block.id) ?? ""
     }))
-  }).markdownContext;
+  });
+  return withContinuationContext(packet, args.readableBlocks, args.markdownByBlockId).markdownContext;
 }
 
 export function extractBlockOrdinals(question: string | undefined, blockCount: number): number[] {
@@ -302,4 +306,14 @@ function modeTitle(mode: AssistantMode): string {
   if (mode === "teach") return "教学";
   if (mode === "summarize") return "总结";
   return "解读";
+}
+
+function withContinuationContext(packet: AssistantContextPacket, allBlocks: readonly BlockRef[], markdownByBlockId: ReadonlyMap<string, string>): AssistantContextPacket {
+  const continuations = continuationContexts(allBlocks, markdownByBlockId, new Set(packet.usage.includedBlockIds));
+  if (!continuations.length) return packet;
+  const markdownContext = packet.markdownContext + "\n\n# 连续片段的完整上下文\n" + JSON.stringify({ continuationInstructions, continuations });
+  const textCharacters = Array.from(markdownContext).length;
+  if (textCharacters > ASSISTANT_CONTEXT_LIMITS.totalCharacters) throw new Error("连续片段的完整上下文超过当前上限，请缩小范围；未截断片段发送。");
+  return { markdownContext, usage: { ...packet.usage, textCharacters,
+    includedBlockIds: [...new Set([...packet.usage.includedBlockIds, ...continuations.flatMap(group => group.blocks.map(block => block.blockId))])] } };
 }

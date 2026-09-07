@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, posix, resolve } from "node:path";
-import { normalizeMathForPortableMarkdown, type SessionRecord } from "@mathnotes/shared";
+import { markdownContinuationGroups, normalizeMathForPortableMarkdown, type SessionRecord } from "@mathnotes/shared";
 import { sessionManifestRevision } from "./sessionRevision";
 
 export type ExportSessionMarkdownArgs = {
@@ -75,13 +75,16 @@ export async function exportSessionMarkdown(args: ExportSessionMarkdownArgs): Pr
 
   const chunks: string[] = [];
   let exportedBlocks = 0;
-  for (const block of session.blocks) {
-    if (block.type !== "markdown") continue;
-    exportedBlocks += 1;
-    if (args.includeMetadataComments) chunks.push(`<!-- block:id=${block.id} source=${block.source} -->`);
-    const markdownPath = resolve(sessionDir, block.path);
-    assertInside(sessionDir, markdownPath);
-    const markdown = (await readFile(markdownPath, "utf8")).trimEnd();
+  for (const group of markdownContinuationGroups(session.blocks)) {
+    exportedBlocks += group.length;
+    if (args.includeMetadataComments) chunks.push(group.map(block => "<!-- block:id=" + block.id + " source=" + block.source + " -->").join("\n"));
+    const pieces = await Promise.all(group.map(async block => {
+      const markdownPath = resolve(sessionDir, block.path);
+      assertInside(sessionDir, markdownPath);
+      return readFile(markdownPath, "utf8");
+    }));
+    const joined = pieces.join("");
+    const markdown = group[0].continuationGroup ? joined : joined.trimEnd();
     chunks.push(args.mathCompatibility === "internal" ? markdown : normalizeMathForPortableMarkdown(markdown));
   }
 

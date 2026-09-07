@@ -6,6 +6,48 @@ export const sourceImageMarkerInstruction =
 
 // Use the Markdown parser so literal markers inside code are never interpreted.
 const parser = new MarkdownIt({ html: false });
+// Formula content is opaque, including display formulas containing blank lines.
+// This parser only locates active markers; it must never rewrite literal examples.
+parser.block.ruler.before("paragraph", "mathnotes_math_literal", (state, startLine, endLine, silent) => {
+  const start = state.bMarks[startLine] + state.tShift[startLine];
+  const first = state.src.slice(start, state.eMarks[startLine]);
+  const opening = first.startsWith("$$") ? "$$" : first.startsWith("\\[") ? "\\[" : undefined;
+  if (!opening) return false;
+  if (silent) return true;
+  const closing = opening === "$$" ? "$$" : "\\]";
+  let nextLine = startLine;
+  while (nextLine < endLine) {
+    const text = state.src.slice(nextLine === startLine ? start + opening.length : state.bMarks[nextLine], state.eMarks[nextLine]);
+    nextLine += 1;
+    if (findUnescapedClosing(text, closing, 0) >= 0) break;
+  }
+  const token = state.push("mathnotes_math_literal", "", 0);
+  token.map = [startLine, nextLine];
+  state.line = nextLine;
+  return true;
+});
+parser.inline.ruler.before("escape", "mathnotes_inline_math_literal", (state, silent) => {
+  const start = state.pos;
+  const opening = ["$$", "\\(", "\\[", "$"].find(value => state.src.startsWith(value, start));
+  if (!opening) return false;
+  const closing = opening === "\\(" ? "\\)" : opening === "\\[" ? "\\]" : opening;
+  const end = findUnescapedClosing(state.src, closing, start + opening.length);
+  if (end < 0) return false;
+  if (!silent) state.push("mathnotes_math_literal", "", 0);
+  state.pos = end + closing.length;
+  return true;
+});
+
+function findUnescapedClosing(text: string, delimiter: string, start: number): number {
+  let index = text.indexOf(delimiter, start);
+  while (index >= 0) {
+    let slashes = 0;
+    for (let i = index - 1; i >= 0 && text[i] === "\\"; i--) slashes++;
+    if (slashes % 2 === 0) return index;
+    index = text.indexOf(delimiter, index + delimiter.length);
+  }
+  return -1;
+}
 parser.inline.ruler.before("link", "mathnotes_source_image", (state, silent) => {
   const start = state.pos;
   if (!state.src.startsWith(SOURCE_IMAGE_MARKER, start)) return false;

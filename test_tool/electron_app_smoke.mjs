@@ -333,6 +333,7 @@ try {
     const block = current.sourceDocument.markdownBlocks.find((candidate) => candidate.blockId === blockId);
     if (!block) throw new Error(`Unable to find block ${blockId} for conflict injection`);
     await window.mathNotes.saveMarkdownBlock({
+      revisionBaseline: current.revisionBaseline,
       notebookId: current.notebookId,
       sessionId: current.sessionId,
       blockId,

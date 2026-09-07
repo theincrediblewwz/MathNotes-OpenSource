@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
-import type { SessionRecord } from "@mathnotes/shared";
+import { markdownContinuationGroups, type SessionRecord } from "@mathnotes/shared";
 import { CompanionAssetError, type CompanionAsset, type CompanionSessionAsset, type CompanionSessionSnapshot } from "../api/networkApiContracts";
 import { renderPortableMarkdown } from "../render/portableMarkdown";
 import { COMPANION_READER_STYLE } from "./companionReaderStyle";
@@ -22,7 +22,9 @@ export async function buildCompanionSessionSnapshot(args: {
   const markdownSections: string[] = [];
   const assets = new Map<string, CompanionSessionAsset>();
 
+  const groups = new Map(markdownContinuationGroups(session.blocks).map(group => [group[0].id, group]));
   for (const block of session.blocks) {
+    if (block.renderInNote === false) continue;
     if (block.type === "pdf") {
       const target = resolve(sessionDir, block.path);
       assertInside(resolve(sessionDir, "assets"), target);
@@ -38,13 +40,19 @@ export async function buildCompanionSessionSnapshot(args: {
       );
       continue;
     }
-    if (block.type !== "markdown") continue;
+    if (block.type !== "markdown" || !groups.has(block.id)) continue;
+    const group = groups.get(block.id)!;
     const markdownPath = resolve(sessionDir, block.path);
     assertInside(sessionDir, markdownPath);
-    const markdown = await readFile(markdownPath, "utf8");
-    const rendered = await renderCompanionMarkdown({ markdown, markdownPath, sessionDir, assets, blockId: block.id });
-    sections.push(`<section class="note-block" id="mathnotes-block-${escapeAttribute(block.id)}" data-block-id="${escapeAttribute(block.id)}">${rendered}</section>`);
-    markdownSections.push(`<!-- block:${block.id} source:${block.source} -->\n${markdown.trimEnd()}`);
+    const markdown = (await Promise.all(group.map(async member => {
+      const path = resolve(sessionDir, member.path);
+      assertInside(sessionDir, path);
+      return readFile(path, "utf8");
+    }))).join("");
+    const rendered = await renderCompanionMarkdown({ markdown, markdownPath, sessionDir, assets, blockId: block.id, continuationBlockIds: group.slice(1).map(member => member.id) });
+    const aliases = group.slice(1).map(member => `<span id="mathnotes-block-${escapeAttribute(member.id)}" data-block-id="${escapeAttribute(member.id)}"></span>`).join("");
+    sections.push(`<section class="note-block" id="mathnotes-block-${escapeAttribute(block.id)}" data-block-id="${escapeAttribute(block.id)}">${aliases}${rendered}</section>`);
+    markdownSections.push(group.map(member => `<!-- block:${member.id} source:${member.source} -->`).join("\n") + "\n" + (block.continuationGroup ? markdown : markdown.trimEnd()));
   }
 
   const body = sections.join("\n");
@@ -100,6 +108,7 @@ async function renderCompanionMarkdown(args: {
   sessionDir: string;
   assets: Map<string, CompanionSessionAsset>;
   blockId: string;
+  continuationBlockIds?: string[];
 }): Promise<string> {
   const rendered = await renderPortableMarkdown({
     markdown: args.markdown,
@@ -126,9 +135,10 @@ async function renderCompanionMarkdown(args: {
   return rendered.replace(/<img\b[^>]*>/gi, image => {
     const assetId = image.match(/\bsrc="mathnotes-companion-asset:\/\/([a-f0-9]{24})"/)?.[1];
     if (!assetId) return image;
+    const aliases = anchored.has(assetId) ? "" : (args.continuationBlockIds ?? []).map(blockId => `<span id="mathnotes-block-${escapeAttribute(blockId)}-asset-${assetId}"></span>`).join("");
     const anchor = anchored.has(assetId) ? "" : ` id="mathnotes-block-${escapeAttribute(args.blockId)}-asset-${assetId}"`;
     anchored.add(assetId);
-    return image.replace(/^<img\b/i, `<img${anchor} data-companion-asset-id="${assetId}"`);
+    return aliases + image.replace(/^<img\b/i, `<img${anchor} data-companion-asset-id="${assetId}"`);
   });
 }
 

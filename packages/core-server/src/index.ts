@@ -44,3 +44,4 @@ export * from "./catalog/workspaceCommandService";
 export * from "./device/deviceIdentityService";
 export * from "./events/revisionEventLog";
 export * from "./network/endpointPolicy";
+export * from "./sync/workspaceSyncService";

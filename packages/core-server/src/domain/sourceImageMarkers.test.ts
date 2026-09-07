@@ -20,6 +20,21 @@ describe("source image binding", () => {
     }
   });
 
+  it("leaves markers inside display and inline math literal, while binding the following real image", () => {
+    for (const [open, close] of [["$$", "$$"], ["\\[", "\\]"], ["$", "$"], ["\\(", "\\)"]]) {
+      const formula = `${open}\n${marker}\n${close}`;
+      const source = `${formula}\n\n图形说明\n\n${marker}\n`;
+      expect(bindSourceImageMarkers(source, "assets/photos/p.png")).toBe(`${formula}\n\n图形说明\n\n![识别照片（已处理）](../assets/photos/p.png)\n`);
+    }
+    const formula = `$$\n\n${marker}\n\n$$`;
+    expect(bindSourceImageMarkers(formula, "assets/photos/p.png")).toBe(formula);
+    for (const [opening, escaped, closing] of [["$$", "\\$$", "$$"], ["\\[", "\\\\]", "\\]"]]) {
+      const formula = `${opening}\nx + ${escaped}\n\n${marker}\n\ny\n${closing}`;
+      const source = `${formula}\n\n${marker}`;
+      expect(bindSourceImageMarkers(source, "assets/photos/p.png")).toBe(`${formula}\n\n![识别照片（已处理）](../assets/photos/p.png)`);
+    }
+  });
+
   it("preserves CRLF and does not retrofit historical image descriptions", () => {
     const source = `[图片：旧图描述]\r\n\r\n${marker}\r\n`;
     expect(bindSourceImageMarkers(source, "assets/photos/p.png")).toBe("[图片：旧图描述]\r\n\r\n![识别照片（已处理）](../assets/photos/p.png)\r\n");

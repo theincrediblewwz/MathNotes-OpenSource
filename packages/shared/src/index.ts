@@ -4,3 +4,4 @@ export * from "./markdownMath";
 export * from "./assistantContext";
 export * from "./providerCatalog";
 export * from "./selectionEdit";
+export * from "./markdownContinuations";

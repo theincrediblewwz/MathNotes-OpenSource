@@ -11,23 +11,26 @@ import {
   createSessionRecord
 } from "@mathnotes/shared";
 import { SessionWriteCoordinator } from "@mathnotes/core-server";
-import { parseProtectedSpans, sha256Text } from "../common/lockSpan";
+import { findProtectedSpanRanges, parseProtectedSpans, sha256Text, unwrapProtectedSpan } from "../common/lockSpan";
 import { validateAiMarkdownUpdate } from "../common/lockValidation";
+import { sessionRevisionBaseline } from "./sessionRevisionBaseline";
 
 const appendWrites = new SessionWriteCoordinator();
 
 function desktopWriteScope(rootDir: string, notebookId: string): string {
   const root = resolve(rootDir);
-  return `${process.platform === "win32" ? root.toLowerCase() : root}\0${notebookId}`;
+  return `${process.platform === "win32" ? root.toLowerCase() : root}\0${desktopIdKey(notebookId)}`;
 }
+
+function desktopIdKey(id: string): string { return process.platform === "win32" ? id.toLowerCase() : id; }
 
 class DesktopSessionWriteCoordinator extends SessionWriteCoordinator {
   constructor(private readonly rootDir: string) { super(); }
   override run<T>(notebookId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
-    return appendWrites.run(desktopWriteScope(this.rootDir, notebookId), sessionId, operation);
+    return appendWrites.run(desktopWriteScope(this.rootDir, notebookId), desktopIdKey(sessionId), operation);
   }
   override runMany<T>(sessions: readonly { notebookId: string; sessionId: string }[], operation: () => Promise<T>): Promise<T> {
-    return appendWrites.runMany(sessions.map((session) => ({ ...session, notebookId: desktopWriteScope(this.rootDir, session.notebookId) })), operation);
+    return appendWrites.runMany(sessions.map((session) => ({ ...session, notebookId: desktopWriteScope(this.rootDir, session.notebookId), sessionId: desktopIdKey(session.sessionId) })), operation);
   }
 }
 
@@ -97,6 +100,7 @@ export type SaveAnnotatedImageAssetArgs = {
 };
 
 export type UpdateMarkdownBlockArgs = {
+  revisionBaseline: string;
   notebookId: string;
   sessionId: string;
   blockId: string;
@@ -104,9 +108,10 @@ export type UpdateMarkdownBlockArgs = {
   now: string;
 };
 
-export type UpdateMarkdownBlockFromAiArgs = UpdateMarkdownBlockArgs;
+export type UpdateMarkdownBlockFromAiArgs = Omit<UpdateMarkdownBlockArgs, "revisionBaseline">;
 
 export type UpdateMarkdownBlocksArgs = {
+  revisionBaseline: string;
   notebookId: string;
   sessionId: string;
   updates: Array<{
@@ -149,7 +154,7 @@ export class BlockStore {
   constructor(private readonly rootDir: string) {}
 
   async createSession(args: CreateSessionArgs): Promise<SessionRecord> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const sessionDir = this.sessionDir(args.notebookId, args.sessionId);
       await Promise.all([
         mkdir(join(sessionDir, "blocks"), { recursive: true }),
@@ -177,7 +182,7 @@ export class BlockStore {
   }
 
   async appendImageBlock(args: AppendImageBlockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const block = createBlockRef({
         id: nextBlockId(session),
@@ -195,7 +200,7 @@ export class BlockStore {
   }
 
   async appendPdfBlock(args: AppendPdfBlockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const block = createBlockRef({
         id: nextBlockId(session),
@@ -216,7 +221,7 @@ export class BlockStore {
   }
 
   async appendMarkdownBlock(args: AppendMarkdownBlockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       if (args.insertAfterBlockId !== undefined && !session.blocks.some((block) => block.id === args.insertAfterBlockId)) {
         throw new Error(`Insert anchor ${args.insertAfterBlockId} is stale`);
@@ -247,18 +252,17 @@ export class BlockStore {
   }
 
   async updateMarkdownBlock(args: UpdateMarkdownBlockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, () =>
-      this.updateMarkdownBlockUnlocked(args)
-    );
+    return (await this.updateMarkdownBlocks({ ...args, updates: [{ blockId: args.blockId, markdown: args.markdown }] }))[0];
   }
 
-  private async updateMarkdownBlockUnlocked(args: UpdateMarkdownBlockArgs): Promise<BlockRef> {
+  private async updateMarkdownBlockUnlocked(args: UpdateMarkdownBlockFromAiArgs): Promise<BlockRef> {
     const session = await this.readSession(args.notebookId, args.sessionId);
     const { block } = requireMarkdownBlock(session, args.blockId);
 
-    const target = join(this.sessionDir(args.notebookId, args.sessionId), block.path);
-    await writeFileAtomically(target, args.markdown, "utf8");
-
+    const nextPath = join(dirname(block.path), `${block.id}_ai_${randomUUID()}.md`).replace(/\\/g, "/");
+    const target = join(this.sessionDir(args.notebookId, args.sessionId), nextPath);
+    await writeFile(target, args.markdown, { encoding: "utf8", flag: "wx", flush: true });
+    block.path = nextPath;
     block.updatedAt = args.now;
     session.updatedAt = args.now;
     session.locks = syncProtectedSpanLocks({
@@ -272,7 +276,7 @@ export class BlockStore {
   }
 
   async updateMarkdownBlockFromAi(args: UpdateMarkdownBlockFromAiArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const { block } = requireMarkdownBlock(session, args.blockId);
 
@@ -281,39 +285,100 @@ export class BlockStore {
         blockId: block.id,
         beforeMarkdown,
         afterMarkdown: args.markdown,
-        locks: session.locks
+        locks: locksWithLegacySpans(session.locks, block.id, beforeMarkdown, args.now)
       });
 
       if (!validation.ok) {
         throw new Error(`AI update rejected: ${validation.reason} ${validation.lockId}`);
       }
+      if (beforeMarkdown !== args.markdown && (block.status === "locked" || block.readonly)) throw new Error("block_locked");
 
       return this.updateMarkdownBlockUnlocked(args);
     });
   }
 
   async updateMarkdownBlocks(args: UpdateMarkdownBlocksArgs): Promise<BlockRef[]> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
-      const updated: BlockRef[] = [];
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
-      const markdownBlockIds = new Set(session.blocks.filter((block) => block.type === "markdown").map((block) => block.id));
-
+      const sessionDir = this.sessionDir(args.notebookId, args.sessionId);
+      const markdown = Object.fromEntries(await Promise.all(session.blocks.filter((block) => block.type === "markdown")
+        .map(async (block) => [block.path, await readFile(join(sessionDir, block.path), "utf8")])));
+      if (!args.revisionBaseline || args.revisionBaseline !== sessionRevisionBaseline(session, markdown)) {
+        throw new Error("revision_conflict: 主机版本已改变或缺少读取基线；本地草稿仍保留，请查看主机版本。");
+      }
+      const seen = new Set<string>();
       for (const update of args.updates) {
-        if (!markdownBlockIds.has(update.blockId)) {
+        if (seen.has(update.blockId)) throw new Error("duplicate_block");
+        seen.add(update.blockId);
+        const { block } = requireMarkdownBlock(session, update.blockId);
+        const beforeMarkdown = markdown[block.path];
+        if (beforeMarkdown !== update.markdown && (block.status === "locked" || block.readonly)) throw new Error("block_locked");
+        const locks = locksWithLegacySpans(session.locks, block.id, beforeMarkdown, args.now);
+        const validation = await validateAiMarkdownUpdate({ blockId: block.id, beforeMarkdown, afterMarkdown: update.markdown, locks });
+        if (!validation.ok) throw new Error(validation.reason === "locked_block_changed" ? "block_locked" : "protected_span_changed");
+      }
+      const updated: BlockRef[] = [];
+      const attemptId = randomUUID();
+      let changed = false;
+      for (const update of args.updates) {
+        const { block } = requireMarkdownBlock(session, update.blockId);
+        updated.push(block);
+        // Unchanged locked blocks may be included in a whole-document save.
+        if (markdown[block.path] === update.markdown) {
+          // Legacy files may already contain span markers without manifest lock entries.
+          if (parseProtectedSpans(update.markdown).some(span => !session.locks.some(lock => lock.blockId === block.id && lock.id === span.id))) {
+            session.locks = syncProtectedSpanLocks({ blockId: block.id, existingLocks: session.locks, markdown: update.markdown, now: args.now });
+            changed = true;
+          }
           continue;
         }
-        updated.push(
-          await this.updateMarkdownBlockUnlocked({
-            notebookId: args.notebookId,
-            sessionId: args.sessionId,
-            blockId: update.blockId,
-            markdown: update.markdown,
-            now: args.now
-          })
-        );
+        const nextPath = join(dirname(block.path), `${block.id}_save_${attemptId}.md`).replace(/\\/g, "/");
+        const target = join(sessionDir, nextPath);
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, update.markdown, { encoding: "utf8", flag: "wx", flush: true });
+        block.path = nextPath;
+        block.updatedAt = args.now;
+        session.locks = syncProtectedSpanLocks({ blockId: block.id, existingLocks: session.locks, markdown: update.markdown, now: args.now });
+        changed = true;
       }
-
+      if (changed) {
+        session.updatedAt = args.now;
+        // Only this atomic manifest replacement publishes the batch. Old and orphan files remain recoverable.
+        await this.writeSession(args.notebookId, args.sessionId, session);
+      }
       return updated;
+    });
+  }
+
+  async readRevisionBaseline(notebookId: string, sessionId: string): Promise<string> {
+    return this.getWriteCoordinator().run(notebookId, sessionId, async () => {
+      const session = await this.readSession(notebookId, sessionId);
+      const markdown = Object.fromEntries(await Promise.all(session.blocks.filter((block) => block.type === "markdown")
+        .map(async (block) => [block.path, await readFile(join(this.sessionDir(notebookId, sessionId), block.path), "utf8")])));
+      return sessionRevisionBaseline(session, markdown);
+    });
+  }
+
+  /** Explicit legacy span unlock changes only its wrapper, never its protected text. */
+  async unlockProtectedSpan(args: { notebookId: string; sessionId: string; blockId: string; spanId: string; revisionBaseline: string; now: string }): Promise<void> {
+    return this.getWriteCoordinator().run(args.notebookId, args.sessionId, async () => {
+      const session = await this.readSession(args.notebookId, args.sessionId);
+      const sessionDir = this.sessionDir(args.notebookId, args.sessionId);
+      const markdown = Object.fromEntries(await Promise.all(session.blocks.filter(block => block.type === "markdown")
+        .map(async block => [block.path, await readFile(join(sessionDir, block.path), "utf8")])));
+      if (!args.revisionBaseline || args.revisionBaseline !== sessionRevisionBaseline(session, markdown)) throw new Error("revision_conflict");
+      const { block } = requireMarkdownBlock(session, args.blockId);
+      if (block.status === "locked" || block.readonly || session.locks.some(lock => lock.blockId === block.id && lock.kind === "block")) throw new Error("block_locked");
+      const spans = findProtectedSpanRanges(markdown[block.path]).filter(span => span.id === args.spanId);
+      if (spans.length !== 1 || await sha256Text(spans[0].content) !== spans[0].hash) throw new Error("protected_span_changed");
+      if (session.locks.some(lock => lock.blockId === block.id && lock.id === args.spanId && lock.contentHash !== spans[0].hash)) throw new Error("protected_span_changed");
+      const nextPath = join(dirname(block.path), `${block.id}_unlock_${randomUUID()}.md`).replace(/\\/g, "/");
+      await writeFile(join(sessionDir, nextPath), unwrapProtectedSpan(markdown[block.path], spans[0]), { encoding: "utf8", flag: "wx", flush: true });
+      block.path = nextPath;
+      block.updatedAt = args.now;
+      session.updatedAt = args.now;
+      session.locks = session.locks.filter(lock => !(lock.blockId === block.id && lock.kind === "span" && lock.id === args.spanId));
+      await this.writeSession(args.notebookId, args.sessionId, session);
     });
   }
 
@@ -327,7 +392,7 @@ export class BlockStore {
     updates: Array<{ blockId: string; markdown: string }>;
     now: string;
   }): Promise<void> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       if (!/^session_[0-9a-f-]{36}$/.test(args.proposalId)) throw new Error("invalid_proposal");
       const session = await this.readSession(args.notebookId, args.sessionId);
       if (args.updates.length === 0) return;
@@ -357,7 +422,8 @@ export class BlockStore {
           throw new Error("block_locked");
         }
         const validation = await validateAiMarkdownUpdate({
-          blockId: block.id, beforeMarkdown: before.get(block.id)!, afterMarkdown: update.markdown, locks: session.locks
+          blockId: block.id, beforeMarkdown: before.get(block.id)!, afterMarkdown: update.markdown,
+          locks: locksWithLegacySpans(session.locks, block.id, before.get(block.id)!, args.now)
         });
         if (!validation.ok) throw new Error(`AI update rejected: ${validation.reason}`);
       }
@@ -370,7 +436,7 @@ export class BlockStore {
           const nextPath = join(dirname(block.path), `${block.id}_${args.proposalId}_${attemptId}.md`).replace(/\\/g, "/");
           const target = join(sessionDir, nextPath);
           await mkdir(dirname(target), { recursive: true });
-          await writeFile(target, update.markdown, { encoding: "utf8", flag: "wx" });
+          await writeFile(target, update.markdown, { encoding: "utf8", flag: "wx", flush: true });
           createdPaths.push(target);
           block.path = nextPath;
           block.updatedAt = args.now;
@@ -386,7 +452,7 @@ export class BlockStore {
   }
 
   async setMarkdownBlockLock(args: SetMarkdownBlockLockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const { block } = requireMarkdownBlock(session, args.blockId);
 
@@ -425,7 +491,7 @@ export class BlockStore {
   }
 
   async deleteMarkdownBlock(args: DeleteMarkdownBlockArgs): Promise<DeletedMarkdownBlockSnapshot> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const { block, index } = requireMarkdownBlock(session, args.blockId);
       const markdown = await readFile(join(this.sessionDir(args.notebookId, args.sessionId), block.path), "utf8");
@@ -441,7 +507,7 @@ export class BlockStore {
   }
 
   async restoreDeletedMarkdownBlock(args: RestoreDeletedMarkdownBlockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const block = { ...args.snapshot.block, updatedAt: args.now };
 
@@ -652,7 +718,7 @@ async function writeFileAtomically(target: string, data: string | Uint8Array, en
   const tmp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await mkdir(dirname(target), { recursive: true });
   try {
-    await writeFile(tmp, data, encoding ? { encoding } : undefined);
+    await writeFile(tmp, data, encoding ? { encoding, flush: true } : { flush: true });
     await renameWithRetry(tmp, target);
   } catch (error) {
     await rm(tmp, { force: true });
@@ -684,6 +750,16 @@ function isRetryableRenameError(error: unknown): boolean {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Old Markdown wrappers are authoritative even when their manifest lock was never persisted. */
+function locksWithLegacySpans(existingLocks: LockMeta[], blockId: string, markdown: string, now: string): LockMeta[] {
+  return [...existingLocks, ...parseProtectedSpans(markdown)
+    .filter(span => !existingLocks.some(lock => lock.blockId === blockId && lock.kind === "span" && lock.id === span.id))
+    .map((span): LockMeta => ({
+      id: span.id, blockId, kind: "span", contentHash: span.hash,
+      createdAt: now, createdBy: "user", aiEditable: false
+    }))];
 }
 
 function syncProtectedSpanLocks(args: {

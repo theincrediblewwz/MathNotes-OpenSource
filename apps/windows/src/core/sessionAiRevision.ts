@@ -1,3 +1,4 @@
+import { continuationContexts, continuationInstructions } from "./continuationContext";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -40,6 +41,7 @@ export class SessionAiRevisionService {
       const locks = session.locks.filter((lock) => lock.blockId === block.id);
       return {
         blockId: block.id,
+        continuationGroup: block.continuationGroup,
         title: `块 ${index + 1} · ${/^#{1,6}\s+(.+)$/m.exec(markdown)?.[1] ?? block.sourceName ?? block.id}`,
         markdown,
         locked: block.status === "locked" || locks.some((lock) => lock.kind === "block") || block.readonly === true ||
@@ -48,7 +50,8 @@ export class SessionAiRevisionService {
       };
     }));
     if (!blocks.length) throw new Error("当前笔记没有可修改的文本块。");
-    const markdownContext = JSON.stringify({ title: session.title, blocks });
+    const continuations = continuationContexts(session.blocks, new Map(blocks.map(block => [block.blockId, block.markdown])));
+    const markdownContext = JSON.stringify({ title: session.title, blocks, ...(continuations.length ? { continuationInstructions, continuations } : {}) });
     if (markdownContext.length > 240_000) throw new Error("整篇内容超过当前修改上限，请分块修改；未截断笔记发送。");
     const provider = await this.createProvider();
     const result = await provider.assist({ intent: "session_edit", mode: "explain", markdownContext, imagePaths: [],

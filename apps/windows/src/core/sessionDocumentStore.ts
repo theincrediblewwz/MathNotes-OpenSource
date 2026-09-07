@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createSessionDocument, type SessionDocument } from "../common/sessionDocument";
 import type { BlockStore } from "./blockStore";
+import { sessionRevisionBaseline } from "./sessionRevisionBaseline";
 
 export async function loadSessionDocumentFromStore(args: {
   store: BlockStore;
@@ -10,22 +11,24 @@ export async function loadSessionDocumentFromStore(args: {
   markdownReadConcurrency?: number;
   readMarkdownFile?: (path: string) => Promise<string>;
 }): Promise<SessionDocument> {
-  const session = await args.store.readSession(args.notebookId, args.sessionId);
-  const sessionDir = args.store.getSessionDir(args.notebookId, args.sessionId);
-  const markdownBlocks = session.blocks.filter((block) => block.type === "markdown");
-  const readMarkdownFile = args.readMarkdownFile ?? ((path: string) => readFile(path, "utf8"));
-  const markdownEntries = await mapConcurrent(
-    markdownBlocks,
-    args.markdownReadConcurrency ?? 8,
-    async (block) => [block.path, await readMarkdownFile(join(sessionDir, block.path))] as const
-  );
-  const markdownByPath = Object.fromEntries(markdownEntries);
+  return args.store.getWriteCoordinator().run(args.notebookId, args.sessionId, async () => {
+    const session = await args.store.readSession(args.notebookId, args.sessionId);
+    const sessionDir = args.store.getSessionDir(args.notebookId, args.sessionId);
+    const markdownBlocks = session.blocks.filter((block) => block.type === "markdown");
+    const readMarkdownFile = args.readMarkdownFile ?? ((path: string) => readFile(path, "utf8"));
+    const markdownEntries = await mapConcurrent(
+      markdownBlocks,
+      args.markdownReadConcurrency ?? 8,
+      async (block) => [block.path, await readMarkdownFile(join(sessionDir, block.path))] as const
+    );
+    const markdownByPath = Object.fromEntries(markdownEntries);
 
-  return createSessionDocument({
-    notebookId: args.notebookId,
-    session,
-    markdownByPath,
-    sessionDir
+    return { ...createSessionDocument({
+      notebookId: args.notebookId,
+      session,
+      markdownByPath,
+      sessionDir
+    }), revisionBaseline: sessionRevisionBaseline(session, markdownByPath) };
   });
 }
 

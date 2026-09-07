@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, resolve, sep } from "node:path";
-import type { BlockRef, SessionRecord } from "@mathnotes/shared";
+import { markdownContinuationGroups, type BlockRef, type SessionRecord } from "@mathnotes/shared";
 import { renderPortableMarkdown } from "../render/portableMarkdown";
 import { markdownBlockRevision, markdownLockSummary, sessionManifestRevision } from "./sessionRevision";
 
@@ -16,6 +16,7 @@ export type SessionBlockManifest = Readonly<{
   pageCount?: number;
   sourcePageNumber?: number;
   sourcePageImagePath?: string;
+  continuationGroup?: string;
   renderInNote: boolean;
   editable: boolean;
   updatedAt: string;
@@ -144,15 +145,19 @@ export async function readReadonlySessionPreview(args: {
   let remaining = maximum;
   let truncated = false;
   const fragments: string[] = [];
-  for (const block of session.blocks) {
-    if (block.type !== "markdown" || block.renderInNote === false) continue;
+  for (const group of markdownContinuationGroups(session.blocks)) {
+    const block = group[0];
     if (remaining <= 0) {
       truncated = true;
       break;
     }
     const markdownPath = resolve(sessionDir, block.path);
     assertInside(sessionDir, markdownPath);
-    const markdown = await readFile(markdownPath, "utf8");
+    const markdown = (await Promise.all(group.map(async member => {
+      const path = resolve(sessionDir, member.path);
+      assertInside(sessionDir, path);
+      return readFile(path, "utf8");
+    }))).join("");
     const bounded = takeCharacters(markdown, remaining);
     if (bounded.length < markdown.length) truncated = true;
     remaining -= Array.from(bounded).length;
@@ -254,6 +259,7 @@ function toManifestBlock(block: BlockRef, order = 0): SessionBlockManifest {
     ...(block.fromAssets?.length
       ? { sourceAssetPaths: block.fromAssets.map((assetPath) => portableAssetPath(assetPath)) }
       : {}),
+    continuationGroup: block.continuationGroup,
     pageCount: block.pageCount,
     sourcePageNumber: block.sourcePageNumber,
     sourcePageImagePath: block.sourcePageImagePath,

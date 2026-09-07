@@ -8,6 +8,7 @@ import {
   SessionBlockOrganizeService,
   SessionEditService,
   SessionSelectionEditService,
+  WorkspaceSyncService,
   writeWorkspaceContext,
   type CompanionUploadActivity,
   type MathNotesCore,
@@ -986,9 +987,10 @@ function registerIpcHandlers() {
     return ensureSelectionEditService().cancel(input);
   });
 
-  ipcMain.handle("mathnotes:save-markdown-block", async (_event, input: { notebookId: string; sessionId: string; blockId: string; markdown: string }) => {
+  ipcMain.handle("mathnotes:save-markdown-block", async (_event, input: { notebookId: string; sessionId: string; blockId: string; markdown: string; revisionBaseline: string }) => {
     const store = await ensureDefaultStore();
     await store.updateMarkdownBlock({
+      revisionBaseline: input.revisionBaseline,
       notebookId: input.notebookId,
       sessionId: input.sessionId,
       blockId: input.blockId,
@@ -1003,10 +1005,12 @@ function registerIpcHandlers() {
     });
   });
 
-  ipcMain.handle("mathnotes:save-session-source", async (_event, input: { notebookId: string; sessionId: string; sourceText: string }) => {
+  ipcMain.handle("mathnotes:save-session-source", async (_event, input: { notebookId: string; sessionId: string; sourceText: string; revisionBaseline: string }) => {
     const store = await ensureDefaultStore();
-    const updates = parseSessionSourceText(input.sourceText);
+    const loaded = await loadSessionDocumentFromStore({ store, notebookId: input.notebookId, sessionId: input.sessionId });
+    const updates = parseSessionSourceText(input.sourceText, loaded.sourceDocument.markdownBlocks);
     await store.updateMarkdownBlocks({
+      revisionBaseline: input.revisionBaseline,
       notebookId: input.notebookId,
       sessionId: input.sessionId,
       updates,
@@ -1035,6 +1039,13 @@ function registerIpcHandlers() {
       notebookId: input.notebookId,
       sessionId: input.sessionId
     });
+  });
+
+  ipcMain.handle("mathnotes:unlock-protected-span", async (_event, input: { notebookId: string; sessionId: string; blockId: string; spanId: string; revisionBaseline: string }) => {
+    const store = await ensureDefaultStore();
+    await store.unlockProtectedSpan({ ...input, now: new Date().toISOString() });
+    ingestServer?.publishCompanionChange(input.notebookId, input.sessionId);
+    return loadSessionDocumentFromStore({ store, notebookId: input.notebookId, sessionId: input.sessionId });
   });
 
   ipcMain.handle("mathnotes:delete-markdown-block", async (_event, input: DeleteMarkdownBlockInput) => {
@@ -1833,11 +1844,19 @@ function createIngestServer(
   deviceIdentities: DeviceIdentityService
 ): IngestServer {
   const pdfPipeline = new PdfIngestPipeline({ store, onIngested: notifyPdfUploadCompleted });
+  const coordinator = store.getWriteCoordinator();
   return new IngestServer({
     host: "0.0.0.0",
     port,
     token,
     deviceIdentityService: deviceIdentities,
+    workspaceSync: new WorkspaceSyncService(store.getRootDir(), app.getPath("userData"),
+      (notebookId, sessionId, operation) => coordinator.run(notebookId, sessionId, operation)),
+    onWorkspaceChanged: (target) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send("mathnotes:workspace-changed", target);
+      }
+    },
     getActivePairingTarget: () => ({
       notebookId: currentNotebookId,
       sessionId: currentSessionId,

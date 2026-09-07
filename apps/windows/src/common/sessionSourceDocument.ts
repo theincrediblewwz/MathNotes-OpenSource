@@ -10,6 +10,10 @@ export type SessionSourceMarkdownBlock = {
   sourcePageNumber?: number;
   sourcePageImagePath?: string;
   locked: boolean;
+  originalMarkdown?: string;
+  continuationGroup?: string;
+  sessionOrder?: number;
+  renderInNote?: boolean;
 };
 
 export type SessionSourceDocument = {
@@ -39,14 +43,14 @@ export function buildSessionSourceDocument(args: {
   const chunks: string[] = [];
   const markdownBlocks: SessionSourceMarkdownBlock[] = [];
 
-  for (const block of args.session.blocks) {
+  for (const [sessionOrder, block] of args.session.blocks.entries()) {
     if (block.type !== "markdown") {
       continue;
     }
 
     const header = block.fromAssets?.[0] ? baseName(block.fromAssets[0]) : block.source;
     chunks.push(`--- source: ${header} | block: ${block.id} ---`);
-    chunks.push(stripGeneratedSourceMetadata(args.markdownByPath[block.path] ?? ""));
+    chunks.push(block.continuationGroup ? (args.markdownByPath[block.path] ?? "") : stripGeneratedSourceMetadata(args.markdownByPath[block.path] ?? ""));
     chunks.push("");
     const markdownBlock: SessionSourceMarkdownBlock = {
       blockId: block.id,
@@ -56,7 +60,11 @@ export function buildSessionSourceDocument(args: {
       header,
       sourcePageNumber: block.sourcePageNumber,
       sourcePageImagePath: block.sourcePageImagePath,
-      locked: block.status === "locked"
+      locked: block.status === "locked",
+      originalMarkdown: (block.status === "locked" || args.session.locks.some(lock => lock.blockId === block.id)) && !block.continuationGroup ? (args.markdownByPath[block.path] ?? "") : undefined,
+      continuationGroup: block.continuationGroup,
+      sessionOrder,
+      renderInNote: block.renderInNote
     };
     if (block.fromAssets?.[0]) {
       markdownBlock.sourceAssetPath = block.fromAssets[0];
@@ -65,12 +73,14 @@ export function buildSessionSourceDocument(args: {
   }
 
   return {
-    text: trimTrailingNewlines(chunks.join("\n")),
+    text: markdownBlocks.some(block => block.continuationGroup) ? chunks.join("\n") : trimTrailingNewlines(chunks.join("\n")),
     markdownBlocks
   };
 }
 
-export function parseSessionSourceText(text: string): ParsedMarkdownBlockUpdate[] {
+export function parseSessionSourceText(text: string, blocks: readonly SessionSourceMarkdownBlock[] = []): ParsedMarkdownBlockUpdate[] {
+  const rawUpdates = parseContinuationSourceText(text, blocks);
+  const blockById = new Map(blocks.map(block => [block.blockId, block]));
   const lines = text.split(/\r?\n/);
   const updates: ParsedMarkdownBlockUpdate[] = [];
   let current: { blockId: string; path: string; lines: string[] } | undefined;
@@ -105,7 +115,11 @@ export function parseSessionSourceText(text: string): ParsedMarkdownBlockUpdate[
     updates.push(toUpdate(current));
   }
 
-  return updates;
+  return updates.map(update => {
+    if (rawUpdates.has(update.blockId)) return { ...update, markdown: rawUpdates.get(update.blockId)! };
+    const original = blockById.get(update.blockId)?.originalMarkdown;
+    return original !== undefined && stripGeneratedSourceMetadata(original) === update.markdown ? { ...update, markdown: original } : update;
+  });
 }
 
 export function isProtectedSourceHeaderLine(line: string): boolean {
@@ -188,4 +202,27 @@ function trimOuterBlankLines(value: string): string {
 
 function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+// Generated framing is removed exactly; user whitespace, CRLF and split delimiters are payload.
+function parseContinuationSourceText(text: string, blocks: readonly SessionSourceMarkdownBlock[]): Map<string, string> {
+  const ids = new Set(blocks.filter(block => block.continuationGroup).map(block => block.blockId));
+  const result = new Map<string, string>();
+  if (!ids.size) return result;
+  const headers: { id: string; start: number; body: number }[] = [];
+  const lines = /[^\n]*(?:\n|$)/g;
+  for (const match of text.matchAll(lines)) {
+    if (!match[0]) continue;
+    const header = markdownHeaderPattern.exec(match[0].replace(/\r?\n$/, ""));
+    if (header?.groups) headers.push({ id: header.groups.blockId, start: match.index!, body: match.index! + match[0].length });
+  }
+  headers.forEach((header, index) => {
+    if (!ids.has(header.id)) return;
+    const next = headers[index + 1];
+    let raw = text.slice(header.body, next?.start ?? text.length);
+    const framing = next ? "\n\n" : "\n";
+    if (raw.endsWith(framing)) raw = raw.slice(0, -framing.length);
+    result.set(header.id, raw);
+  });
+  return result;
 }

@@ -79,7 +79,7 @@ describe("BlockStore", () => {
       sourceName: "lecture.md",
       editableByAi: true
     });
-    expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0002_ai_transcript.md"), "utf8")).toBe("## OCR 草稿");
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0002")).toBe("## OCR 草稿");
   });
 
   it("does not lose blocks when independent pipelines append to one session concurrently", async () => {
@@ -330,7 +330,7 @@ describe("BlockStore", () => {
       now: "2026-06-26T10:01:00.000Z"
     });
 
-    const updated = await store.updateMarkdownBlock({
+    const updated = await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
       notebookId: "functional_analysis",
       sessionId: "lecture",
       blockId: block.id,
@@ -340,10 +340,10 @@ describe("BlockStore", () => {
 
     expect(updated).toMatchObject({
       id: block.id,
-      path: "blocks/0001_ai_transcript.md",
+      path: expect.stringMatching(/^blocks\/0001_save_.*\.md$/),
       updatedAt: "2026-06-26T10:05:00.000Z"
     });
-    expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0001_ai_transcript.md"), "utf8")).toBe(
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0001")).toBe(
       "## Revised OCR 草稿\n\n保存后的内容。"
     );
 
@@ -368,7 +368,7 @@ describe("BlockStore", () => {
       now: "2026-06-26T10:01:00.000Z"
     });
 
-    await store.updateMarkdownBlock({
+    await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
       notebookId: "functional_analysis",
       sessionId: "lecture",
       blockId: block.id,
@@ -378,7 +378,7 @@ describe("BlockStore", () => {
 
     const sessionDir = join(root, "notebooks/functional_analysis/sessions/lecture");
     expect(await listRelativeFiles(sessionDir)).not.toContain("blocks/0001_ai_transcript.md.tmp");
-    expect(await readFile(join(sessionDir, "blocks/0001_ai_transcript.md"), "utf8")).toBe("new");
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0001")).toBe("new");
   });
 
   it("rejects markdown updates for non-markdown blocks", async () => {
@@ -396,7 +396,7 @@ describe("BlockStore", () => {
     });
 
     await expect(
-      store.updateMarkdownBlock({
+      store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
         notebookId: "functional_analysis",
         sessionId: "lecture",
         blockId: block.id,
@@ -428,7 +428,7 @@ describe("BlockStore", () => {
       now: "2026-06-26T10:02:00.000Z"
     });
 
-    await store.updateMarkdownBlocks({
+    await store.updateMarkdownBlocks({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
       notebookId: "functional_analysis",
       sessionId: "lecture",
       updates: [
@@ -438,10 +438,10 @@ describe("BlockStore", () => {
       now: "2026-06-26T10:06:00.000Z"
     });
 
-    expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0001_ai_transcript.md"), "utf8")).toBe(
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0001")).toBe(
       "first new"
     );
-    expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0002_user_note.md"), "utf8")).toBe(
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0002")).toBe(
       "second new"
     );
 
@@ -453,7 +453,7 @@ describe("BlockStore", () => {
     ]);
   });
 
-  it("skips stale combined-source updates that point to non-markdown blocks", async () => {
+  it("rejects an entire combined-source save that points to a non-markdown block", async () => {
     await store.createSession({
       notebookId: "functional_analysis",
       sessionId: "lecture",
@@ -474,7 +474,7 @@ describe("BlockStore", () => {
       now: "2026-06-26T10:02:00.000Z"
     });
 
-    await store.updateMarkdownBlocks({
+    await expect(store.updateMarkdownBlocks({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
       notebookId: "functional_analysis",
       sessionId: "lecture",
       updates: [
@@ -482,9 +482,9 @@ describe("BlockStore", () => {
         { blockId: markdown.id, markdown: "new" }
       ],
       now: "2026-06-26T10:03:00.000Z"
-    });
+    })).rejects.toThrow("not a markdown block");
 
-    expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0002_ai_transcript.md"), "utf8")).toBe("new");
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0002")).toBe("old");
   });
 
   it("updates a markdown block when legacy data contains a duplicate image block id", async () => {
@@ -512,14 +512,14 @@ describe("BlockStore", () => {
     session.blocks[0].id = markdown.id;
     await writeFile(sessionPath, `${JSON.stringify(session, null, 2)}\n`, "utf8");
 
-    await store.updateMarkdownBlocks({
+    await store.updateMarkdownBlocks({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
       notebookId: "functional_analysis",
       sessionId: "lecture",
       updates: [{ blockId: markdown.id, markdown: "new" }],
       now: "2026-06-26T10:03:00.000Z"
     });
 
-    expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0002_ai_transcript.md"), "utf8")).toBe("new");
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0002")).toBe("new");
   });
 
   it("deletes a markdown block when legacy data contains a duplicate image block id", async () => {
@@ -583,7 +583,7 @@ describe("BlockStore", () => {
       id: "lock_20260626_001"
     });
 
-    await store.updateMarkdownBlock({
+    await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
       notebookId: "functional_analysis",
       sessionId: "lecture",
       blockId: block.id,
@@ -666,7 +666,7 @@ describe("BlockStore", () => {
       markdown: "仍然保留的 span lock",
       id: "lock_span_keep"
     });
-    await store.updateMarkdownBlock({
+    await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
       notebookId: "functional_analysis",
       sessionId: "lecture",
       blockId: block.id,
@@ -786,7 +786,7 @@ describe("BlockStore", () => {
 
     const session = await store.readSession("functional_analysis", "lecture");
     expect(session.blocks.map((block) => block.id)).toEqual([first.id, second.id, third.id]);
-    expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0002_ai_transcript.md"), "utf8")).toBe("second");
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0002")).toBe("second");
   });
 
   it("inserts a markdown block after an explicit anchor and never appends for a stale anchor", async () => {
@@ -849,7 +849,7 @@ describe("BlockStore", () => {
       })
     ).rejects.toThrow("AI update rejected: locked_block_changed lock_block_0001");
 
-    expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0001_ai_transcript.md"), "utf8")).toBe(
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0001")).toBe(
       "人工确认后的整块内容"
     );
   });
@@ -872,7 +872,7 @@ describe("BlockStore", () => {
       markdown: `旧前文\n\n${lockedSpan}\n\n旧后文`,
       now: "2026-06-26T10:01:00.000Z"
     });
-    await store.updateMarkdownBlock({
+    await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
       notebookId: "functional_analysis",
       sessionId: "lecture",
       blockId: block.id,
@@ -888,7 +888,7 @@ describe("BlockStore", () => {
       now: "2026-06-26T10:03:00.000Z"
     });
 
-    expect(await readFile(join(root, "notebooks/functional_analysis/sessions/lecture/blocks/0001_ai_transcript.md"), "utf8")).toBe(
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", "0001")).toBe(
       `AI 新前文\n\n${lockedSpan}\n\nAI 新后文`
     );
   });
@@ -911,7 +911,7 @@ describe("BlockStore", () => {
       markdown: lockedSpan,
       now: "2026-06-26T10:01:00.000Z"
     });
-    await store.updateMarkdownBlock({
+    await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"),
       notebookId: "functional_analysis",
       sessionId: "lecture",
       blockId: block.id,

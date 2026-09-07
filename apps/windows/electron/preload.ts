@@ -55,6 +55,7 @@ const api: MathNotesApi = {
   cancelSelectionEdit: (input) => ipcRenderer.invoke("mathnotes:cancel-selection-edit", input),
   saveMarkdownBlock: (input) => ipcRenderer.invoke("mathnotes:save-markdown-block", input),
   saveSessionSource: (input) => ipcRenderer.invoke("mathnotes:save-session-source", input),
+  unlockProtectedSpan: (input) => ipcRenderer.invoke("mathnotes:unlock-protected-span", input),
   setMarkdownBlockLock: (input) => ipcRenderer.invoke("mathnotes:set-markdown-block-lock", input),
   deleteMarkdownBlock: (input) => ipcRenderer.invoke("mathnotes:delete-markdown-block", input),
   restoreDeletedMarkdownBlock: (input) => ipcRenderer.invoke("mathnotes:restore-deleted-markdown-block", input),
@@ -111,6 +112,11 @@ const api: MathNotesApi = {
 
     ipcRenderer.on("mathnotes:upload-completed", listener);
     return () => ipcRenderer.off("mathnotes:upload-completed", listener);
+  },
+  onWorkspaceChanged: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { notebookId: string; sessionId: string }) => callback(payload);
+    ipcRenderer.on("mathnotes:workspace-changed", listener);
+    return () => ipcRenderer.removeListener("mathnotes:workspace-changed", listener);
   },
   onRecognitionJobChanged: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: RecognitionJobChangedEvent) => {

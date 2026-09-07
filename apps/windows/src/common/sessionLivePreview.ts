@@ -1,4 +1,4 @@
-import { markdownToRenderBlock, type RenderBlock } from "./sessionDocument";
+import { renderSessionMarkdownGroups, markdownToRenderBlock, type RenderBlock } from "./sessionDocument";
 import { parseSessionSourceText, type SessionSourceMarkdownBlock } from "./sessionSourceDocument";
 
 export type SessionMarkdownProjection = Readonly<Record<string, string>>;
@@ -27,13 +27,18 @@ export function renderBlocksFromSessionSourceText(args: {
   sourceText: string;
   markdownBlocks: SessionSourceMarkdownBlock[];
 }): RenderBlock[] {
+  if (args.markdownBlocks.some(block => block.continuationGroup)) {
+    return renderSessionMarkdownGroups({ blocks: args.markdownBlocks,
+      markdownByBlockId: Object.fromEntries(parseSessionSourceText(args.sourceText, args.markdownBlocks).map(update => [update.blockId, update.markdown])),
+      sourceLines: findMarkdownHeaderLineNumbers(args.sourceText) });
+  }
   const blockById = new Map(args.markdownBlocks.map((block) => [block.blockId, block]));
   const sourceLines = findMarkdownHeaderLineNumbers(args.sourceText);
 
   return parseSessionSourceText(args.sourceText)
     .map((update) => {
       const block = blockById.get(update.blockId);
-      if (!block) {
+      if (!block || block.renderInNote === false) {
         return undefined;
       }
       const markdownLineCount = Math.max(1, update.markdown.split(/\r?\n/).length);
@@ -62,6 +67,12 @@ export function createSessionLivePreviewProjector() {
       markdownBlocks: SessionSourceMarkdownBlock[];
       markdownByBlockId: SessionMarkdownProjection;
     }): SessionLivePreviewProjection {
+      if (args.markdownBlocks.some(block => block.continuationGroup)) {
+        const blocks = renderSessionMarkdownGroups({ blocks: args.markdownBlocks, markdownByBlockId: args.markdownByBlockId,
+          sourceLines: findMarkdownHeaderLineNumbers(args.sourceText) });
+        return { blocks, stats: { totalBlockCount: args.markdownBlocks.length, reusedBlockCount: 0,
+          reparsedBlockCount: blocks.length, relocatedBlockCount: 0, omittedBlockCount: args.markdownBlocks.filter(block => block.renderInNote === false).length } };
+      }
       const sourceLines = findMarkdownHeaderLineNumbers(args.sourceText);
       const nextCache = new Map<string, ProjectionCacheEntry>();
       const blocks: RenderBlock[] = [];
@@ -94,7 +105,7 @@ export function createSessionLivePreviewProjector() {
           continue;
         }
 
-        const renderBlock = createRenderBlock(block, markdown, sourceLine);
+        const renderBlock = block.renderInNote === false ? undefined : createRenderBlock(block, markdown, sourceLine);
         nextCache.set(block.blockId, {
           markdown,
           metadataSignature,
@@ -144,7 +155,8 @@ function projectionMetadataSignature(block: SessionSourceMarkdownBlock): string 
     block.sourceAssetPath ?? "",
     block.sourcePageNumber ?? "",
     block.sourcePageImagePath ?? "",
-    block.locked ? "locked" : "editable"
+    block.locked ? "locked" : "editable",
+    String(block.renderInNote)
   ].join("\u0000");
 }
 

@@ -1,5 +1,5 @@
 import type { BlockSource, SessionRecord } from "@mathnotes/shared";
-import { buildSessionSourceDocument, type SessionSourceDocument } from "./sessionSourceDocument";
+import { buildSessionSourceDocument, type SessionSourceDocument, type SessionSourceMarkdownBlock } from "./sessionSourceDocument";
 
 export type SourceLine = {
   line: number;
@@ -15,6 +15,7 @@ export type RenderBlock = {
   id: string;
   sourceId: string;
   sourceLine: number;
+  sourceBlocks?: RenderSourceBlock[];
   sourceBlockId?: string;
   sourceLabel?: string;
   sourceBlockLine?: number;
@@ -31,6 +32,12 @@ export type RenderBlock = {
     assetPath: string;
     pageCount: number;
   };
+};
+
+export type RenderSourceBlock = {
+  blockId: string; sourceId: string; sourceLine: number; locked: boolean;
+  startOffset: number; endOffset: number; startLine: number; lineCount: number;
+  sourceAssetPath?: string;
 };
 
 export type RenderBlockItem =
@@ -66,6 +73,7 @@ export type SessionDocument = {
   sessionId: string;
   title: string;
   sessionDir?: string;
+  revisionBaseline?: string;
   sourceLines: SourceLine[];
   renderBlocks: RenderBlock[];
   editableBlocks: EditableMarkdownBlock[];
@@ -184,12 +192,21 @@ export function createSessionDocument(args: {
       className: block.source === "user_revision" ? "revision" : block.source === "ai_transcription" ? "compact" : undefined
     });
 
-    if (renderBlock.title || renderBlock.subtitle || renderBlock.items?.length || renderBlock.paragraphs?.length || renderBlock.formulas?.length || renderBlock.unclear) {
+    if (block.renderInNote !== false && (renderBlock.title || renderBlock.subtitle || renderBlock.items?.length || renderBlock.paragraphs?.length || renderBlock.formulas?.length || renderBlock.unclear)) {
       renderBlocks.push(renderBlock);
     }
   }
 
   pushSourceDivider(sourceLines);
+  const sourceDocument = buildSessionSourceDocument({ session: args.session, markdownByPath: args.markdownByPath });
+  if (sourceDocument.markdownBlocks.some(block => block.continuationGroup)) {
+    const grouped = renderSessionMarkdownGroups({
+      blocks: sourceDocument.markdownBlocks,
+      markdownByBlockId: Object.fromEntries(sourceDocument.markdownBlocks.map(block => [block.blockId, args.markdownByPath[block.path] ?? ""])),
+      sourceLines: new Map(editableBlocks.map(block => [block.id, block.sourceLine]))
+    });
+    renderBlocks.splice(0, renderBlocks.length, ...[...renderBlocks.filter(block => block.pdf), ...grouped].sort((a, b) => a.sourceLine - b.sourceLine));
+  }
 
   return {
     notebookId: args.notebookId,
@@ -199,14 +216,12 @@ export function createSessionDocument(args: {
     sourceLines,
     renderBlocks,
     editableBlocks,
-    sourceDocument: buildSessionSourceDocument({
-      session: args.session,
-      markdownByPath: args.markdownByPath
-    })
+    sourceDocument
   };
 }
 
 export function markdownToRenderBlock(args: {
+  sourceBlocks?: RenderSourceBlock[];
   id: string;
   sourceId: string;
   sourceLine: number;
@@ -221,6 +236,7 @@ export function markdownToRenderBlock(args: {
     id: args.id,
     sourceId: args.sourceId,
     sourceLine: args.sourceLine,
+    sourceBlocks: args.sourceBlocks,
     sourceBlockId: args.sourceBlockId,
     sourceLabel: args.sourceLabel,
     sourceBlockLine: args.sourceBlockLine,
@@ -390,4 +406,46 @@ function stripMarkdownEmphasis(line: string): string {
 
 function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+/** Presentation grouping never replaces the independently editable, lockable source blocks. */
+export function renderSessionMarkdownGroups(args: {
+  blocks: readonly SessionSourceMarkdownBlock[];
+  markdownByBlockId: Readonly<Record<string, string>>;
+  sourceLines?: ReadonlyMap<string, number>;
+}): RenderBlock[] {
+  const groups: SessionSourceMarkdownBlock[][] = [];
+  let previous: SessionSourceMarkdownBlock | undefined;
+  for (const block of args.blocks) {
+    if (block.renderInNote === false) { previous = undefined; continue; }
+    if (block.continuationGroup && previous?.continuationGroup === block.continuationGroup &&
+        block.sessionOrder !== undefined && previous.sessionOrder !== undefined && block.sessionOrder === previous.sessionOrder + 1) {
+      groups[groups.length - 1].push(block);
+    } else groups.push([block]);
+    previous = block;
+  }
+  return groups.flatMap(group => {
+    const first = group[0];
+    let markdown = "";
+    const sourceBlocks = group.map(block => {
+      const text = args.markdownByBlockId[block.blockId] ?? "";
+      const member: RenderSourceBlock = {
+        blockId: block.blockId, sourceId: block.sourceId, sourceLine: args.sourceLines?.get(block.blockId) ?? 1,
+        locked: block.locked, sourceAssetPath: block.sourceAssetPath,
+        startOffset: markdown.length, endOffset: markdown.length + text.length,
+        startLine: markdown.split("\n").length, lineCount: Math.max(1, text.split("\n").length)
+      };
+      markdown += text;
+      return member;
+    });
+    const rendered = markdownToRenderBlock({
+      id: "preview-" + first.blockId, sourceId: first.sourceId,
+      sourceLine: args.sourceLines?.get(first.blockId) ?? 1, sourceBlockId: first.blockId,
+      sourceLabel: first.header, sourceBlockLine: 1, sourceBlockLineCount: Math.max(1, markdown.split("\n").length),
+      sourceBlocks, markdown,
+      className: first.source === "user_revision" ? "revision" : first.source === "ai_transcription" ? "compact" : undefined
+    });
+    if (first.continuationGroup) rendered.markdown = markdown;
+    return rendered.markdown ? [rendered] : [];
+  });
 }
