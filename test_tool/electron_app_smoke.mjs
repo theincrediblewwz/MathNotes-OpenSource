@@ -897,6 +897,7 @@ try {
   await page.mouse.down();
   await page.mouse.move(300, separator.y + separator.height / 2, { steps: 6 });
   await page.mouse.up();
+  await page.waitForFunction(() => Math.abs(document.querySelector(".source-pane").getBoundingClientRect().width - 300) < 2);
   const sourcePaneAfterNarrowDrag = await page.locator(".source-pane").boundingBox();
   assert.ok(sourcePaneAfterNarrowDrag);
   assert.ok(
@@ -904,10 +905,13 @@ try {
     `Electron split should allow narrowing source pane, got ${sourcePaneBeforeDrag.width - sourcePaneAfterNarrowDrag.width}px`
   );
 
-  await page.mouse.move(300, separator.y + separator.height / 2);
+  const narrowedSeparator = await page.locator(".split-handle span").boundingBox();
+  assert.ok(narrowedSeparator);
+  await page.mouse.move(narrowedSeparator.x + narrowedSeparator.width / 2, narrowedSeparator.y + narrowedSeparator.height / 2);
   await page.mouse.down();
-  await page.mouse.move(1010, separator.y + separator.height / 2, { steps: 6 });
+  await page.mouse.move(1010, narrowedSeparator.y + narrowedSeparator.height / 2, { steps: 6 });
   await page.mouse.up();
+  await page.waitForFunction(() => Math.abs(document.querySelector(".source-pane").getBoundingClientRect().width - 1010) < 2);
   const sourcePaneAfterWideDrag = await page.locator(".source-pane").boundingBox();
   assert.ok(sourcePaneAfterWideDrag);
   assert.ok(
