@@ -50,7 +50,7 @@ describe("whole Session AI revision", () => {
   it.each(["edit", "lock", "append"])("rejects an intervening %s before writing any block", async (action) => {
     const runtime = service([{ blockId: "0001", markdown: "更改", summary: "改写" }, { blockId: "0003", markdown: "更改3", summary: "改写3" }]);
     const proposal = await runtime.propose({ ...target, instruction: "改写" });
-    if (action === "edit") await store.updateMarkdownBlock({ ...target, blockId: "0003", markdown: "用户的新内容", now: "2026-09-07T00:00:02Z" });
+    if (action === "edit") await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("book", "lesson"), ...target, blockId: "0003", markdown: "用户的新内容", now: "2026-09-07T00:00:02Z" });
     if (action === "lock") await store.setMarkdownBlockLock({ ...target, blockId: "0003", locked: true, now: "2026-09-07T00:00:02Z" });
     if (action === "append") await store.appendMarkdownBlock({ ...target, source: "user", markdown: "新增", now: "2026-09-07T00:00:02Z" });
     await expect(runtime.apply({ ...target, proposalId: proposal.id })).rejects.toThrow("revision_conflict");
@@ -58,7 +58,7 @@ describe("whole Session AI revision", () => {
   });
   it("rejects forged protected text even when AI leaves the old declared hash in place", async () => {
     const locked = await wrapProtectedSpan({ id: "span1", markdown: "不可改的定理" });
-    await store.updateMarkdownBlock({ ...target, blockId: "0001", markdown: `${locked}\n补充`, now: "2026-09-07T00:00:01Z" });
+    await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("book", "lesson"), ...target, blockId: "0001", markdown: `${locked}\n补充`, now: "2026-09-07T00:00:01Z" });
     const runtime = service([{ blockId: "0001", markdown: `${locked.replace("不可改的定理", "篡改定理")}\n补充`, summary: "想改定理" }]);
     const proposal = await runtime.propose({ ...target, instruction: "改写" });
     expect(proposal.changes).toEqual([]);

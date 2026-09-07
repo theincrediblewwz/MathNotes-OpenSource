@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
-  "historyPolicy": "public-history-preserved",
-  "generatedAt": "2026-09-07T18:19:37.824Z",
-  "fileCount": 779,
-  "snapshotSha256": "ccc8a37e0de4a1af22f0367e6aec5a018c582d5e5765fdff7be44c2f913b3b53",
+  "historyPolicy": "sanitized-single-snapshot",
+  "generatedAt": "2026-09-07T19:39:10.026Z",
+  "fileCount": 795,
+  "snapshotSha256": "0a297cd48f3179e46d92fc483e298163d6766a5014d006a432683a514734933d",
   "files": [
     {
       "path": ".gitattributes",
@@ -28,8 +28,8 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "bytes": 1984,
-      "sha256": "0c235d5bad8a64666e6398b251b71f6e1187bc8d3ccbc7a5f3a1b08fede68573"
+      "bytes": 2039,
+      "sha256": "3c3a0d301a271b7f877a8ed12dedc3c37e5684c8505ffb05c0a2849b1c2e3eb5"
     },
     {
       "path": ".github/workflows/dependency-review.yml",
@@ -63,8 +63,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 8913,
-      "sha256": "25bd0b138cf056f7375e5168a4cee8f7a12c802e1f7c1177e939fd9a74c2c4a2"
+      "bytes": 9534,
+      "sha256": "6f8d419d41e44e5dd49affe77ff6f702189a522f2c19397ec448a10aa24247e8"
     },
     {
       "path": "SECURITY.md",
@@ -1668,13 +1668,13 @@
     },
     {
       "path": "apps/windows/electron/main.ts",
-      "bytes": 85276,
-      "sha256": "9a94844be311f8702cdc2e68d8000382edfab6a1d774df6e4a2f442e893b0133"
+      "bytes": 86561,
+      "sha256": "d8f4e8b2e6f335c1d3f52b798b52f60a83fba9f1b275f3f54ab3acaf72aab150"
     },
     {
       "path": "apps/windows/electron/preload.ts",
-      "bytes": 9512,
-      "sha256": "ded9570b69cd2b9bfe3cbcad86248990467f7b4680fba662dcfce81fa23e208f"
+      "bytes": 9929,
+      "sha256": "d587f8f831e981de3627473dbb83aa2555780e8bd9bc2c1d82c7e7583cf831e0"
     },
     {
       "path": "apps/windows/index.html",
@@ -1683,8 +1683,8 @@
     },
     {
       "path": "apps/windows/package.json",
-      "bytes": 1865,
-      "sha256": "03b088c7584521dc703f1888e7f044a6570c415d39c4511f66d1204a6d5ee5ac"
+      "bytes": 1904,
+      "sha256": "d8417d44e4d119a191037fc209261c906b2fd6d7c1110536ebcab2f994884516"
     },
     {
       "path": "apps/windows/src/App.test.tsx",
@@ -1693,8 +1693,13 @@
     },
     {
       "path": "apps/windows/src/App.tsx",
-      "bytes": 170700,
-      "sha256": "d1ce97717b8d4dc201178e08f19a9d9ff44842501f61143df07a7a8dba1afc4f"
+      "bytes": 174531,
+      "sha256": "2ce1d6945768f451b3c0bee26d343d0c050832d83376bea9ffee9fb8969de939"
+    },
+    {
+      "path": "apps/windows/src/App.workspaceConflict.test.tsx",
+      "bytes": 6019,
+      "sha256": "b30137e473d73b454d6c746b71536a3573082c2e0fc6b5077feeb918d5ecff5c"
     },
     {
       "path": "apps/windows/src/assets/wwz-sysu-avatar.jpg",
@@ -1767,6 +1772,11 @@
       "sha256": "f6543760b847de63ceb620d74282105fea7dd5ef4aa27657937435e5380cb242"
     },
     {
+      "path": "apps/windows/src/common/markdownContinuations.test.ts",
+      "bytes": 5070,
+      "sha256": "22ec16d883b13eba2ccda60aee7f02e0a9c0a6314373bfdb4a6461eabc773e63"
+    },
+    {
       "path": "apps/windows/src/common/markdownDrop.test.ts",
       "bytes": 1472,
       "sha256": "2eb0cebd5c1c7ae337ce4ca1d837fe46adcc88af31bf59bced3b7ec41c256dfb"
@@ -1798,8 +1808,8 @@
     },
     {
       "path": "apps/windows/src/common/sessionDocument.ts",
-      "bytes": 9677,
-      "sha256": "f73dd821ebb5946e4f8d0be957a4b5f9977a7671552c2c27786160ad48e0c9f8"
+      "bytes": 12814,
+      "sha256": "d10117b0bc670655a1d6d7c5f705356d848a6c133b581e703c7304106d27c6f2"
     },
     {
       "path": "apps/windows/src/common/sessionLivePreview.test.ts",
@@ -1808,8 +1818,8 @@
     },
     {
       "path": "apps/windows/src/common/sessionLivePreview.ts",
-      "bytes": 5725,
-      "sha256": "1b17b3ee137bd42a97c22abd9ed044a579da774c86b3073ec006536e23d4a68a"
+      "bytes": 6774,
+      "sha256": "1949e6269d12e27cb2b6fd93a7d55230e62bd2b9df76fdc2d6144f8b6618c6bc"
     },
     {
       "path": "apps/windows/src/common/sessionNaming.test.ts",
@@ -1833,13 +1843,13 @@
     },
     {
       "path": "apps/windows/src/common/sessionSourceDocument.test.ts",
-      "bytes": 6634,
-      "sha256": "479998b3d6ffd464aae377b4a373dd3a58467be188bcc878fe18009ab8babd6d"
+      "bytes": 6744,
+      "sha256": "14251fd1a9750bde8269dc345a613c56ca968e0422ef069449f769445fa1d487"
     },
     {
       "path": "apps/windows/src/common/sessionSourceDocument.ts",
-      "bytes": 5990,
-      "sha256": "c94cfde7d3cf832a471c49acaaeb878cf1b329c394476d27eaaf7dc2a63f7f27"
+      "bytes": 8237,
+      "sha256": "e9db6ca44b319092124c2e1f96c3308e459adf6a0b9648215f22b9d6ada0f19f"
     },
     {
       "path": "apps/windows/src/common/userDiagnostics.ts",
@@ -1873,18 +1883,18 @@
     },
     {
       "path": "apps/windows/src/core/assistantTask.ts",
-      "bytes": 10191,
-      "sha256": "713364f113e9013e6d4c14ce79cd935479fc6c0c97523ab898959a87870fa30b"
+      "bytes": 11464,
+      "sha256": "30150033c90cc39191ae5827f783da2942eea57a384c9f8ca1444fd63e927541"
     },
     {
       "path": "apps/windows/src/core/blockStore.test.ts",
-      "bytes": 31693,
-      "sha256": "8d792fc66f99b832edac7161f974e13854e31972b0bb2bed4a9a42400965312d"
+      "bytes": 32252,
+      "sha256": "73e9bc70626f3f0102c58856683b27a831793d671be826dfc2e03f7b65a123d8"
     },
     {
       "path": "apps/windows/src/core/blockStore.ts",
-      "bytes": 26265,
-      "sha256": "e256654b6f4d751d954d9c809308b7bb02e8214997290408b9df91d18349d459"
+      "bytes": 32875,
+      "sha256": "4480a2fa777f9f98c2ac69362e4ec6a3fc9308985e2d70966b9679db34152f73"
     },
     {
       "path": "apps/windows/src/core/blockWriter.test.ts",
@@ -1938,8 +1948,8 @@
     },
     {
       "path": "apps/windows/src/core/companionReadService.test.ts",
-      "bytes": 4661,
-      "sha256": "d5941d186c217728b176f62555338d75bc58bf95d0eb913cbddeca0732c75892"
+      "bytes": 4736,
+      "sha256": "2f18b160c98b8d0eb5b1ae48646cded66db9b6195009be5ae1f27344d378a9c5"
     },
     {
       "path": "apps/windows/src/core/companionReadService.ts",
@@ -1955,6 +1965,16 @@
       "path": "apps/windows/src/core/connectionDiagnostics.ts",
       "bytes": 2346,
       "sha256": "33b8fcd6aac82ef0ad65983102ccc42f62a7788541e9fb1dec322b2c65e95713"
+    },
+    {
+      "path": "apps/windows/src/core/continuationAiContext.test.ts",
+      "bytes": 3211,
+      "sha256": "c6a19184a8198791349d0fcf9cb17b32ab2b7fdfc18e80cf789dd0d1e2a00fe2"
+    },
+    {
+      "path": "apps/windows/src/core/continuationContext.ts",
+      "bytes": 981,
+      "sha256": "038db0e99a47b0f626b0a96823efdea91bd0f13ef318f0b01f450ba3f4750c1e"
     },
     {
       "path": "apps/windows/src/core/electronSecurity.test.ts",
@@ -2298,8 +2318,8 @@
     },
     {
       "path": "apps/windows/src/core/recognitionRetry.test.ts",
-      "bytes": 20546,
-      "sha256": "ff6d514077876de79faac5625989fad7fdfb2138648e1cc1679284e390a70c18"
+      "bytes": 20476,
+      "sha256": "4db8c27741c6e49ead2ecbf23a1a1352cc48a11f53572b35614693c3db770e94"
     },
     {
       "path": "apps/windows/src/core/recognitionRetry.ts",
@@ -2308,13 +2328,13 @@
     },
     {
       "path": "apps/windows/src/core/sessionAiRevision.test.ts",
-      "bytes": 9583,
-      "sha256": "bafd24f823f2c535b12a5b63d1ef753d87017f24d99caab5b7d763392aba4478"
+      "bytes": 9723,
+      "sha256": "1d2d3d786345d0c37d74258ab741b56ccf5d624950820c3db9e90c843f30cbc0"
     },
     {
       "path": "apps/windows/src/core/sessionAiRevision.ts",
-      "bytes": 9996,
-      "sha256": "c787a4c583d7f69c0ec20bd226a213fc9fd1990c9f4e524dee942274c54332ff"
+      "bytes": 10341,
+      "sha256": "f0125cb5291bf79e27dfdf5474ff74c20e36842960451de47fc134485b69f48f"
     },
     {
       "path": "apps/windows/src/core/sessionCatalog.test.ts",
@@ -2333,13 +2353,23 @@
     },
     {
       "path": "apps/windows/src/core/sessionDocumentStore.ts",
-      "bytes": 1975,
-      "sha256": "791a0153e8c860f3ccd7a15ac3acfad9efe0faa921d7cf10fc8523034dab04fc"
+      "bytes": 2250,
+      "sha256": "2e62bec3709e79dd77deea0f23a8cc2924c3c05f506cd3a666a0b4d2e8bbb9df"
     },
     {
       "path": "apps/windows/src/core/sessionRecognitionContext.ts",
       "bytes": 779,
       "sha256": "f60998dd71f0c8dfec5b23c52b27cfbba7b0aa890f801394056c3b8eb685ad61"
+    },
+    {
+      "path": "apps/windows/src/core/sessionRevisionBaseline.ts",
+      "bytes": 463,
+      "sha256": "b6f229aa203152afc20158db0a25642df876cc4a743b0d5922c71d1b442fd4d9"
+    },
+    {
+      "path": "apps/windows/src/core/sessionSaveRevision.test.ts",
+      "bytes": 11977,
+      "sha256": "f2cb1097bd39313d5fb4eb71f9d5b69f7408f5dc0a74ef3ebcc6d9ac68efb9c5"
     },
     {
       "path": "apps/windows/src/core/streamingOutputGuard.ts",
@@ -2408,8 +2438,8 @@
     },
     {
       "path": "apps/windows/src/styles.css",
-      "bytes": 132406,
-      "sha256": "1e74d9a4ff5e15e158a6f453ed730b7b6c3fbc09b70a051c1cf4ca4c598a94ff"
+      "bytes": 133563,
+      "sha256": "5dca874ed50e170d6505b3920d91938918858b118b0eac22f21584eda0614e70"
     },
     {
       "path": "apps/windows/src/types/global.d.ts",
@@ -2418,8 +2448,8 @@
     },
     {
       "path": "apps/windows/src/types/mathNotesApi.ts",
-      "bytes": 19680,
-      "sha256": "ab1213bc222013dbb004cc05c9e19debea071993c160dbe62081a08226e33228"
+      "bytes": 19998,
+      "sha256": "4748392caf44011d14d78291c292c484de056b40965c1ec87ad58e83fc15d785"
     },
     {
       "path": "apps/windows/src/ui/assetReferences.test.ts",
@@ -2473,8 +2503,8 @@
     },
     {
       "path": "apps/windows/src/ui/components/Drawers.tsx",
-      "bytes": 67173,
-      "sha256": "ef23124aaece19540c191cc4b253122fb6e8e89aabc9e25fbacbcafa578b6b17"
+      "bytes": 67252,
+      "sha256": "a1ee9825157c129fefc1bef893577ed70aea573d23b1fc1a25d19edf66f0b06f"
     },
     {
       "path": "apps/windows/src/ui/components/FloatingButton.tsx",
@@ -2538,8 +2568,8 @@
     },
     {
       "path": "apps/windows/src/ui/components/PreviewPane.tsx",
-      "bytes": 31452,
-      "sha256": "45bfeae8b5dc6e7ea83977cebbb80f915bc1b0deb79c40d14c58db3d993fd9e2"
+      "bytes": 32431,
+      "sha256": "60babc24b9cee00bcb58c7f36bbc759e99ba5361e30edac5627b0c8937f958df"
     },
     {
       "path": "apps/windows/src/ui/components/PreviewTanStackLab.tsx",
@@ -2573,8 +2603,8 @@
     },
     {
       "path": "apps/windows/src/ui/components/SessionSourceEditor.tsx",
-      "bytes": 74747,
-      "sha256": "4715a53400fdb19efb9b562aee22de195557fde96ab43fb7b5ada8a5b4c26b2b"
+      "bytes": 75190,
+      "sha256": "1b256153f543ebf611fd8703ee8d32f19dca39f7d1dbb174749590a8c4e1d28f"
     },
     {
       "path": "apps/windows/src/ui/components/SourceTanStackLab.test.tsx",
@@ -2587,14 +2617,19 @@
       "sha256": "994a5825bd127a0172a539d26cb21085a2bb15f7616e1fe569186bf5d6f4bbfb"
     },
     {
+      "path": "apps/windows/src/ui/components/WorkspaceHostVersionDialog.tsx",
+      "bytes": 1010,
+      "sha256": "6ed6e9e26e736714a0c81bbfa020795da56e3f4dbe4bda8d7cfdc408fac90858"
+    },
+    {
       "path": "apps/windows/src/ui/components/sessionSourceEditorModel.test.ts",
       "bytes": 6656,
       "sha256": "a1aa249fbae13883e39d285ea3bcb0f1a434a43c1d30c93112a08db5c6f1f39f"
     },
     {
       "path": "apps/windows/src/ui/components/sessionSourceEditorModel.ts",
-      "bytes": 6476,
-      "sha256": "e7ad0e657fcc8da86a83466300b48818e0c17e639795638469c2cbeb549f4cd1"
+      "bytes": 6822,
+      "sha256": "d3db3fdcac5548ded3c60c07d982e24f396589116298bec3ebbd11e37730e1e3"
     },
     {
       "path": "apps/windows/src/ui/components/sourceBlockDisplay.test.ts",
@@ -2673,8 +2708,8 @@
     },
     {
       "path": "apps/windows/vite.config.ts",
-      "bytes": 1405,
-      "sha256": "d25cae32844978d24d0c96a3934d545d0aea5b29014a4dcfa13c34de0941704e"
+      "bytes": 1766,
+      "sha256": "25283d16d41e25c4e76f212671652c74ed57b0b2bd80d8683cfca71e9b71d358"
     },
     {
       "path": "apps/worker/.gitignore",
@@ -2782,6 +2817,16 @@
       "sha256": "f707868eb0f8d0cc9e62085386ea50262b9aec713601e8e4ec8e037f925dbd03"
     },
     {
+      "path": "deploy/windows-mac-sync/BUILD_VALIDATION.md",
+      "bytes": 2656,
+      "sha256": "1db9436716a3d6876307296b16745f8868aa54eda41a3fd104269c9d2df1c5db"
+    },
+    {
+      "path": "deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md",
+      "bytes": 8614,
+      "sha256": "76f5024f79ce864d1c64524a22e8bfe8489f26149c806527e1a43166234b23cb"
+    },
+    {
       "path": "package-lock.json",
       "bytes": 345312,
       "sha256": "51d0011681d444f754eeac8959b37f14030a41b244d41083a984060f9a10b230"
@@ -2808,13 +2853,13 @@
     },
     {
       "path": "packages/core-server/src/api/capabilityPolicy.test.ts",
-      "bytes": 10796,
-      "sha256": "7eb4c4ae540eae3a4b1c740afe72c06e59566a91ee9cd780a40930599c634e68"
+      "bytes": 11639,
+      "sha256": "2baa1a4f9dd447a9d4fedc309a8ba563e0fdcb12f330a0c7640c9f74424aed90"
     },
     {
       "path": "packages/core-server/src/api/capabilityPolicy.ts",
-      "bytes": 17066,
-      "sha256": "3e10c34a23a6695994f80cf4e8fc603791e7a78bda118f079979e63759660009"
+      "bytes": 17852,
+      "sha256": "ca6f5b7f694f10fbb547706b7e0687dbc14fbf1d6091376bbfda2906c9141276"
     },
     {
       "path": "packages/core-server/src/api/localShellServer.test.ts",
@@ -2838,13 +2883,18 @@
     },
     {
       "path": "packages/core-server/src/api/networkApiServer.ts",
-      "bytes": 38110,
-      "sha256": "4b6d5103367b98e780efd097e4aa3ab208a8e565d154747e74a46d358d924fc5"
+      "bytes": 42052,
+      "sha256": "4c46352d400423523ec769b4a15700be7949edda06d97c29fe6680ea2a6cc5ba"
     },
     {
       "path": "packages/core-server/src/api/pwaStaticHost.ts",
       "bytes": 5351,
       "sha256": "9af07b2e0998005abf2a401564d079bbfb53dfdf79974459dde02323c7c4f9e4"
+    },
+    {
+      "path": "packages/core-server/src/api/workspaceSyncNetwork.test.ts",
+      "bytes": 9092,
+      "sha256": "c196018ab21f9f2b73147e133520a94625c7e8f195494ac682d56445d6e885ef"
     },
     {
       "path": "packages/core-server/src/backup/notesBackup.test.ts",
@@ -2903,13 +2953,13 @@
     },
     {
       "path": "packages/core-server/src/domain/sourceImageMarkers.test.ts",
-      "bytes": 1916,
-      "sha256": "3c9dea6ae986f39af8b416b3ab79e45cc015ab38b00d0176f9058f3c925bcf90"
+      "bytes": 2923,
+      "sha256": "5997d55c9d1c14e6e450be0932f22527d61c00b6c268e1dc18f5376e8153d938"
     },
     {
       "path": "packages/core-server/src/domain/sourceImageMarkers.ts",
-      "bytes": 2506,
-      "sha256": "0b47bbb0fa6a5c4b6903deca95bfa467be60c5b08c650e4b4d8829bd7b0360a3"
+      "bytes": 4452,
+      "sha256": "6b272f01eecaf9ad03d3a1857a63a6acef3b52b62f2348b5ceb8de80db35654a"
     },
     {
       "path": "packages/core-server/src/domain/streamingOutputGuard.test.ts",
@@ -2993,8 +3043,8 @@
     },
     {
       "path": "packages/core-server/src/index.ts",
-      "bytes": 2136,
-      "sha256": "4c41a634de8822ea219e89722c712298864a8ba6a34ecd9c8530c8b24accd306"
+      "bytes": 2181,
+      "sha256": "804328dcd7afd3289b55016dfee354ce245c278d1f993161975bad39012bfad5"
     },
     {
       "path": "packages/core-server/src/mathNotesCore.test.ts",
@@ -3078,13 +3128,18 @@
     },
     {
       "path": "packages/core-server/src/session/companionReadService.ts",
-      "bytes": 7088,
-      "sha256": "439a79f01f1877a82489a4e745eead883ab8c31334721bbc885eb7d491cc358f"
+      "bytes": 8051,
+      "sha256": "b1447be580af4c00f21bb274d2a5fa1fb2482933940ff5b2400932ecbedb7709"
     },
     {
       "path": "packages/core-server/src/session/companionReaderStyle.ts",
       "bytes": 3039,
       "sha256": "14e0e2b71f7d151dad7b5a59ecd640a61f62e2f090843859f52fbfa3fc2b4017"
+    },
+    {
+      "path": "packages/core-server/src/session/continuationReadExport.test.ts",
+      "bytes": 5984,
+      "sha256": "e036d46bc391c1959365ea20910546e48e92e75cfea0501bfcb46489a723c09a"
     },
     {
       "path": "packages/core-server/src/session/filesystemCompanionStore.test.ts",
@@ -3133,8 +3188,8 @@
     },
     {
       "path": "packages/core-server/src/session/sessionExportService.ts",
-      "bytes": 13546,
-      "sha256": "254873c93dc51b1ffc974df05e33a8dc96b424fa3abec8517643e5947c179d94"
+      "bytes": 13773,
+      "sha256": "a07559a57f250b99d796dfd31aa991ab0f3089f03da43b34b39b20c73de17da1"
     },
     {
       "path": "packages/core-server/src/session/sessionImageImportService.test.ts",
@@ -3188,8 +3243,8 @@
     },
     {
       "path": "packages/core-server/src/session/sessionReadService.ts",
-      "bytes": 13285,
-      "sha256": "6531c95e09149aa42107ae5be0c10bd4f9380783dd13e475606e769c428f6526"
+      "bytes": 13531,
+      "sha256": "38edbf4f07fbb38152692f0e3528f8db4c752502aa86a9d5512263234d349c95"
     },
     {
       "path": "packages/core-server/src/session/sessionRecognitionContext.test.ts",
@@ -3257,6 +3312,16 @@
       "sha256": "659834c5740d9ba19472b7fb1e52a7181eaa598666fb6e4ed56112fd19455f91"
     },
     {
+      "path": "packages/core-server/src/sync/workspaceSyncService.test.ts",
+      "bytes": 24576,
+      "sha256": "bbe2f27b2673615481163a3ddaf98a1f98049d075d7ae22ccbd72fd31bfed7ff"
+    },
+    {
+      "path": "packages/core-server/src/sync/workspaceSyncService.ts",
+      "bytes": 27079,
+      "sha256": "354c55e8ca208f52f50f886a040705a18923cbd993dcbb46d1122d92934bb2e4"
+    },
+    {
       "path": "packages/core-server/tsconfig.json",
       "bytes": 257,
       "sha256": "870a777834dced6858da2d9aa2c84f7e68c3adcbfd5889f20e4a9d6722d8d823"
@@ -3288,8 +3353,18 @@
     },
     {
       "path": "packages/shared/src/index.ts",
-      "bytes": 195,
-      "sha256": "51db81503216f63aa76eb0b7d21d8424dc0baabcd00944529901d8d6a1b0695f"
+      "bytes": 236,
+      "sha256": "374dda7796d9d4c5f4b504d272667fdb4105d0d0236ffd32af32118ba81d5140"
+    },
+    {
+      "path": "packages/shared/src/markdownContinuations.test.ts",
+      "bytes": 869,
+      "sha256": "e0c560ee82a2784e683d717ab52806e9e3f5d03ebd3f5a8355abc0cf8b6567a9"
+    },
+    {
+      "path": "packages/shared/src/markdownContinuations.ts",
+      "bytes": 672,
+      "sha256": "d44400887232a5b150ed97ca10b3467009648d5a720cbefc9817ff95e7e9b9dc"
     },
     {
       "path": "packages/shared/src/markdownMath.ts",
@@ -3303,8 +3378,8 @@
     },
     {
       "path": "packages/shared/src/model.ts",
-      "bytes": 4011,
-      "sha256": "0f675f6e9ce481632646fd99793a607f26d0fcbf28463470dd6f745fd2bf26ba"
+      "bytes": 4119,
+      "sha256": "c3c842602abe6346541884eb8d33eb49a356604548856cb924f5e1caa332d714"
     },
     {
       "path": "packages/shared/src/providerCatalog.test.ts",
@@ -3523,8 +3598,8 @@
     },
     {
       "path": "test_tool/electron_app_smoke.mjs",
-      "bytes": 60420,
-      "sha256": "9e450a8f2d17de83e3d2f1e0f771e25527a09d5f682207a3f14d7e05008b3b37"
+      "bytes": 63481,
+      "sha256": "9ffdd502f6576799abd09defa936d8168538b4e92455b16af69933fc4d854e7b"
     },
     {
       "path": "test_tool/export_public_source.mjs",
@@ -3880,6 +3955,11 @@
       "path": "test_tool/windows_feedback_v034_smoke.mjs",
       "bytes": 17883,
       "sha256": "c337e738d7c93da70d6bc9d018184d8e24e0dac813458a6eb1003bcfac86cd5e"
+    },
+    {
+      "path": "test_tool/windows_mac_sync_smoke.mjs",
+      "bytes": 9871,
+      "sha256": "764165d43d31bdd4d03b9ea07ee6096039d5639ba74a9c8878de706bf72b9649"
     },
     {
       "path": "test_tool/windows_polish_smoke.mjs",

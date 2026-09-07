@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,7 +108,7 @@ describe("retryRecognitionJob", () => {
     const original = kind === "span" ? await wrapProtectedSpan({ markdown: "已确认定义", id: "protected-definition" }) : "已确认整块";
     const block = await successfulTranscript(original);
     if (kind === "block") await store.setMarkdownBlockLock({ notebookId: "functional_analysis", sessionId: "lecture", blockId: block.id, locked: true, now: "2026-09-07T01:01:00Z" });
-    else await store.updateMarkdownBlock({ notebookId: "functional_analysis", sessionId: "lecture", blockId: block.id, markdown: original, now: "2026-09-07T01:01:00Z" });
+    else await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("functional_analysis", "lecture"), notebookId: "functional_analysis", sessionId: "lecture", blockId: block.id, markdown: original, now: "2026-09-07T01:01:00Z" });
     const transcribe = vi.fn(async () => ({ markdown: "不应执行" }));
     await expect(retryWith({ name: "fake", transcribe })).rejects.toThrow("已锁定");
     expect(transcribe).not.toHaveBeenCalled();
@@ -184,7 +184,7 @@ describe("retryRecognitionJob", () => {
       "0002:markdown:user"
     ]);
     await expect(
-      readFile(join(rootDir, "notebooks/functional_analysis/sessions/lecture/blocks/0003_ai_transcript.md"), "utf8")
+      store.readMarkdownBlock("functional_analysis", "lecture", "0003")
     ).resolves.toBe("retry transcript");
   });
 
@@ -354,7 +354,7 @@ describe("retryRecognitionJob", () => {
       ])
     );
     await expect(
-      readFile(join(rootDir, "notebooks/functional_analysis/sessions/lecture/blocks/0003_ai_transcript.md"), "utf8")
+      store.readMarkdownBlock("functional_analysis", "lecture", "0003")
     ).resolves.toBe("### 流式识别结果\n\n这是最终 Markdown。");
   });
 
@@ -421,7 +421,7 @@ describe("retryRecognitionJob", () => {
       "0002:markdown:user"
     ]);
     await expect(
-      readFile(join(rootDir, `notebooks/functional_analysis/sessions/lecture/${failedBlock.path}`), "utf8")
+      store.readMarkdownBlock("functional_analysis", "lecture", failedBlock.id)
     ).resolves.toBe("### 重新识别\n\n复用旧块写入最终内容。");
   });
 
@@ -498,7 +498,7 @@ describe("retryRecognitionJob", () => {
     const session = await store.readSession("functional_analysis", "lecture");
     expect(session.blocks.filter((block) => block.source === "ai_transcription")).toHaveLength(1);
     await expect(
-      readFile(join(rootDir, `notebooks/functional_analysis/sessions/lecture/${failedBlock.path}`), "utf8")
+      store.readMarkdownBlock("functional_analysis", "lecture", failedBlock.id)
     ).resolves.toContain("异常输出已停止");
   });
 

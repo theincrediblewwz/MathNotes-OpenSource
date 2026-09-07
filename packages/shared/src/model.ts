@@ -25,6 +25,7 @@ export type BlockRef = {
   sourcePageNumber?: number;
   sourcePageImagePath?: string;
   renderInNote?: boolean;
+  continuationGroup?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -72,6 +73,7 @@ export type CreateBlockInput = {
   sourcePageNumber?: number;
   sourcePageImagePath?: string;
   renderInNote?: boolean;
+  continuationGroup?: string;
 };
 
 export type RecognitionInput = {
@@ -168,6 +170,7 @@ export function createBlockRef(input: CreateBlockInput): BlockRef {
     sourcePageNumber: input.sourcePageNumber,
     sourcePageImagePath: input.sourcePageImagePath,
     renderInNote: input.renderInNote,
+    continuationGroup: input.continuationGroup,
     createdAt: input.createdAt,
     updatedAt: input.createdAt
   };

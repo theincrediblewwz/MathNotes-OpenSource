@@ -25,6 +25,7 @@ import { resolveAssistantBlockEditIntent } from "@mathnotes/shared";
 import { providerRuntimeProgressTitle, providerRuntimeStateForProvider } from "./ui/providerRuntimeState";
 import { type AssetPreviewReference, resolveSessionAssetPreview } from "./ui/assetReferences";
 import type { RenderBlock, SessionDocument } from "./common/sessionDocument";
+import { WorkspaceHostVersionDialog } from "./ui/components/WorkspaceHostVersionDialog";
 import {
   createSessionLivePreviewProjector,
   renderBlocksFromSessionSourceText,
@@ -178,7 +179,7 @@ export function selectionEditTargetsCurrentLock(
 ) {
   const block = document.markdownBlocks.find((candidate) => candidate.blockId === draft.blockId);
   if (block?.locked) return true;
-  const markdown = parseSessionSourceText(sourceText).find((candidate) => candidate.blockId === draft.blockId)?.markdown;
+  const markdown = parseSessionSourceText(sourceText, document.markdownBlocks).find((candidate) => candidate.blockId === draft.blockId)?.markdown;
   if (markdown === undefined) return false;
   const from = Math.min(draft.from, draft.to);
   const to = Math.max(draft.from, draft.to);
@@ -264,7 +265,7 @@ const sampleNotebookSessions: Record<string, NotebookSessionSummary[]> = {
 const previewProjectionLabStorageKey = "mathnotes:preview-projection-lab";
 
 function createPreviewProjectionSnapshot(document: SessionSourceDocument): PreviewProjectionSnapshot {
-  const parsed = new Map(parseSessionSourceText(document.text).map((update) => [update.blockId, update.markdown]));
+  const parsed = new Map(parseSessionSourceText(document.text, document.markdownBlocks).map((update) => [update.blockId, update.markdown]));
   return {
     blockIds: document.markdownBlocks.map((block) => block.blockId).join("\u0000"),
     sourceText: document.text,
@@ -321,6 +322,9 @@ export function App() {
   const [insertMarkdownRequest, setInsertMarkdownRequest] = useState<{ id: number; markdown: string } | null>(null);
   const [savingSource, setSavingSource] = useState(false);
   const [sourceSaveState, setSourceSaveState] = useState<SourceSaveState>("saved");
+  const [workspaceConflict, setWorkspaceConflict] = useState(false);
+  const [hostVersion, setHostVersion] = useState<SessionDocument | null>(null);
+  const revisionBaselineRef = useRef<string>("");
   const [backgroundRefreshPending, setBackgroundRefreshPending] = useState(false);
   const [lastExportResult, setLastExportResult] = useState<ExportCurrentSessionResult | null>(null);
   const [loadingTasks, setLoadingTasks] = useState(false);
@@ -468,7 +472,7 @@ export function App() {
         ])
       );
     }
-    return new Map(parseSessionSourceText(sourceText).map((update) => [update.blockId, update.markdown]));
+    return new Map(parseSessionSourceText(sourceText, sourceDocument.markdownBlocks).map((update) => [update.blockId, update.markdown]));
   }, [normalizedSearchQuery, previewProjection, previewProjectionLabEnabled, sourceDocument.markdownBlocks, sourceText]);
   const searchResults = useMemo(
     () => normalizedSearchQuery
@@ -509,6 +513,9 @@ export function App() {
       window.cancelAnimationFrame(previewApplyFrameRef.current);
       previewApplyFrameRef.current = null;
     }
+    revisionBaselineRef.current = document.revisionBaseline ?? "";
+    setWorkspaceConflict(false);
+    setHostVersion(null);
     setSourceDocument(document.sourceDocument);
     setSourceText(document.sourceDocument.text);
     livePreviewProjectorRef.current.reset();
@@ -808,6 +815,32 @@ export function App() {
     root.lang = userSettings?.locale ?? defaultLocaleId;
   }, [userSettings?.locale, userSettings?.themeId]);
 
+  const saveCurrentSessionSource = useCallback(async (input: { notebookId: string; sessionId: string; sourceText: string }) => {
+    if (!window.mathNotes) throw new Error("desktop_unavailable");
+    try {
+      const saved = await window.mathNotes.saveSessionSource({ ...input, revisionBaseline: revisionBaselineRef.current });
+      // Even a caller that continues into another operation must keep the successful save's baseline.
+      revisionBaselineRef.current = saved.revisionBaseline ?? "";
+      return saved;
+    } catch (error) {
+      if (String(error).includes("revision_conflict")) {
+        setWorkspaceConflict(true);
+        sourceSaveStateRef.current = "error";
+        setSourceSaveState("error");
+      }
+      throw error;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!window.mathNotes?.onWorkspaceChanged) return;
+    return window.mathNotes.onWorkspaceChanged((event) => {
+      if (event.notebookId !== currentSession.notebookId || event.sessionId !== currentSession.sessionId) return;
+      if (sourceSaveStateRef.current !== "saved") setWorkspaceConflict(true);
+      void refreshCurrentSessionWhenSafe();
+    });
+  }, [currentSession.notebookId, currentSession.sessionId, refreshCurrentSessionWhenSafe]);
+
   const saveSourceDocument = useCallback(async (options: { revealExport?: boolean } = {}) => {
     const revealExport = options.revealExport ?? true;
     if (!window.mathNotes) {
@@ -819,7 +852,7 @@ export function App() {
     setSavingSource(true);
     setSourceSaveState("saving");
     try {
-      const document = await window.mathNotes.saveSessionSource({
+      const document = await saveCurrentSessionSource({
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
         sourceText
@@ -1402,6 +1435,7 @@ export function App() {
   }
 
   async function reloadSession() {
+    if (sourceSaveStateRef.current !== "saved" && !window.confirm("重新载入会用主机版本替换当前未保存草稿。确定重新载入？")) return;
     await loadCurrentSession();
     showToast("当前 Session 已刷新");
   }
@@ -1446,7 +1480,7 @@ export function App() {
     setSavingSource(true);
     try {
       if (sourceSaveState !== "saved") {
-        await window.mathNotes.saveSessionSource({
+        await saveCurrentSessionSource({
           notebookId: currentSession.notebookId,
           sessionId: currentSession.sessionId,
           sourceText
@@ -1638,7 +1672,7 @@ export function App() {
     setSourceSaveState("saving");
     try {
       if (sourceSaveState !== "saved") {
-        await window.mathNotes.saveSessionSource({
+        await saveCurrentSessionSource({
           notebookId: currentSession.notebookId,
           sessionId: currentSession.sessionId,
           sourceText
@@ -1703,7 +1737,7 @@ export function App() {
     setSavingSource(true);
     setSourceSaveState("saving");
     try {
-      await window.mathNotes.saveSessionSource({
+      await saveCurrentSessionSource({
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
         sourceText
@@ -1741,7 +1775,7 @@ export function App() {
     setSavingSource(true);
     try {
       if (sourceSaveState !== "saved") {
-        await window.mathNotes.saveSessionSource({
+        await saveCurrentSessionSource({
           notebookId: currentSession.notebookId,
           sessionId: currentSession.sessionId,
           sourceText
@@ -1795,7 +1829,7 @@ export function App() {
       );
       const targetsOpenSession = targetNotebookId === currentSession.notebookId && targetSessionId === currentSession.sessionId;
       if (input.destination === "current_session" && targetsOpenSession) {
-        await mathNotes.saveSessionSource({
+        await saveCurrentSessionSource({
           notebookId: currentSession.notebookId,
           sessionId: currentSession.sessionId,
           sourceText
@@ -1881,7 +1915,7 @@ export function App() {
     setSavingSource(true);
     setSourceSaveState("saving");
     try {
-      await window.mathNotes.saveSessionSource({
+      await saveCurrentSessionSource({
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
         sourceText
@@ -1938,7 +1972,7 @@ export function App() {
     setSelectionEditDraft({ ...draft, proposal: null, status: "generating", error: undefined, requiresUnlock: false });
     try {
       if (sourceSaveStateRef.current !== "saved") {
-        const saved = await window.mathNotes.saveSessionSource({
+        const saved = await saveCurrentSessionSource({
           notebookId: currentSession.notebookId,
           sessionId: currentSession.sessionId,
           sourceText: sourceTextRef.current
@@ -1976,7 +2010,7 @@ export function App() {
     setSelectionEditDraft({ ...draft, status: "applying", error: undefined, requiresUnlock: false });
     try {
       if (sourceSaveStateRef.current !== "saved") {
-        const saved = await window.mathNotes.saveSessionSource({
+        const saved = await saveCurrentSessionSource({
           notebookId: currentSession.notebookId,
           sessionId: currentSession.sessionId,
           sourceText: sourceTextRef.current
@@ -2198,7 +2232,7 @@ export function App() {
     });
     if (editIntent) {
       const block = sourceDocument.markdownBlocks[editIntent.ordinal - 1];
-      const markdown = parseSessionSourceText(sourceTextRef.current)
+      const markdown = parseSessionSourceText(sourceTextRef.current, sourceDocument.markdownBlocks)
         .find((candidate) => candidate.blockId === block.blockId)?.markdown ?? "";
       const draft: SelectionEditDraft = {
         blockId: block.blockId,
@@ -2403,7 +2437,7 @@ export function App() {
       if (sourceSaveState !== "saved") {
         setSavingSource(true);
         setSourceSaveState("saving");
-        const document = await window.mathNotes.saveSessionSource({
+        const document = await saveCurrentSessionSource({
           notebookId: currentSession.notebookId,
           sessionId: currentSession.sessionId,
           sourceText
@@ -2459,6 +2493,22 @@ export function App() {
     setHoverTip((current) => ({ ...current, visible: false }));
   }
 
+  async function unlockSourceSpan(blockId: string, spanId: string) {
+    if (!window.mathNotes) return;
+    setSavingSource(true);
+    try {
+      // Commit any existing draft first; the unlock itself cannot smuggle edited protected text.
+      await saveCurrentSessionSource({ notebookId: currentSession.notebookId, sessionId: currentSession.sessionId, sourceText: sourceTextRef.current });
+      const document = await window.mathNotes.unlockProtectedSpan({ notebookId: currentSession.notebookId, sessionId: currentSession.sessionId, blockId, spanId, revisionBaseline: revisionBaselineRef.current });
+      applySessionDocument(document, { preserveViewport: true });
+      showToast("已解除选区固定，原文保持不变");
+    } catch (error) {
+      if (String(error).includes("revision_conflict")) setWorkspaceConflict(true);
+      setSourceSaveState("error");
+      showToast("解除固定失败：" + String(error) + "；草稿已保留");
+    } finally { setSavingSource(false); }
+  }
+
   async function setActiveBlockLock(block: SessionSourceMarkdownBlock, locked: boolean) {
     if (!window.mathNotes) {
       showToast(locked ? "浏览器预览模式：已固定整块" : "浏览器预览模式：已解除整块固定");
@@ -2468,7 +2518,7 @@ export function App() {
     setSavingSource(true);
     setSourceSaveState("saving");
     try {
-      await window.mathNotes.saveSessionSource({
+      await saveCurrentSessionSource({
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
         sourceText
@@ -2500,7 +2550,7 @@ export function App() {
       setSavingSource(true);
       setSourceSaveState("saving");
       try {
-        const document = await window.mathNotes.saveSessionSource({
+        const document = await saveCurrentSessionSource({
           notebookId: currentSession.notebookId,
           sessionId: currentSession.sessionId,
           sourceText
@@ -2522,7 +2572,7 @@ export function App() {
     setSavingSource(true);
     setSourceSaveState("saving");
     try {
-      await window.mathNotes.saveSessionSource({
+      await saveCurrentSessionSource({
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
         sourceText
@@ -2575,7 +2625,7 @@ export function App() {
     setSavingSource(true);
     setSourceSaveState("saving");
     try {
-      await window.mathNotes.saveSessionSource({
+      await saveCurrentSessionSource({
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
         sourceText
@@ -2634,7 +2684,7 @@ export function App() {
     setSavingSource(true);
     setSourceSaveState("saving");
     try {
-      await window.mathNotes.saveSessionSource({
+      await saveCurrentSessionSource({
         notebookId: currentSession.notebookId,
         sessionId: currentSession.sessionId,
         sourceText
@@ -2702,6 +2752,9 @@ export function App() {
   }
 
   function startDrag(event: PointerEvent<HTMLDivElement>) {
+    // A native block-header drag can otherwise start beneath the moving handle
+    // and cancel pointer capture when a narrow source pane is widened.
+    event.preventDefault();
     draggingRef.current = true;
     window.dispatchEvent(new Event("mathnotes:layout-anchor-start"));
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -3057,7 +3110,17 @@ export function App() {
             >{`${sourceBlockDisplayById.get(activeSourceBlock.blockId) ?? activeSourceBlock.blockId} · ${activeSourceBlock.header}`}</strong>
           </div>
         ) : null}
-        {backgroundRefreshPending ? (
+        {workspaceConflict ? (
+          <div className="recognition-refresh-pending" role="alert" data-testid="workspace-conflict">
+            <span><strong>主机笔记已更新</strong> 当前草稿已保留，旧版本保存被阻止。请先查看主机版本再决定如何合并。</span>
+            <button type="button" onClick={() => void window.mathNotes?.loadCurrentSession().then(setHostVersion)}>查看主机版本</button>
+            <button type="button" onClick={() => void reloadSession()}>重新载入并替换草稿</button>
+          </div>
+        ) : null}
+        {hostVersion ? (
+          <WorkspaceHostVersionDialog sourceText={hostVersion.sourceDocument.text} onClose={() => setHostVersion(null)} />
+        ) : null}
+        {backgroundRefreshPending && !workspaceConflict ? (
           <RecognitionRefreshPending
             onSave={() => void saveSourceDocument()}
             saving={savingSource}
@@ -3093,6 +3156,7 @@ export function App() {
                 sourceSaveStateRef.current = nextSaveState;
                 setSourceSaveState(nextSaveState);
               }}
+              onProtectedSpanUnlockRequest={(blockId, spanId) => void unlockSourceSpan(blockId, spanId)}
               onProtectedSpanUnlockableChange={setProtectedSpanUnlockable}
               onProtectedSpanUnlocked={() => showToast("已解除选区固定，保存后更新 lock metadata")}
               onSelectionLockableChange={setSelectionLockable}

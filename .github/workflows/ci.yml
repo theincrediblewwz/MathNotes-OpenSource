@@ -29,6 +29,7 @@ jobs:
       - run: npm run test:unit
       - run: npm run build:windows
       - run: npm run test:electron-smoke
+      - run: node test_tool/windows_mac_sync_smoke.mjs
       - run: npm run package:windows:portable
       - run: npm run test:windows:portable
       - run: npm run release:metadata

@@ -63,6 +63,8 @@ export function findPreviewFocusTarget(
 
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index];
+    const member = block.sourceBlocks?.find(source => source.blockId === request.blockId || source.sourceId === request.sourceId);
+    if (member) return { index, ratio: Math.max(0, Math.min(1, (member.startLine + requestedLine - 2) / Math.max(1, (block.sourceBlockLineCount ?? 1) - 1))) };
     if (block.sourceBlockId !== request.blockId && block.sourceId !== request.sourceId) continue;
     const startLine = block.sourceBlockLine ?? block.sourceLine ?? 1;
     const segmentLines = Math.max(1, String(block.markdown ?? "").split("\n").length);
@@ -448,6 +450,7 @@ export function PreviewPane({ blocks, focusRequest, forceStatic = false, session
             ? (focusRequest!.nonce % 2 === 0 ? "preview-locating-even" : "preview-locating-odd")
             : undefined
         ].filter(Boolean).join(" ")}
+        data-continuation-sources={block.sourceBlocks?.length ? JSON.stringify(block.sourceBlocks) : undefined}
         data-block-id={block.sourceBlockId ?? block.sourceId}
         data-display-block={block.sourceBlockId ?? block.sourceId}
         data-index={previewTanStackLab ? previewIndex : undefined}
@@ -590,6 +593,13 @@ function locationFromElement(sourceBlock: HTMLElement, clientY: number): Preview
   const blockId = sourceBlock.dataset.blockId ?? sourceBlock.dataset.source ?? "";
   const sourceId = sourceBlock.dataset.source ?? blockId;
   const lineCount = parseOptionalPositiveInteger(sourceBlock.dataset.lineCount);
+  const line = estimateLineInBlock(sourceBlock, clientY, lineCount);
+  if (sourceBlock.dataset.continuationSources) {
+    const members = JSON.parse(sourceBlock.dataset.continuationSources) as NonNullable<RenderBlock["sourceBlocks"]>;
+    const member = [...members].reverse().find(item => item.startLine <= (line ?? 1)) ?? members[0];
+    if (member) return { blockId: member.blockId, sourceId: member.sourceId, displayBlockId: member.blockId,
+      lineInBlock: Math.max(1, Math.min(member.lineCount, (line ?? 1) - member.startLine + 1)), lineCount: member.lineCount };
+  }
   return {
     blockId,
     sourceId,

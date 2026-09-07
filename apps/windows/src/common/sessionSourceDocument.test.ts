@@ -57,7 +57,8 @@ describe("sessionSourceDocument", () => {
         source: "ai_transcription",
         header: "photo_001.jpg",
         sourceAssetPath: "assets/photos/photo_001.jpg",
-        locked: false
+        locked: false,
+        sessionOrder: 1
       },
       {
         blockId: "0003",
@@ -65,7 +66,9 @@ describe("sessionSourceDocument", () => {
         path: "blocks/0003_user_note.md",
         source: "user",
         header: "user",
-        locked: true
+        locked: true,
+        sessionOrder: 2,
+        originalMarkdown: "补充：统一常数记号。"
       }
     ]);
   });

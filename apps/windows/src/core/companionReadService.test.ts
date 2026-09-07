@@ -100,7 +100,7 @@ describe("buildCompanionSessionSnapshot", () => {
     const same = await buildCompanionSessionSnapshot({ store, notebookId: "analysis", sessionId: "lecture" });
     expect(same.revision).toBe(first.revision);
 
-    await store.updateMarkdownBlock({
+    await store.updateMarkdownBlock({ revisionBaseline: await store.readRevisionBaseline("analysis", "lecture"),
       notebookId: "analysis",
       sessionId: "lecture",
       blockId: block.id,

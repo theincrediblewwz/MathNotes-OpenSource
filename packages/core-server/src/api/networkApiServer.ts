@@ -24,6 +24,7 @@ import {
 } from "./networkApiContracts";
 import { PwaStaticHost } from "./pwaStaticHost";
 import { isSafeWorkspaceIdentifier } from "../session/workspaceIdentifier";
+import { WorkspaceSyncError, type WorkspaceSyncService, type ReplicaPush } from "../sync/workspaceSyncService";
 
 const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
@@ -32,6 +33,8 @@ export type NetworkApiServerOptions = {
   port: number;
   token: string;
   pipeline?: PhotoIngestPort;
+  workspaceSync?: WorkspaceSyncService;
+  onWorkspaceChanged?: (target: { notebookId: string; sessionId: string }) => void;
   createPipeline?: () => PhotoIngestPort | Promise<PhotoIngestPort>;
   /** Read persisted upload state without initializing a recognition provider. */
   getUploadStatus?: NonNullable<PhotoIngestPort["getAcceptedUpload"]>;
@@ -179,7 +182,7 @@ export class NetworkApiServer {
       return;
     }
     const hasValidHostToken = verifyBearerToken(request.headers.authorization, this.options.token);
-    const hasValidDeviceToken = hasValidHostToken
+    const hasValidDeviceToken = hasValidHostToken || route.audience === "trusted-host"
       ? false
       : await this.verifyDeviceToken(request.headers.authorization, route.id);
     const principal = principalForNetworkRoute(route, hasValidHostToken, hasValidDeviceToken);
@@ -193,6 +196,11 @@ export class NetworkApiServer {
     } catch (error) {
       if (process.env.MATHNOTES_DEBUG_SERVER_ERRORS === "1") {
         console.error("[MathNotes ingest server]", error);
+      }
+      if (error instanceof WorkspaceSyncError) {
+        if (error.statusCode === 413) response.setHeader("Connection", "close");
+        writeJson(response, error.statusCode, { error: error.code });
+        return;
       }
       if (error instanceof UploadError) {
         writeJson(response, error.statusCode, { error: "upload_error", message: error.message });
@@ -228,6 +236,34 @@ export class NetworkApiServer {
     response: ServerResponse,
     url: URL
   ): Promise<void> {
+    if (isWorkspaceSyncRoute(routeId)) {
+      const sync = this.options.workspaceSync;
+      if (!sync) return writeJson(response, 503, { error: "workspace_sync_unavailable" });
+      if (routeId === "workspace.identity") return writeJson(response, 200, await sync.identity());
+      if (routeId === "workspace.catalog") return writeJson(response, 200, await sync.catalog());
+      if (routeId === "workspace.asset.stage") {
+        const body = await readWorkspaceJsonBody(request, 73 * 1024 * 1024);
+        await sync.stageAsset(body as Parameters<WorkspaceSyncService["stageAsset"]>[0]);
+        return writeJson(response, 200, { ok: true });
+      }
+      if (routeId === "workspace.push") {
+        const body = await readWorkspaceJsonBody(request, 32 * 1024 * 1024);
+        const snapshot = await sync.push(body as ReplicaPush);
+        this.publishCompanionChange(snapshot.notebookId, snapshot.session.id, snapshot.revision);
+        this.options.onWorkspaceChanged?.({ notebookId: snapshot.notebookId, sessionId: snapshot.session.id });
+        return writeJson(response, 200, snapshot);
+      }
+      const notebookId = url.searchParams.get("notebookId") ?? "";
+      const sessionId = url.searchParams.get("sessionId") ?? "";
+      if (routeId === "workspace.snapshot") return writeJson(response, 200, await sync.snapshot(notebookId, sessionId));
+      if (routeId === "workspace.asset") {
+        const bytes = await sync.asset(notebookId, sessionId, url.searchParams.get("path") ?? "", url.searchParams.get("sha256") ?? "");
+        response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": bytes.length, "Cache-Control": "no-store" });
+        response.end(bytes);
+        return;
+      }
+      throw new WorkspaceSyncError("unsupported_sync_route", 404);
+    }
     switch (routeId) {
       case "health":
         writeJson(response, 200, { ok: true });
@@ -809,6 +845,46 @@ async function readJsonBody(request: IncomingMessage, maxBytes: number): Promise
   } catch {
     throw new UploadError("Invalid JSON request", 400);
   }
+}
+
+function isWorkspaceSyncRoute(id: NetworkApiRouteId): id is Extract<NetworkApiRouteId, `workspace.${string}`> {
+  return id.startsWith("workspace.");
+}
+
+/** Drain rejected bodies without buffering them or destroying the 413 response. */
+function readWorkspaceJsonBody(request: IncomingMessage, maxBytes: number): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let chunks: Buffer[] = [];
+    let size = 0;
+    let finished = false;
+    const fail = (code: string, status: number) => {
+      if (finished) return;
+      finished = true;
+      chunks = [];
+      reject(new WorkspaceSyncError(code, status));
+    };
+    const declared = Number(request.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > maxBytes) fail("request_too_large", 413);
+    request.on("data", (chunk: Buffer | string) => {
+      if (finished) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += bytes.length;
+      if (size > maxBytes) return fail("request_too_large", 413);
+      chunks.push(bytes);
+    });
+    request.once("end", () => {
+      if (finished) return;
+      try {
+        const value: unknown = JSON.parse(Buffer.concat(chunks, size).toString("utf8"));
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid");
+        finished = true;
+        chunks = [];
+        resolve(value as Record<string, unknown>);
+      } catch { fail("invalid_request", 400); }
+    });
+    request.once("error", () => fail("request_aborted", 400));
+    request.once("aborted", () => fail("request_aborted", 400));
+  });
 }
 
 function stringField(body: Record<string, unknown>, field: string): string | undefined {

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 const projectRoot = process.cwd();
+const executablePath = process.argv[2] ? path.resolve(process.argv[2]) : undefined;
 const notesRoot = await mkdtemp(path.join(tmpdir(), "mathnotes-electron-smoke-"));
 const userDataDir = path.join(notesRoot, "user-data");
 const importImagePath = path.join(notesRoot, "local-blackboard.png");
@@ -26,7 +27,8 @@ try {
   await writeFile(embeddedImagePath, Buffer.from("electron smoke embedded image"));
   await writeFile(importPdfPath, createMinimalPdf());
   app = await electron.launch({
-    args: ["--no-stdio-init", path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    executablePath,
+    args: ["--no-stdio-init", ...(executablePath ? [] : [path.join(projectRoot, "apps/windows/electron-dist/main.cjs")]), `--user-data-dir=${userDataDir}`],
     chromiumSandbox: false,
     cwd: projectRoot,
     env: {
@@ -333,6 +335,7 @@ try {
     const block = current.sourceDocument.markdownBlocks.find((candidate) => candidate.blockId === blockId);
     if (!block) throw new Error(`Unable to find block ${blockId} for conflict injection`);
     await window.mathNotes.saveMarkdownBlock({
+      revisionBaseline: current.revisionBaseline,
       notebookId: current.notebookId,
       sessionId: current.sessionId,
       blockId,
@@ -503,6 +506,12 @@ try {
   );
   assert.match(await readFile(exportedAfterPromotion.outPath, "utf8"), /Mock 学习助手/);
 
+  // The fixture calls IPC directly instead of the UI promotion handler, which
+  // normally applies the returned document and revision to the editor. Reload
+  // that committed state before testing later UI writes with a fresh baseline.
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector("[data-testid='preview-pane']")?.textContent?.includes("Mock 学习助手"));
+
   console.log("[electron smoke] search popover locates source");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
   await assertVisible(page, "[data-testid='search-popover']");
@@ -518,7 +527,7 @@ try {
   );
 
   console.log("[electron smoke] new text block quick action");
-  const sourceBlockCountBeforeCreate = await page.locator("[data-testid='source-block']").count();
+  const sourceBlockCountBeforeCreate = await page.evaluate(async () => (await window.mathNotes.loadCurrentSession()).editableBlocks.length);
   await page.getByRole("button", { name: "添加内容", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".source-create-menu")?.classList.contains("open"), undefined, {
     timeout: 3000
@@ -527,7 +536,7 @@ try {
   await createTextBlockAction.waitFor({ state: "visible", timeout: 3000 });
   await createTextBlockAction.click();
   await page.waitForFunction(
-    (before) => document.querySelectorAll("[data-testid='source-block']").length > before,
+    async (before) => (await window.mathNotes.loadCurrentSession()).editableBlocks.length === before + 1,
     sourceBlockCountBeforeCreate,
     { timeout: 5000 }
   );
@@ -881,6 +890,25 @@ try {
   await assertVisible(page, "[data-testid='block-lock-button']");
   assert.match(await page.getByTestId("block-lock-button").innerText(), /解除整块/);
 
+  // Hosted Windows desktops can be narrower than the default 1280px window.
+  // Keep both native mouse targets inside the actual display after testing
+  // titlebar movement; off-screen coordinates cannot exercise the splitter.
+  const splitWindow = await app.evaluate(({ BrowserWindow, screen }) => {
+    const window = BrowserWindow.getAllWindows().sort((a, b) => b.getBounds().width * b.getBounds().height - a.getBounds().width * a.getBounds().height)[0];
+    const workArea = screen.getPrimaryDisplay().workArea;
+    window.setBounds({ x: workArea.x, y: workArea.y, width: Math.min(1024, workArea.width), height: Math.min(720, workArea.height) });
+    return { workArea, bounds: window.getBounds(), content: window.getContentBounds() };
+  });
+  await page.waitForFunction(width => window.innerWidth === width, splitWindow.content.width);
+  const narrowX = Math.round(splitWindow.content.width * 0.25);
+  const wideX = Math.min(splitWindow.content.width - 180, Math.round(splitWindow.content.width * 0.8));
+  console.log("[electron smoke] splitter geometry", JSON.stringify({ ...splitWindow, narrowX, wideX }));
+  await page.evaluate(() => {
+    window.__splitPointerTrace = [];
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "dragstart"]) document.addEventListener(type, event => {
+      window.__splitPointerTrace.push({ type, x: event.clientX, y: event.clientY });
+    }, { capture: true });
+  });
   const separator = await page.locator(".split-handle span").boundingBox();
   const sourcePaneBeforeDrag = await page.locator(".source-pane").boundingBox();
   assert.ok(separator);
@@ -888,8 +916,9 @@ try {
 
   await page.mouse.move(separator.x + separator.width / 2, separator.y + separator.height / 2);
   await page.mouse.down();
-  await page.mouse.move(300, separator.y + separator.height / 2, { steps: 6 });
+  await page.mouse.move(narrowX, separator.y + separator.height / 2, { steps: 6 });
   await page.mouse.up();
+  await page.waitForFunction(x => Math.abs(document.querySelector(".source-pane").getBoundingClientRect().width - x) < 2, narrowX);
   const sourcePaneAfterNarrowDrag = await page.locator(".source-pane").boundingBox();
   assert.ok(sourcePaneAfterNarrowDrag);
   assert.ok(
@@ -897,10 +926,15 @@ try {
     `Electron split should allow narrowing source pane, got ${sourcePaneBeforeDrag.width - sourcePaneAfterNarrowDrag.width}px`
   );
 
-  await page.mouse.move(300, separator.y + separator.height / 2);
+  const narrowedSeparator = await page.locator(".split-handle span").boundingBox();
+  assert.ok(narrowedSeparator);
+  await page.mouse.move(narrowedSeparator.x + narrowedSeparator.width / 2, narrowedSeparator.y + narrowedSeparator.height / 2);
   await page.mouse.down();
-  await page.mouse.move(1010, separator.y + separator.height / 2, { steps: 6 });
+  await page.mouse.move(wideX, narrowedSeparator.y + narrowedSeparator.height / 2, { steps: 6 });
   await page.mouse.up();
+  console.log("[electron smoke] splitter pointer trace", JSON.stringify(await page.evaluate(() => ({ trace: window.__splitPointerTrace, width: document.querySelector(".source-pane").getBoundingClientRect().width, viewport: window.innerWidth }))));
+  await page.waitForFunction(x => Math.abs(document.querySelector(".source-pane").getBoundingClientRect().width - x) < 2, wideX);
+  assert.equal(await page.evaluate(() => window.__splitPointerTrace.some(event => event.type === "dragstart")), false, "Resizing panes must not start a native block drag");
   const sourcePaneAfterWideDrag = await page.locator(".source-pane").boundingBox();
   assert.ok(sourcePaneAfterWideDrag);
   assert.ok(
@@ -947,7 +981,8 @@ try {
 
   console.log("[electron smoke] receiver identity survives an app restart");
   app = await electron.launch({
-    args: ["--no-stdio-init", path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    executablePath,
+    args: ["--no-stdio-init", ...(executablePath ? [] : [path.join(projectRoot, "apps/windows/electron-dist/main.cjs")]), `--user-data-dir=${userDataDir}`],
     chromiumSandbox: false,
     cwd: projectRoot,
     env: {
@@ -991,7 +1026,8 @@ try {
   blockedPortServer = createServer();
   await listen(blockedPortServer, updatedIngestState.port);
   app = await electron.launch({
-    args: ["--no-stdio-init", path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    executablePath,
+    args: ["--no-stdio-init", ...(executablePath ? [] : [path.join(projectRoot, "apps/windows/electron-dist/main.cjs")]), `--user-data-dir=${userDataDir}`],
     chromiumSandbox: false,
     cwd: projectRoot,
     env: {

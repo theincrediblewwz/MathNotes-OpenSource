@@ -29,7 +29,7 @@ export function buildMarkdownProjection(
   text: string,
   blocks: SessionSourceMarkdownBlock[]
 ): Record<string, string> {
-  const parsed = new Map(parseSessionSourceText(text).map((update) => [update.blockId, update.markdown]));
+  const parsed = new Map(parseSessionSourceText(text, blocks).map((update) => [update.blockId, update.markdown]));
   return Object.fromEntries(blocks.map((block) => [block.blockId, parsed.get(block.blockId) ?? ""]));
 }
 
@@ -108,7 +108,7 @@ export function isLockableMarkdownSelection(args: {
 }
 
 export function buildEditorBodyFromSourceText(text: string, blocks: SessionSourceMarkdownBlock[]): SourceEditorBodyDocument {
-  const updatesByBlockId = new Map(parseSessionSourceText(text).map((update) => [update.blockId, update.markdown]));
+  const updatesByBlockId = new Map(parseSessionSourceText(text, blocks).map((update) => [update.blockId, update.markdown]));
   const chunks: string[] = [];
   const ranges: SourceEditorBodyBlockRange[] = [];
   let position = 0;
@@ -139,14 +139,15 @@ export function buildEditorBodyFromSourceText(text: string, blocks: SessionSourc
 export function buildSourceTextFromEditorBody(text: string, ranges: SourceEditorBodyBlockRange[]): string {
   const chunks: string[] = [];
 
-  for (const range of ranges) {
-    const markdown = trimTrailingNewlines(text.slice(range.from, range.to));
+  for (const [index, range] of ranges.entries()) {
+    const body = text.slice(range.from, range.to);
+    const markdown = range.continuationGroup ? (index < ranges.length - 1 ? body.slice(0, -2) : body) : trimTrailingNewlines(body);
     chunks.push(`--- source: ${range.header} | block: ${range.blockId} ---`);
     chunks.push(markdown);
     chunks.push("");
   }
 
-  return trimTrailingNewlines(chunks.join("\n"));
+  return ranges.some(block => block.continuationGroup) ? chunks.join("\n") : trimTrailingNewlines(chunks.join("\n"));
 }
 
 export function buildSourceTextFromBlockMarkdowns(
@@ -157,11 +158,11 @@ export function buildSourceTextFromBlockMarkdowns(
 
   for (const block of blocks) {
     chunks.push(`--- source: ${block.header} | block: ${block.blockId} ---`);
-    chunks.push(trimTrailingNewlines(markdownByBlockId[block.blockId] ?? ""));
+    chunks.push(block.continuationGroup ? (markdownByBlockId[block.blockId] ?? "") : trimTrailingNewlines(markdownByBlockId[block.blockId] ?? ""));
     chunks.push("");
   }
 
-  return trimTrailingNewlines(chunks.join("\n"));
+  return blocks.some(block => block.continuationGroup) ? chunks.join("\n") : trimTrailingNewlines(chunks.join("\n"));
 }
 
 export function findBodyBlockAtPosition(position: number, ranges: SourceEditorBodyBlockRange[]): SessionSourceMarkdownBlock | null {

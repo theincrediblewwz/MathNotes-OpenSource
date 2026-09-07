@@ -660,6 +660,25 @@ button:disabled,
 
 .recognition-refresh-pending button:disabled { cursor: default; opacity: .6; }
 
+.workspace-host-version {
+  width: min(820px, calc(100vw - 48px));
+  max-height: min(700px, calc(100vh - 80px));
+  box-sizing: border-box;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--paper, #fff);
+  color: var(--ink, #272727);
+  box-shadow: 0 20px 80px #0002;
+  -webkit-app-region: no-drag;
+}
+.workspace-host-version::backdrop { background: #18181835; backdrop-filter: blur(2px); }
+.workspace-host-version header { display: flex; align-items: start; justify-content: space-between; gap: 20px; }
+.workspace-host-version header strong { font-size: 18px; }
+.workspace-host-version header p { color: var(--muted, #666); font-size: 13px; line-height: 1.6; margin: 8px 0 18px; }
+.workspace-host-version button { flex-shrink: 0; padding: 9px 14px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: inherit; cursor: pointer; }
+.workspace-host-version pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: calc(100vh - 260px); margin: 0; padding: 18px; border-radius: 12px; background: #8888880a; font-size: 14px; line-height: 1.75; user-select: text; }
+
 .lock-selection-button {
   flex: 0 0 auto;
   margin-left: auto;

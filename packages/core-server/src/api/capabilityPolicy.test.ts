@@ -25,7 +25,13 @@ describe("Core API capability policy", () => {
       "companion.session.document.v2",
       "companion.asset",
       "companion.session.events",
-      "companion.catalog.events"
+      "companion.catalog.events",
+      "workspace.identity",
+      "workspace.catalog",
+      "workspace.snapshot",
+      "workspace.asset",
+      "workspace.asset.stage",
+      "workspace.push"
     ]);
     expect(validateNetworkApiContracts()).toEqual([]);
   });
@@ -33,6 +39,18 @@ describe("Core API capability policy", () => {
   it("denies unknown method/path combinations by default", () => {
     expect(resolveNetworkApiRoute("DELETE", "/api/v1/companion/session")).toBeUndefined();
     expect(resolveNetworkApiRoute("GET", "/api/v1/provider/config")).toBeUndefined();
+  });
+
+  it("requires the trusted host credential for every workspace route", () => {
+    const routes = NETWORK_API_ROUTES.filter(route => route.id.startsWith("workspace."));
+    expect(routes).toHaveLength(6);
+    for (const route of routes) {
+      expect(route.capability).toBe("workspace.sync");
+      expect(route.audience).toBe("trusted-host");
+      expect(authorizeCoreApiCapability(principalForNetworkRoute(route, false, true), route.capability)).toBe(false);
+      expect(authorizeCoreApiCapability(principalForNetworkRoute(route, true, false), route.capability)).toBe(true);
+    }
+    expect(authorizeCoreApiCapability("paired-device", "workspace.sync")).toBe(false);
   });
 
   it("requires a paired device for every non-public network capability", () => {

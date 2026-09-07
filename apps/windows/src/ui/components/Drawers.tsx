@@ -30,7 +30,7 @@ import {
 import { defaultMathPromptTemplate, type PromptTemplate } from "../../common/promptTemplates";
 import { createEmptyNotationProfileConfig, type NotationProfile, type NotationRule } from "../../common/notationProfiles";
 import { getRecognitionProviderCapability } from "../providerCapabilities";
-import { version as appVersion } from "../../../package.json";
+import { version as appVersion, buildLabel } from "../../../package.json";
 
 type DrawerProps = {
   openLayer: string | null;
@@ -639,7 +639,7 @@ export function UserSettingsForm({
 
   return (
     <div className="settings-form" data-testid="user-settings">
-      <p className="muted" data-testid="app-version">MathNotes · 当前版本 {appVersion}</p>
+      <p className="muted" data-testid="app-version">MathNotes · 当前版本 {appVersion} · {buildLabel} · {import.meta.env.VITE_MATHNOTES_BUILD_REVISION}</p>
       <a
         aria-label={`打开 ${MATHNOTES_AUTHOR_ID} 的 GitHub 主页`}
         className="settings-owner-card"

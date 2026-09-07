@@ -4,9 +4,11 @@ MathNotes 是一个 GPLv3、本地优先的数学笔记项目，包含 Windows�
 
 **最新发行版：0.3.4 试用版。当前 Windows / Android / PWA 开发版本：0.3.4。**
 
+Windows 另提供 **0.3.4「Mac 同步测试版」**：支持 Mac 本地副本向 Windows 同步正文与素材、旧草稿冲突保护，以及固定片段的公式/表格连续渲染。设置中显示构建编号，便于区分原 0.3.4 包。[下载 Windows 同步测试包](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/windows-mac-sync-20260908) · [同步验收与 Mac 接手结果](deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md)。这次没有重新发布 Android、PWA 或 Mac 安装包。
+
 [下载最新发行版](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/latest) · [0.3.4 固定发行页](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/v0.3.4) · [逐项操作验收表](deploy/releases/v0.3.4-acceptance.md)
 
-公开默认分支 `main` 与 `codex/release-v0.3.4-integration` 均包含本轮整合源码。源码可以使用和修改，但自动测试不能替代真实 Windows、Apple silicon Mac、Android 与 iPhone 验收。
+公开默认分支 `main` 包含已合入的整合源码；原 0.3.4 整合分支为 `codex/release-v0.3.4-integration`，Windows 同步源码分支为 `codex/windows-mac-sync-20260908`。源码可以使用和修改，但自动测试不能替代真实 Windows、Apple silicon Mac、Android 与 iPhone 验收。
 
 | 平台 | 本次可用版本 | 交付内容 |
 | --- | --- | --- |

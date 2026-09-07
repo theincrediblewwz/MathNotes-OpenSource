@@ -88,6 +88,7 @@ type SessionSourceEditorProps = {
   onCaretLocationChange?: (location: SourceCaretLocation) => void;
   onProtectedSpanUnlockableChange: (unlockable: boolean) => void;
   onProtectedSpanUnlocked: () => void;
+  onProtectedSpanUnlockRequest?: (blockId: string, spanId: string) => void;
   onSelectionLockableChange: (lockable: boolean) => void;
   onSelectionLocked: () => void;
   onSourceReferenceClick: (reference: SourceHeaderReference) => void;
@@ -355,6 +356,7 @@ export function SessionSourceEditor({
   onCaretLocationChange,
   onProtectedSpanUnlockableChange,
   onProtectedSpanUnlocked,
+  onProtectedSpanUnlockRequest,
   onSelectionLockableChange,
   onSelectionLocked,
   onSourceReferenceClick,
@@ -396,6 +398,8 @@ export function SessionSourceEditor({
   const onCaretLocationChangeRef = useRef(onCaretLocationChange);
   const onProtectedSpanUnlockableChangeRef = useRef(onProtectedSpanUnlockableChange);
   const onProtectedSpanUnlockedRef = useRef(onProtectedSpanUnlocked);
+  const onProtectedSpanUnlockRequestRef = useRef(onProtectedSpanUnlockRequest);
+  onProtectedSpanUnlockRequestRef.current = onProtectedSpanUnlockRequest;
   const onSelectionLockableChangeRef = useRef(onSelectionLockableChange);
   const onSelectionLockedRef = useRef(onSelectionLocked);
   const onSourceReferenceClickRef = useRef(onSourceReferenceClick);
@@ -865,6 +869,10 @@ export function SessionSourceEditor({
       return;
     }
 
+    if (onProtectedSpanUnlockRequestRef.current && activeBlockIdRef.current) {
+      onProtectedSpanUnlockRequestRef.current(activeBlockIdRef.current, span.id);
+      return;
+    }
     view.dispatch({
       changes: { from: span.from, to: span.to, insert: span.content },
       selection: { anchor: span.from, head: span.from + span.content.length }
