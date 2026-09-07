@@ -238,7 +238,10 @@ describe("workspace v3 sync host", () => {
     input.snapshot.assets.push({ path: "assets/large.png", sha256, byteLength: bytes.length });
     await Promise.all(Array.from({ length: 4 }, () => f.sync.stageAsset({ operationId: input.operationId, sha256, base64: bytes.toString("base64") })));
     await f.sync.push(input);
-    expect(await f.sync.asset(f.notebookId, f.sessionId, "assets/large.png", sha256)).toEqual(bytes);
+    const downloaded = await f.sync.asset(f.notebookId, f.sessionId, "assets/large.png", sha256);
+    // Buffer.equals checks every byte without recursively enumerating 1 MiB of
+    // numeric object properties in the generic assertion matcher on Windows CI.
+    expect(downloaded.equals(bytes)).toBe(true);
     await writeFile(join(f.directory, "assets/large.png"), "changed outside the protocol");
     await expect(f.sync.asset(f.notebookId, f.sessionId, "assets/large.png", sha256)).rejects.toMatchObject({ code: "asset_changed", statusCode: 409 });
   });

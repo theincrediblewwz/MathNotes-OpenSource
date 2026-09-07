@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-07T18:55:37.675Z",
+  "generatedAt": "2026-09-07T19:02:05.516Z",
   "fileCount": 795,
-  "snapshotSha256": "85f071cec10ec85136fa552e5d8095982b6391a2187376a4cb3254168ec8b4cf",
+  "snapshotSha256": "97df4fba0ac8e9454d7c6b6302c25b7d2b0b42ccc87e7a12dc227f2d8cb9bd8d",
   "files": [
     {
       "path": ".gitattributes",
@@ -3313,8 +3313,8 @@
     },
     {
       "path": "packages/core-server/src/sync/workspaceSyncService.test.ts",
-      "bytes": 24370,
-      "sha256": "9876caa758910ce9ccc2e3126adab1a818be85fce5a68311409808bc8b2c12cf"
+      "bytes": 24576,
+      "sha256": "bbe2f27b2673615481163a3ddaf98a1f98049d075d7ae22ccbd72fd31bfed7ff"
     },
     {
       "path": "packages/core-server/src/sync/workspaceSyncService.ts",
