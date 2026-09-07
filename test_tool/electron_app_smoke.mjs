@@ -888,6 +888,25 @@ try {
   await assertVisible(page, "[data-testid='block-lock-button']");
   assert.match(await page.getByTestId("block-lock-button").innerText(), /解除整块/);
 
+  // Hosted Windows desktops can be narrower than the default 1280px window.
+  // Keep both native mouse targets inside the actual display after testing
+  // titlebar movement; off-screen coordinates cannot exercise the splitter.
+  const splitWindow = await app.evaluate(({ BrowserWindow, screen }) => {
+    const window = BrowserWindow.getAllWindows().sort((a, b) => b.getBounds().width * b.getBounds().height - a.getBounds().width * a.getBounds().height)[0];
+    const workArea = screen.getPrimaryDisplay().workArea;
+    window.setBounds({ x: workArea.x, y: workArea.y, width: Math.min(1280, workArea.width), height: Math.min(900, workArea.height) });
+    return { workArea, bounds: window.getBounds(), content: window.getContentBounds() };
+  });
+  await page.waitForFunction(width => window.innerWidth === width, splitWindow.content.width);
+  const narrowX = Math.round(splitWindow.content.width * 0.25);
+  const wideX = Math.min(splitWindow.content.width - 180, Math.round(splitWindow.content.width * 0.8));
+  console.log("[electron smoke] splitter geometry", JSON.stringify({ ...splitWindow, narrowX, wideX }));
+  await page.evaluate(() => {
+    window.__splitPointerTrace = [];
+    for (const type of ["pointerdown", "pointermove", "pointerup"]) document.addEventListener(type, event => {
+      window.__splitPointerTrace.push({ type, x: event.clientX, y: event.clientY });
+    }, { capture: true });
+  });
   const separator = await page.locator(".split-handle span").boundingBox();
   const sourcePaneBeforeDrag = await page.locator(".source-pane").boundingBox();
   assert.ok(separator);
@@ -895,9 +914,9 @@ try {
 
   await page.mouse.move(separator.x + separator.width / 2, separator.y + separator.height / 2);
   await page.mouse.down();
-  await page.mouse.move(300, separator.y + separator.height / 2, { steps: 6 });
+  await page.mouse.move(narrowX, separator.y + separator.height / 2, { steps: 6 });
   await page.mouse.up();
-  await page.waitForFunction(() => Math.abs(document.querySelector(".source-pane").getBoundingClientRect().width - 300) < 2);
+  await page.waitForFunction(x => Math.abs(document.querySelector(".source-pane").getBoundingClientRect().width - x) < 2, narrowX);
   const sourcePaneAfterNarrowDrag = await page.locator(".source-pane").boundingBox();
   assert.ok(sourcePaneAfterNarrowDrag);
   assert.ok(
@@ -909,9 +928,10 @@ try {
   assert.ok(narrowedSeparator);
   await page.mouse.move(narrowedSeparator.x + narrowedSeparator.width / 2, narrowedSeparator.y + narrowedSeparator.height / 2);
   await page.mouse.down();
-  await page.mouse.move(1010, narrowedSeparator.y + narrowedSeparator.height / 2, { steps: 6 });
+  await page.mouse.move(wideX, narrowedSeparator.y + narrowedSeparator.height / 2, { steps: 6 });
   await page.mouse.up();
-  await page.waitForFunction(() => Math.abs(document.querySelector(".source-pane").getBoundingClientRect().width - 1010) < 2);
+  console.log("[electron smoke] splitter pointer trace", JSON.stringify(await page.evaluate(() => ({ trace: window.__splitPointerTrace, width: document.querySelector(".source-pane").getBoundingClientRect().width, viewport: window.innerWidth }))));
+  await page.waitForFunction(x => Math.abs(document.querySelector(".source-pane").getBoundingClientRect().width - x) < 2, wideX);
   const sourcePaneAfterWideDrag = await page.locator(".source-pane").boundingBox();
   assert.ok(sourcePaneAfterWideDrag);
   assert.ok(

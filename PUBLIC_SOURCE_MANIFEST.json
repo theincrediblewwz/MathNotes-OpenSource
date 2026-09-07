@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-07T19:16:46.918Z",
+  "generatedAt": "2026-09-07T19:24:20.904Z",
   "fileCount": 795,
-  "snapshotSha256": "3853cc4b5530c38b5b34b68be57409383ded11a264a49d192069839547027fe2",
+  "snapshotSha256": "ed3dc3f24db6703780b00f76949871d0064a240afcdf090f5453403f2b1784f2",
   "files": [
     {
       "path": ".gitattributes",
@@ -3598,8 +3598,8 @@
     },
     {
       "path": "test_tool/electron_app_smoke.mjs",
-      "bytes": 61372,
-      "sha256": "6fd6191f233db181e3cea9ca5f0f2f6c8e0a8573df5c741b2be4fb72aaae1169"
+      "bytes": 63047,
+      "sha256": "c8b0c0eac7f64845480a4ad0366f0097c5343d7e2ae2c9abefc502f514f50f11"
     },
     {
       "path": "test_tool/export_public_source.mjs",
