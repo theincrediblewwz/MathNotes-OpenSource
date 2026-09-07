@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "public-history-preserved",
-  "generatedAt": "2026-09-07T18:09:43.878Z",
+  "generatedAt": "2026-09-07T18:19:37.824Z",
   "fileCount": 779,
-  "snapshotSha256": "fa3dadd78023b256413f5af79109f8e20a9af2ebc5805dfccbac37fe3cd4cdfc",
+  "snapshotSha256": "ccc8a37e0de4a1af22f0367e6aec5a018c582d5e5765fdff7be44c2f913b3b53",
   "files": [
     {
       "path": ".gitattributes",
@@ -2033,8 +2033,8 @@
     },
     {
       "path": "apps/windows/src/core/ingestServer.test.ts",
-      "bytes": 31878,
-      "sha256": "c912fd83f251b0b8916de8a17cbc026d746f2ba8850b4e77181adf0ccbb26fb7"
+      "bytes": 31906,
+      "sha256": "4d508fca750e251bb108d06f2964daff9a7d459cb8213322841d1dca782de7f1"
     },
     {
       "path": "apps/windows/src/core/ingestServer.ts",
