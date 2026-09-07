@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 const projectRoot = process.cwd();
+const executablePath = process.argv[2] ? path.resolve(process.argv[2]) : undefined;
 const notesRoot = await mkdtemp(path.join(tmpdir(), "mathnotes-electron-smoke-"));
 const userDataDir = path.join(notesRoot, "user-data");
 const importImagePath = path.join(notesRoot, "local-blackboard.png");
@@ -26,7 +27,8 @@ try {
   await writeFile(embeddedImagePath, Buffer.from("electron smoke embedded image"));
   await writeFile(importPdfPath, createMinimalPdf());
   app = await electron.launch({
-    args: ["--no-stdio-init", path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    executablePath,
+    args: ["--no-stdio-init", ...(executablePath ? [] : [path.join(projectRoot, "apps/windows/electron-dist/main.cjs")]), `--user-data-dir=${userDataDir}`],
     chromiumSandbox: false,
     cwd: projectRoot,
     env: {
@@ -894,7 +896,7 @@ try {
   const splitWindow = await app.evaluate(({ BrowserWindow, screen }) => {
     const window = BrowserWindow.getAllWindows().sort((a, b) => b.getBounds().width * b.getBounds().height - a.getBounds().width * a.getBounds().height)[0];
     const workArea = screen.getPrimaryDisplay().workArea;
-    window.setBounds({ x: workArea.x, y: workArea.y, width: Math.min(1280, workArea.width), height: Math.min(900, workArea.height) });
+    window.setBounds({ x: workArea.x, y: workArea.y, width: Math.min(1024, workArea.width), height: Math.min(720, workArea.height) });
     return { workArea, bounds: window.getBounds(), content: window.getContentBounds() };
   });
   await page.waitForFunction(width => window.innerWidth === width, splitWindow.content.width);
@@ -903,7 +905,7 @@ try {
   console.log("[electron smoke] splitter geometry", JSON.stringify({ ...splitWindow, narrowX, wideX }));
   await page.evaluate(() => {
     window.__splitPointerTrace = [];
-    for (const type of ["pointerdown", "pointermove", "pointerup"]) document.addEventListener(type, event => {
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "dragstart"]) document.addEventListener(type, event => {
       window.__splitPointerTrace.push({ type, x: event.clientX, y: event.clientY });
     }, { capture: true });
   });
@@ -932,6 +934,7 @@ try {
   await page.mouse.up();
   console.log("[electron smoke] splitter pointer trace", JSON.stringify(await page.evaluate(() => ({ trace: window.__splitPointerTrace, width: document.querySelector(".source-pane").getBoundingClientRect().width, viewport: window.innerWidth }))));
   await page.waitForFunction(x => Math.abs(document.querySelector(".source-pane").getBoundingClientRect().width - x) < 2, wideX);
+  assert.equal(await page.evaluate(() => window.__splitPointerTrace.some(event => event.type === "dragstart")), false, "Resizing panes must not start a native block drag");
   const sourcePaneAfterWideDrag = await page.locator(".source-pane").boundingBox();
   assert.ok(sourcePaneAfterWideDrag);
   assert.ok(
@@ -978,7 +981,8 @@ try {
 
   console.log("[electron smoke] receiver identity survives an app restart");
   app = await electron.launch({
-    args: ["--no-stdio-init", path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    executablePath,
+    args: ["--no-stdio-init", ...(executablePath ? [] : [path.join(projectRoot, "apps/windows/electron-dist/main.cjs")]), `--user-data-dir=${userDataDir}`],
     chromiumSandbox: false,
     cwd: projectRoot,
     env: {
@@ -1022,7 +1026,8 @@ try {
   blockedPortServer = createServer();
   await listen(blockedPortServer, updatedIngestState.port);
   app = await electron.launch({
-    args: ["--no-stdio-init", path.join(projectRoot, "apps/windows/electron-dist/main.cjs"), `--user-data-dir=${userDataDir}`],
+    executablePath,
+    args: ["--no-stdio-init", ...(executablePath ? [] : [path.join(projectRoot, "apps/windows/electron-dist/main.cjs")]), `--user-data-dir=${userDataDir}`],
     chromiumSandbox: false,
     cwd: projectRoot,
     env: {

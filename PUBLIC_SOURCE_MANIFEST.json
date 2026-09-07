@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-07T19:24:20.904Z",
+  "generatedAt": "2026-09-07T19:39:10.026Z",
   "fileCount": 795,
-  "snapshotSha256": "ed3dc3f24db6703780b00f76949871d0064a240afcdf090f5453403f2b1784f2",
+  "snapshotSha256": "0a297cd48f3179e46d92fc483e298163d6766a5014d006a432683a514734933d",
   "files": [
     {
       "path": ".gitattributes",
@@ -1693,8 +1693,8 @@
     },
     {
       "path": "apps/windows/src/App.tsx",
-      "bytes": 174351,
-      "sha256": "34b91d3ea6266800ba2bffa6144ab2e0f5448b4f80ca9a2091db4ba914a31cd4"
+      "bytes": 174531,
+      "sha256": "2ce1d6945768f451b3c0bee26d343d0c050832d83376bea9ffee9fb8969de939"
     },
     {
       "path": "apps/windows/src/App.workspaceConflict.test.tsx",
@@ -2818,13 +2818,13 @@
     },
     {
       "path": "deploy/windows-mac-sync/BUILD_VALIDATION.md",
-      "bytes": 2144,
-      "sha256": "fc610e2f944b4fb81228202801a36ed72f036b1b4031cf992272b2b24a72794d"
+      "bytes": 2656,
+      "sha256": "1db9436716a3d6876307296b16745f8868aa54eda41a3fd104269c9d2df1c5db"
     },
     {
       "path": "deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md",
-      "bytes": 8425,
-      "sha256": "d6cbe4b9eea2e2e37ddf104727ec19ec26683b0522661544595819f486de52f2"
+      "bytes": 8614,
+      "sha256": "76f5024f79ce864d1c64524a22e8bfe8489f26149c806527e1a43166234b23cb"
     },
     {
       "path": "package-lock.json",
@@ -3598,8 +3598,8 @@
     },
     {
       "path": "test_tool/electron_app_smoke.mjs",
-      "bytes": 63047,
-      "sha256": "c8b0c0eac7f64845480a4ad0366f0097c5343d7e2ae2c9abefc502f514f50f11"
+      "bytes": 63481,
+      "sha256": "9ffdd502f6576799abd09defa936d8168538b4e92455b16af69933fc4d854e7b"
     },
     {
       "path": "test_tool/export_public_source.mjs",

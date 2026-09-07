@@ -2752,6 +2752,9 @@ export function App() {
   }
 
   function startDrag(event: PointerEvent<HTMLDivElement>) {
+    // A native block-header drag can otherwise start beneath the moving handle
+    // and cancel pointer capture when a narrow source pane is widened.
+    event.preventDefault();
     draggingRef.current = true;
     window.dispatchEvent(new Event("mathnotes:layout-anchor-start"));
     event.currentTarget.setPointerCapture(event.pointerId);
