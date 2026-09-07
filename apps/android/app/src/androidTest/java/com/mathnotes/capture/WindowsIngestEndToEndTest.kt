@@ -1,7 +1,20 @@
 package com.mathnotes.capture
 
 import android.graphics.Bitmap
+import android.app.job.JobScheduler
+import android.content.ComponentName
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.SystemClock
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Base64
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.BackoffPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.workDataOf
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -22,7 +35,10 @@ import com.mathnotes.capture.storage.CaptureEntity
 import com.mathnotes.capture.storage.CaptureRepository
 import com.mathnotes.capture.storage.CaptureState
 import com.mathnotes.capture.upload.UploadScheduler
+import com.mathnotes.capture.upload.UploadWorker
+import com.mathnotes.capture.upload.hasConnectedUploadNetwork
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -32,6 +48,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -204,6 +221,39 @@ class WindowsIngestEndToEndTest {
             .result
             .get(10, TimeUnit.SECONDS)
         assertEquals(CaptureState.PENDING, repository.find(capture.captureId)?.state)
+        val readiness = awaitRebootWorkReadiness(capture.captureId)
+        File(context.filesDir, "e2e-reboot-before.json").writeText(readiness.toString(2), Charsets.UTF_8)
+    }
+
+    /** Remain inside instrumentation until this capture's real scheduler and receiver are ready. */
+    private suspend fun awaitRebootWorkReadiness(captureId: String): JSONObject {
+        val manager = WorkManager.getInstance(context)
+        val scheduler = context.getSystemService(JobScheduler::class.java)
+        val receiver = ComponentName(context, "androidx.work.impl.background.systemalarm.RescheduleReceiver")
+        val deadline = SystemClock.elapsedRealtime() + 10_000
+        var observed = JSONObject()
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val work = manager.getWorkInfosForUniqueWork(UploadScheduler.workName(captureId))
+                .get(5, TimeUnit.SECONDS).singleOrNull { !it.state.isFinished }
+            val job = work?.let { expected -> scheduler.allPendingJobs.firstOrNull {
+                it.service.className == "androidx.work.impl.background.systemjob.SystemJobService" &&
+                    it.extras.getString("EXTRA_WORK_SPEC_ID") == expected.id.toString()
+            } }
+            val receiverSetting = context.packageManager.getComponentEnabledSetting(receiver)
+            observed = JSONObject().put("captureId", captureId).put("workName", UploadScheduler.workName(captureId))
+                .put("workSpecId", work?.id?.toString() ?: JSONObject.NULL)
+                .put("workState", work?.state?.name ?: JSONObject.NULL)
+                .put("jobId", job?.id ?: JSONObject.NULL)
+                .put("requiresNetwork", job?.requiredNetwork != null)
+                .put("receiverSetting", receiverSetting)
+                .put("receiverEnabled", receiverSetting == PackageManager.COMPONENT_ENABLED_STATE_ENABLED)
+                .put("observedAtEpochMs", System.currentTimeMillis())
+            if (work?.state == WorkInfo.State.ENQUEUED && job != null &&
+                receiverSetting == PackageManager.COMPONENT_ENABLED_STATE_ENABLED) return observed
+            delay(100)
+        }
+        File(context.filesDir, "e2e-reboot-before.json").writeText(observed.toString(2), Charsets.UTF_8)
+        error("The precise reboot capture did not reach scheduler/receiver readiness: $observed")
     }
 
     @Test
@@ -215,6 +265,11 @@ class WindowsIngestEndToEndTest {
 
         assertEquals(202, uploaded.lastHttpStatus)
         assertTrue(File(localPath).isFile)
+        File(context.filesDir, "e2e-reboot-after.json").writeText(JSONObject()
+            .put("captureId", captureId).put("state", uploaded.state).put("attemptCount", uploaded.attemptCount)
+            .put("uploadId", uploaded.remoteUploadId).put("recognitionJobId", uploaded.remoteRecognitionJobId)
+            .put("materialRetained", File(localPath).isFile).put("observedAtEpochMs", System.currentTimeMillis())
+            .toString(2), Charsets.UTF_8)
     }
 
     private suspend fun createCapture(pairing: PairingConfig, label: String): CaptureEntity {
@@ -231,15 +286,100 @@ class WindowsIngestEndToEndTest {
     }
 
     private suspend fun awaitState(captureId: String, expected: String): CaptureEntity {
-        repeat(300) {
+        val deadline = SystemClock.elapsedRealtime() + 30_000
+        var observed = false
+        while (SystemClock.elapsedRealtime() < deadline) {
             val capture = repository.find(captureId) ?: error("Capture disappeared: $captureId")
             if (capture.state == expected) return capture
             if (capture.state in terminalStates && capture.state != expected) {
                 error("Capture stopped in ${capture.state}: ${capture.lastError}")
             }
+            if (!observed && SystemClock.elapsedRealtime() > deadline - 29_000) {
+                recordUploadScheduling(captureId, "waiting")
+                observed = true
+            }
             delay(100)
         }
+        recordUploadScheduling(captureId, "timeout")
         error("Capture $captureId did not reach $expected")
+    }
+
+    @Test
+    fun seedsOfflineUploadWithRealLongWorkManagerBackoff() = runBlocking {
+        repeat(100) { if (!hasConnectedUploadNetwork(context)) return@repeat else delay(100) }
+        assertTrue("The task emulator must actually be offline", !hasConnectedUploadNetwork(context))
+        val cycle = requiredArg("networkCycle")
+        val pairing = pairing()
+        pairingStore.save(pairing)
+        // Adjacent hash colors can quantize to identical JPEG bytes and correctly deduplicate.
+        val capture = createCapture(pairing, if (cycle == "1") "network-first-cycle" else "network-second-cycle")
+        assertTrue("Every network fixture must differ after JPEG compression", repository.captures.first()
+            .none { it.captureId != capture.captureId && it.sha256 == capture.sha256 })
+        val request = OneTimeWorkRequestBuilder<UploadWorker>()
+            .setInputData(workDataOf(UploadWorker.CAPTURE_ID to capture.captureId))
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.HOURS).build()
+        WorkManager.getInstance(context).enqueueUniqueWork(UploadScheduler.workName(capture.captureId), ExistingWorkPolicy.REPLACE, request)
+            .result.get(10, TimeUnit.SECONDS)
+        var info: WorkInfo? = null
+        repeat(100) {
+            info = WorkManager.getInstance(context).getWorkInfoById(request.id).get()
+            if (info?.state == WorkInfo.State.ENQUEUED && info!!.runAttemptCount >= 1) return@repeat
+            delay(100)
+        }
+        assertEquals(WorkInfo.State.ENQUEUED, info?.state)
+        assertEquals(1, info?.runAttemptCount)
+        assertTrue("Must have a real long retry scheduled", info!!.nextScheduleTimeMillis > System.currentTimeMillis() + 30 * 60_000)
+        assertEquals(0, repository.find(capture.captureId)!!.attemptCount)
+        val generation = context.getSharedPreferences("upload_network_wake", Context.MODE_PRIVATE).getString("generation", null)
+        assertNotNull("The real offline worker must register its system PendingIntent", generation)
+        context.getSharedPreferences("e2e_network", Context.MODE_PRIVATE).edit()
+            .putString("capture_$cycle", capture.captureId).commit()
+        File(context.filesDir, "e2e-network-before-$cycle.json").writeText(JSONObject()
+            .put("captureId", capture.captureId).put("workSpecId", request.id.toString())
+            .put("sha256", capture.sha256)
+            .put("workState", info!!.state.name).put("workAttempts", info!!.runAttemptCount)
+            .put("captureAttempts", 0).put("nextScheduledAt", info!!.nextScheduleTimeMillis)
+            .put("observedAt", System.currentTimeMillis()).put("connected", hasConnectedUploadNetwork(context))
+            .put("generation", generation).toString(2), Charsets.UTF_8)
+    }
+
+    @Test
+    fun verifiesUploadWokenByTheRealNetworkAfterProcessExit() = runBlocking {
+        val cycle = requiredArg("networkCycle")
+        val captureId = context.getSharedPreferences("e2e_network", Context.MODE_PRIVATE).getString("capture_$cycle", null)!!
+        val capture = awaitState(captureId, CaptureState.UPLOADED)
+        assertEquals(1, capture.attemptCount)
+        assertNotNull(capture.remoteUploadId)
+        assertTrue(File(capture.localPath).isFile)
+        val work = WorkManager.getInstance(context).getWorkInfosForUniqueWork(UploadScheduler.workName(captureId)).get()
+        assertEquals(1, work.count { it.state == WorkInfo.State.SUCCEEDED })
+        File(context.filesDir, "e2e-network-after-$cycle.json").writeText(JSONObject()
+            .put("captureId", captureId).put("state", capture.state).put("attemptCount", capture.attemptCount)
+            .put("uploadId", capture.remoteUploadId).put("materialRetained", File(capture.localPath).isFile)
+            .put("observedAt", System.currentTimeMillis()).toString(2), Charsets.UTF_8)
+    }
+
+    @Suppress("DEPRECATION")
+    private suspend fun recordUploadScheduling(captureId: String, phase: String) {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        val capabilities = connectivity.activeNetwork?.let(connectivity::getNetworkCapabilities)
+        val work = WorkManager.getInstance(context).getWorkInfosForUniqueWork(UploadScheduler.workName(captureId))
+            .get(5, TimeUnit.SECONDS).firstOrNull()
+        val job = context.getSystemService(JobScheduler::class.java).allPendingJobs.firstOrNull {
+            it.extras.getString("EXTRA_WORK_SPEC_ID") == work?.id?.toString()
+        }
+        val capture = repository.find(captureId)
+        val probe = PairingVerifier().verify(pairing())
+        val observed = JSONObject().put("phase", phase).put("captureId", captureId)
+            .put("observedAtEpochMs", System.currentTimeMillis())
+            .put("captureState", capture?.state).put("captureAttempts", capture?.attemptCount)
+            .put("workSpecId", work?.id?.toString()).put("workState", work?.state?.name)
+            .put("runAttemptCount", work?.runAttemptCount).put("jobId", job?.id)
+            .put("requiredNetwork", job?.requiredNetwork?.toString())
+            .put("connected", connectivity.activeNetworkInfo?.isConnected == true)
+            .put("validated", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
+            .put("pairingProbe", probe.javaClass.simpleName)
+        File(context.filesDir, "e2e-upload-scheduling.jsonl").appendText("$observed\n", Charsets.UTF_8)
     }
 
     private fun pairing(): PairingConfig = PairingConfig(

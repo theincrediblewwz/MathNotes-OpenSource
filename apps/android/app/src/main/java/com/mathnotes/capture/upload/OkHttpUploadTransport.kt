@@ -53,16 +53,13 @@ class OkHttpUploadTransport(
             .build()
 
         return try {
-            val response = client.newCall(request).await()
-            response.use {
-                UploadResponseClassifier.classify(it.code, it.body?.string().orEmpty())
-            }
+            client.newCall(request).awaitOutcome()
         } catch (error: IOException) {
             UploadOutcome.Retryable(null, "连接电脑失败：${error.userSafeMessage()}")
         }
     }
 
-    private suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
+    private suspend fun Call.awaitOutcome(): UploadOutcome = suspendCancellableCoroutine { continuation ->
         continuation.invokeOnCancellation { cancel() }
         enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
@@ -70,7 +67,17 @@ class OkHttpUploadTransport(
             }
 
             override fun onResponse(call: Call, response: Response) {
-                if (continuation.isActive) continuation.resume(response) else response.close()
+                // Keep Call.cancel() attached until the complete receipt has been read, including
+                // slow response bodies after headers arrive. Read on OkHttp's callback thread.
+                response.use {
+                    if (!continuation.isActive) return
+                    try {
+                        val outcome = UploadResponseClassifier.classify(it.code, it.body?.string().orEmpty())
+                        if (continuation.isActive) continuation.resume(outcome)
+                    } catch (error: IOException) {
+                        if (continuation.isActive) continuation.resumeWith(Result.failure(error))
+                    }
+                }
             }
         })
     }

@@ -30,9 +30,11 @@ import type {
 } from "../../core/assistantRemarkStore";
 import { assistantDragMime, readAssistantDragPayload, type AssistantDragPayload } from "../assistantDragPayload";
 import { renderMarkdownPreview } from "./PreviewPane";
+import { SessionRevisionPanel, type SessionRevisionDraft } from "./SessionRevisionPanel";
 
 export type AssistantWorkspaceSubmitInput = {
   mode: AssistantMode;
+  operation?: "session_edit";
   question?: string;
   focus: AssistantRemarkFocus;
 };
@@ -76,6 +78,11 @@ type AssistantWorkspaceProps = {
   answerFontFamily?: string;
   answerFontSize?: number;
   selectionEdit?: AssistantSelectionEditDraft | null;
+  sessionRevision?: SessionRevisionDraft | null;
+  onSessionRevisionInstructionChange?: (value: string) => void;
+  onSessionRevisionGenerate?: () => void;
+  onSessionRevisionApply?: () => void;
+  onSessionRevisionClose?: () => void;
   detached?: boolean;
   onClose: () => void;
   onMinimizeWindow?: () => void;
@@ -155,6 +162,11 @@ export function AssistantWorkspace({
   answerFontFamily,
   answerFontSize,
   selectionEdit = null,
+  sessionRevision = null,
+  onSessionRevisionInstructionChange,
+  onSessionRevisionGenerate,
+  onSessionRevisionApply,
+  onSessionRevisionClose,
   detached = false,
   onClose,
   onMinimizeWindow,
@@ -175,6 +187,7 @@ export function AssistantWorkspace({
   onSelectionUnlock
 }: AssistantWorkspaceProps) {
   const [mode, setMode] = useState<AssistantMode>("explain");
+  const [editWholeSession, setEditWholeSession] = useState(false);
   const [question, setQuestion] = useState("");
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -384,7 +397,11 @@ export function AssistantWorkspace({
       </header>
 
       <div className="assistant-conversation">
-        {selectionEdit ? (
+        {sessionRevision ? (
+          <SessionRevisionPanel draft={sessionRevision} sessionDir={sessionDir}
+            onInstructionChange={onSessionRevisionInstructionChange} onGenerate={onSessionRevisionGenerate}
+            onApply={onSessionRevisionApply} onClose={onSessionRevisionClose} onStop={onCancel} />
+        ) : selectionEdit ? (
           <SelectionEditConversation
             draft={selectionEdit}
             editingReplacement={editingReplacement}
@@ -441,7 +458,7 @@ export function AssistantWorkspace({
         )}
       </div>
 
-      {selectionEdit ? (
+      {sessionRevision ? null : selectionEdit ? (
         <footer className="assistant-selection-footer">
           {selectionEdit.error ? (
             <div className="assistant-selection-error-row">
@@ -508,13 +525,14 @@ export function AssistantWorkspace({
           <div className="assistant-composer-actions">
             <div className="assistant-mode-picker">
               <button aria-expanded={modeMenuOpen} onClick={() => setModeMenuOpen((current) => !current)} type="button">
-                {modeLabels[mode]} <ChevronDown />
+                {editWholeSession ? "修改全文" : modeLabels[mode]} <ChevronDown />
               </button>
               {modeMenuOpen ? (
                 <div className="assistant-mode-menu">
                   {(Object.keys(modeLabels) as AssistantMode[]).map((candidate) => (
-                    <button key={candidate} onClick={() => { setMode(candidate); setModeMenuOpen(false); }} type="button">{modeLabels[candidate]}</button>
+                    <button key={candidate} onClick={() => { setMode(candidate); setEditWholeSession(false); setModeMenuOpen(false); }} type="button">{modeLabels[candidate]}</button>
                   ))}
+                  <button onClick={() => { setEditWholeSession(true); setModeMenuOpen(false); setFocus({ kind: "session", label: "当前笔记" }); }} type="button">修改全文</button>
                 </div>
               ) : null}
             </div>
@@ -539,7 +557,7 @@ export function AssistantWorkspace({
                 className="assistant-send"
                 disabled={!onlineEnabled || !question.trim()}
                 onClick={() => {
-                  onSubmit({ mode, question: question.trim() || undefined, focus });
+                  onSubmit({ mode, question: question.trim() || undefined, focus, ...(editWholeSession ? { operation: "session_edit" as const } : {}) });
                   setQuestion("");
                 }}
                 title={onlineEnabled ? "发送" : "请先在设置中允许在线学习助手"}

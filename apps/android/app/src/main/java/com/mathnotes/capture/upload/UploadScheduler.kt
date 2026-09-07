@@ -2,26 +2,22 @@ package com.mathnotes.capture.upload
 
 import android.content.Context
 import androidx.work.BackoffPolicy
-import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
 import androidx.work.Operation
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 class UploadScheduler(context: Context) {
+    internal val applicationContext = context.applicationContext
     private val workManager = WorkManager.getInstance(context.applicationContext)
 
     fun enqueue(captureId: String, replace: Boolean = false, initialDelayMillis: Long = 0): Operation {
         val requestBuilder = OneTimeWorkRequestBuilder<UploadWorker>()
             .setInputData(Data.Builder().putString(UploadWorker.CAPTURE_ID, captureId).build())
-            .setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
-                    .build()
-            )
+            // WorkManager CONNECTED also requires public Internet validation on newer Android.
+            // A paired computer can be reachable on a LAN without that validation.
             .setBackoffCriteria(
                 BackoffPolicy.EXPONENTIAL,
                 UploadPolicy.INITIAL_BACKOFF_MILLIS,

@@ -1,11 +1,12 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RecognitionProvider } from "@mathnotes/shared";
 import { BlockStore } from "./blockStore";
 import { retryRecognitionJob } from "./recognitionRetry";
 import { readRecognitionJobs, upsertRecognitionJob } from "./recognitionJobLog";
+import { wrapProtectedSpan } from "../common/lockSpan";
 
 describe("retryRecognitionJob", () => {
   let rootDir: string;
@@ -53,6 +54,82 @@ describe("retryRecognitionJob", () => {
 
   afterEach(async () => {
     await rm(rootDir, { recursive: true, force: true });
+  });
+
+  async function successfulTranscript(markdown = "上一次成功识别的正文") {
+    const block = await store.appendMarkdownBlock({ notebookId: "functional_analysis", sessionId: "lecture",
+      source: "ai_transcription", markdown, fromAssets: ["assets/photos/failed.jpg"], now: "2026-09-07T01:00:00Z" });
+    const [job] = await readRecognitionJobs({ rootDir, notebookId: "functional_analysis", sessionId: "lecture" });
+    await upsertRecognitionJob({ rootDir, job: { ...job, status: "succeeded", transcriptBlockId: block.id,
+      timing: { acceptedAt: job.now, completedAt: job.now, totalMs: 1 } } });
+    return block;
+  }
+
+  function retryWith(provider: RecognitionProvider, abortSignal?: AbortSignal) {
+    return retryRecognitionJob({ rootDir, store, provider, notebookId: "functional_analysis", sessionId: "lecture",
+      jobId: "recognition_0001", now: "2026-09-07T02:00:00Z", abortSignal });
+  }
+
+  it("calls the provider again for a completed job, stays running during the delay, and updates the same bound block only after completion", async () => {
+    const block = await successfulTranscript();
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const transcribe = vi.fn(async (input) => {
+      expect(input.imagePaths).toEqual([join(rootDir, "notebooks/functional_analysis/sessions/lecture/assets/photos/failed.jpg")]);
+      input.onEvent({ type: "stdout", text: "正在重新识别的流式草稿" });
+      await pending;
+      return { markdown: "新的识别正文\n\n[[mathnotes:source-image]]" };
+    });
+    const provider: RecognitionProvider = { name: "fake-delayed", transcribe: async () => { throw new Error("Expected streaming path"); }, transcribeWithEvents: transcribe };
+    const rerun = retryWith(provider);
+    await vi.waitFor(() => expect(transcribe).toHaveBeenCalledTimes(1));
+    await expect(retryWith(provider)).rejects.toThrow("仍在进行中");
+    const [running] = await readRecognitionJobs({ rootDir, notebookId: "functional_analysis", sessionId: "lecture", recoverRunning: false });
+    expect(running).toMatchObject({ status: "running", attempts: 2, transcriptBlockId: block.id });
+    expect(running.timing?.completedAt).toBeUndefined();
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", block.id)).toBe("上一次成功识别的正文");
+    release();
+    expect(await rerun).toMatchObject({ status: "succeeded", attempts: 2, transcriptBlockId: block.id, hasSuccessfulTranscript: true });
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", block.id)).toBe("新的识别正文\n\n![识别照片（已处理）](../assets/photos/failed.jpg)");
+    expect((await store.readSession("functional_analysis", "lecture")).blocks.filter(item => item.source === "ai_transcription")).toHaveLength(1);
+  });
+
+  it("preserves a successful transcript through repeated provider failures", async () => {
+    const block = await successfulTranscript();
+    const transcribe = vi.fn(async () => { throw new Error("synthetic unavailable"); });
+    const provider: RecognitionProvider = { name: "fake-failure", transcribe };
+    expect(await retryWith(provider)).toMatchObject({ status: "failed", hasSuccessfulTranscript: true });
+    expect(await retryWith(provider)).toMatchObject({ status: "failed", attempts: 3, hasSuccessfulTranscript: true });
+    expect(transcribe).toHaveBeenCalledTimes(2);
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", block.id)).toBe("上一次成功识别的正文");
+  });
+
+  it.each(["block", "span"])("rejects the existing %s lock before calling the provider", async (kind) => {
+    const original = kind === "span" ? await wrapProtectedSpan({ markdown: "已确认定义", id: "protected-definition" }) : "已确认整块";
+    const block = await successfulTranscript(original);
+    if (kind === "block") await store.setMarkdownBlockLock({ notebookId: "functional_analysis", sessionId: "lecture", blockId: block.id, locked: true, now: "2026-09-07T01:01:00Z" });
+    else await store.updateMarkdownBlock({ notebookId: "functional_analysis", sessionId: "lecture", blockId: block.id, markdown: original, now: "2026-09-07T01:01:00Z" });
+    const transcribe = vi.fn(async () => ({ markdown: "不应执行" }));
+    await expect(retryWith({ name: "fake", transcribe })).rejects.toThrow("已锁定");
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", block.id)).toBe(original);
+  });
+
+  it.each(["locked", "cancelled"])("keeps the old transcript when the running retry is %s before the provider returns", async (action) => {
+    const block = await successfulTranscript();
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const transcribe = vi.fn(async () => { await pending; return { markdown: "不能写回的新正文" }; });
+    const controller = new AbortController();
+    const rerun = retryWith({ name: "fake-delayed", transcribe }, controller.signal);
+    await vi.waitFor(() => expect(transcribe).toHaveBeenCalledTimes(1));
+    if (action === "locked") await store.setMarkdownBlockLock({ notebookId: "functional_analysis", sessionId: "lecture", blockId: block.id, locked: true, now: "2026-09-07T02:00:01Z" });
+    else controller.abort();
+    release();
+    const result = await rerun;
+    expect(result.status).toBe(action === "locked" ? "failed" : "cancelled");
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", block.id)).toBe("上一次成功识别的正文");
+    if (action === "locked") expect((await store.readSession("functional_analysis", "lecture")).locks).toHaveLength(1);
   });
 
   it("retries a failed job and writes the transcript after its image block", async () => {

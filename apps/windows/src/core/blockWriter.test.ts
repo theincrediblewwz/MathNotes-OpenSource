@@ -48,4 +48,32 @@ describe("BlockWriter", () => {
       path: "blocks/0001_ai_transcript.md"
     });
   });
+
+  it("binds the actual processed photo during both initial and streamed transcript writes", async () => {
+    const block = await writer.writeAiTranscript({
+      notebookId: "functional_analysis", sessionId: "lecture", now: "2026-09-07T00:00:00Z",
+      markdown: "[图片：三角形]\n\n[[mathnotes:source-image]]",
+      fromAssets: ["assets/photos/processed-mask.png"]
+    });
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", block.id)).toBe(
+      "[图片：三角形]\n\n![识别照片（已处理）](../assets/photos/processed-mask.png)"
+    );
+    await writer.updateAiTranscript({ notebookId: "functional_analysis", sessionId: "lecture", blockId: block.id,
+      markdown: "[图片：三角形 ABC]\n\n[[mathnotes:source-image]]", now: "2026-09-07T00:01:00Z" });
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", block.id)).toContain(
+      "![识别照片（已处理）](../assets/photos/processed-mask.png)"
+    );
+    expect((await store.readSession("functional_analysis", "lecture")).blocks).toHaveLength(1);
+  });
+
+  it("binds the recognized PDF page image, never the whole PDF or an unrelated source", async () => {
+    const block = await writer.writeAiTranscript({
+      notebookId: "functional_analysis", sessionId: "lecture", now: "2026-09-07T00:00:00Z",
+      markdown: "图示\n\n[[mathnotes:source-image]]", fromAssets: ["assets/documents/lecture.pdf"],
+      sourcePageNumber: 3, sourcePageImagePath: "assets/pdf-pages/lecture/page-3.png"
+    });
+    expect(await store.readMarkdownBlock("functional_analysis", "lecture", block.id)).toContain(
+      "![识别照片（已处理）](../assets/pdf-pages/lecture/page-3.png)"
+    );
+  });
 });

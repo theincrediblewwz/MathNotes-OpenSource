@@ -23,6 +23,28 @@ function renderWorkspace(overrides: Partial<ComponentProps<typeof AssistantWorks
 }
 
 describe("AssistantWorkspace", () => {
+  it("routes explicit whole-note requests and keeps locked suggestions separate from applied changes", () => {
+    const props = renderWorkspace();
+    fireEvent.click(screen.getByRole("button", { name: "解读" }));
+    fireEvent.click(screen.getByRole("button", { name: "修改全文" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "与笔记对话" }), { target: { value: "统一符号" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(props.onSubmit).toHaveBeenCalledWith(expect.objectContaining({ operation: "session_edit", question: "统一符号", focus: { kind: "session", label: "当前笔记" } }));
+  });
+
+  it("shows a whole-session preview and only applies after a click", () => {
+    const onApply = vi.fn();
+    renderWorkspace({ sessionRevision: { instruction: "整理全文", status: "idle", proposal: {
+      id: "session_1", notebookId: "book", sessionId: "lesson", instruction: "整理全文", summary: "澄清概念", status: "proposed", createdAt: "2026-09-07",
+      changes: [{ blockId: "0001", title: "第一块", before: "旧句", markdown: "新句", summary: "统一用词" }],
+      lockedSuggestions: [{ blockId: "0002", title: "第二块", suggestion: "原本打算补充前提" }]
+    } }, onSessionRevisionApply: onApply });
+    expect(screen.getByText("因为以下块已被锁定，未能进行更改")).toBeTruthy();
+    expect(screen.getByText("原本打算补充前提")).toBeTruthy();
+    expect(onApply).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "应用全文修改" }));
+    expect(onApply).toHaveBeenCalledTimes(1);
+  });
   it("keeps provider failures visible without exposing provider or context-budget internals", () => {
     renderWorkspace({ error: "400 Param Incorrect" });
 

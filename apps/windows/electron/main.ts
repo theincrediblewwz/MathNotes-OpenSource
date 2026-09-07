@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BlockStore } from "../src/core/blockStore";
+import { SessionAiRevisionService } from "../src/core/sessionAiRevision";
 import { BlockWriter } from "../src/core/blockWriter";
 import { buildConnectionDiagnostics } from "../src/core/connectionDiagnostics";
 import { IngestServer } from "../src/core/ingestServer";
@@ -26,7 +27,7 @@ import { readIngestIdentity, writeIngestIdentity } from "../src/core/ingestIdent
 import { exportSessionMarkdown } from "../src/core/exporter";
 import { choosePreferredIngestHost, chooseRefreshedIngestHost, isUsableIngestHost, listIPv4AddressCandidates } from "../src/core/networkAddress";
 import { PairingManager, validatePairingTokenUpdate } from "../src/core/pairingManager";
-import { type IngestPhotoResult, PhotoIngestPipeline } from "../src/core/photoIngestPipeline";
+import { type IngestPhotoResult, PhotoIngestPipeline, readAcceptedPhotoUpload } from "../src/core/photoIngestPipeline";
 import { buildCompanionSessionSnapshot, readCompanionAsset } from "../src/core/companionReadService";
 import { detectLocalPhotoMimeType } from "../src/core/localPhotoImport";
 import { checkProviderHealth } from "../src/core/providerHealth";
@@ -42,7 +43,7 @@ import { CodexRuntimeManager, type CodexRuntimeState as CoreCodexRuntimeState } 
 import { createAssistantProviderFromConfig, createRecognitionProviderFromConfig } from "../src/core/recognitionProviderFactory";
 import { runAssistantTask, type AssistantTaskRuntimeEvent } from "../src/core/assistantTask";
 import { AssistantRemarkStore } from "../src/core/assistantRemarkStore";
-import { RecognitionQueue, type RecognitionJob, type RecognitionRuntimeEvent as CoreRecognitionRuntimeEvent } from "../src/core/recognitionQueue";
+import { RecognitionQueue, recognitionTaskKey, type RecognitionJob, type RecognitionRuntimeEvent as CoreRecognitionRuntimeEvent } from "../src/core/recognitionQueue";
 import { buildRecognitionContextForJob } from "../src/core/sessionRecognitionContext";
 import { retryRecognitionJob } from "../src/core/recognitionRetry";
 import { recognitionJobToTaskSummary, upsertRecognitionJob } from "../src/core/recognitionJobLog";
@@ -156,12 +157,14 @@ let deviceIdentityService: DeviceIdentityService | undefined;
 let activeDevicePairingChallenge: PairingChallenge | undefined;
 let ingestState: IngestServerState = { running: false };
 let mathNotesCore: MathNotesCore | undefined;
+let initialCoreStartup: Promise<void> | undefined;
 let currentNotebookId = defaultNotebookId;
 let currentSessionId = defaultSessionId;
 let cachedUserSettings: UserSettings | undefined;
 let defaultStoreInitialization: { rootDir: string; promise: Promise<void> } | undefined;
 let blockOrganizeRuntime: { rootDir: string; service: SessionBlockOrganizeService } | undefined;
 let selectionEditRuntime: { rootDir: string; service: SessionSelectionEditService } | undefined;
+let sessionRevisionRuntime: { rootDir: string; service: SessionAiRevisionService } | undefined;
 let activeRecognitionPipeline: { rootDir: string; generation: number; promise: Promise<PhotoIngestPipeline> } | undefined;
 let recognitionPipelineGeneration = 0;
 const codexRuntimeManager = new CodexRuntimeManager();
@@ -255,6 +258,7 @@ function createWindow() {
     ? path.join(__dirname, "../assets/mathnotes.ico")
     : path.join(__dirname, "../assets/mathnotes.png");
   const window = new BrowserWindow({
+    show: false,
     width: 1280,
     height: 911,
     minWidth: 960,
@@ -270,6 +274,8 @@ function createWindow() {
       sandbox: true
     }
   });
+  // Show the first painted frame rather than exposing an empty renderer.
+  window.once("ready-to-show", () => window.show());
   const distIndexPath = path.join(__dirname, "../dist/index.html");
   let shouldFallbackFromDevServer = Boolean(devServerUrl);
 
@@ -395,8 +401,11 @@ app.whenReady().then(async () => {
       ]
     }
   );
-  await mathNotesCore.start();
+  // The reader can load its local store while phone connectivity initializes.
+  // Both paths share ensureDefaultStore's in-flight initialization promise.
+  initialCoreStartup = mathNotesCore.start();
   createWindow();
+  await initialCoreStartup;
   void syncCodexRuntimeWithProviderConfig();
 
   app.on("activate", () => {
@@ -565,13 +574,13 @@ function registerIpcHandlers() {
     return cachedUserSettings;
   });
 
-  ipcMain.handle("mathnotes:load-connection-diagnostics", async () =>
-    buildConnectionDiagnostics({
+  ipcMain.handle("mathnotes:load-connection-diagnostics", async () => {
+    await initialCoreStartup;
+    return buildConnectionDiagnostics({
       hasNativeApi: true,
       ingestServer: ingestState
-    })
-  );
-
+    });
+  });
   ipcMain.handle("mathnotes:load-provider-config", async () =>
     readProviderConfig({
       rootDir: notesRootDir()
@@ -741,10 +750,14 @@ function registerIpcHandlers() {
   );
 
   ipcMain.handle("mathnotes:retry-recognition-task", async (_event, input: RetryRecognitionTaskInput) => {
-    const store = await ensureDefaultStore();
+    const taskKey = recognitionTaskKey(input, input.recognitionJobId);
+    if (activeRecognitionCancels.has(taskKey)) {
+      throw new Error("该识别任务仍在进行中，请等待完成或中断后重试。");
+    }
     const abortController = new AbortController();
-    activeRecognitionCancels.set(input.recognitionJobId, () => abortController.abort());
+    activeRecognitionCancels.set(taskKey, () => abortController.abort());
     try {
+      const store = await ensureDefaultStore();
       const job = await retryRecognitionJob({
         rootDir: notesRootDir(),
         store,
@@ -759,17 +772,16 @@ function registerIpcHandlers() {
       });
       return recognitionJobToTaskSummary(job);
     } finally {
-      activeRecognitionCancels.delete(input.recognitionJobId);
+      activeRecognitionCancels.delete(taskKey);
     }
   });
 
   ipcMain.handle("mathnotes:cancel-recognition-task", async (_event, input: CancelRecognitionTaskInput) => {
-    const cancel = activeRecognitionCancels.get(input.recognitionJobId);
+    const cancel = activeRecognitionCancels.get(recognitionTaskKey(input, input.recognitionJobId));
     if (!cancel) {
       throw new Error(`当前没有正在运行的识别任务：${input.recognitionJobId}`);
     }
     cancel();
-    activeRecognitionCancels.delete(input.recognitionJobId);
     const task = await waitForRecognitionTaskSummary(input);
     return task ?? {
       id: input.recognitionJobId,
@@ -936,6 +948,26 @@ function registerIpcHandlers() {
       selection: { from: input.from, to: input.to, selectedText: input.selectedText },
       instruction: input.instruction
     });
+  });
+
+  ipcMain.handle("mathnotes:propose-session-revision", async (_event, input: { notebookId: string; sessionId: string; taskId: string; instruction: string }) => {
+    if (!(await ensureUserSettings()).assistantOnlineEnabled) throw new Error("学习助手在线调用已在设置中关闭。");
+    if (activeAssistantCancels.has(input.taskId)) throw new Error("修改任务已在运行。");
+    await ensureDefaultStore();
+    const controller = new AbortController();
+    activeAssistantCancels.set(input.taskId, () => controller.abort());
+    try { return await ensureSessionRevisionService().propose({ ...input, abortSignal: controller.signal }); }
+    finally { activeAssistantCancels.delete(input.taskId); }
+  });
+  ipcMain.handle("mathnotes:apply-session-revision", async (_event, input: { notebookId: string; sessionId: string; proposalId: string }) => {
+    const store = await ensureDefaultStore();
+    const proposal = await ensureSessionRevisionService().apply(input);
+    ingestServer?.publishCompanionChange(input.notebookId, input.sessionId);
+    return { proposal, document: await loadSessionDocumentFromStore({ store, ...input }) };
+  });
+  ipcMain.handle("mathnotes:cancel-session-revision", async (_event, input: { notebookId: string; sessionId: string; proposalId: string }) => {
+    await ensureDefaultStore();
+    return ensureSessionRevisionService().cancel(input);
   });
 
   ipcMain.handle("mathnotes:apply-selection-edit", async (_event, input: SelectionEditProposalCommand) => {
@@ -1318,7 +1350,10 @@ function registerIpcHandlers() {
     };
   });
 
-  ipcMain.handle("mathnotes:load-ingest-server-state", async () => refreshDevicePairingChallengeInternal(false));
+  ipcMain.handle("mathnotes:load-ingest-server-state", async () => {
+    await initialCoreStartup;
+    return refreshDevicePairingChallengeInternal(false);
+  });
 
   ipcMain.handle("mathnotes:start-ingest-server", async () => startIngestServerInternal());
 
@@ -1567,9 +1602,9 @@ async function createActiveRecognitionPipeline(store: BlockStore): Promise<Photo
     buildContext: (job) => buildRecognitionContextForJob(store, job),
     onJobChanged: (job) => {
       if (job.status === "running") {
-        activeRecognitionCancels.set(job.id, () => queue.cancel(job.id));
+        activeRecognitionCancels.set(recognitionTaskKey(job, job.id), () => queue.cancel(job.id, job));
       } else {
-        activeRecognitionCancels.delete(job.id);
+        activeRecognitionCancels.delete(recognitionTaskKey(job, job.id));
       }
       return upsertRecognitionJob({
         rootDir: store.getRootDir(),
@@ -1813,6 +1848,7 @@ function createIngestServer(
     getCompanionAsset: (notebookId, sessionId, assetPath) =>
       readCompanionAsset({ store, notebookId, sessionId, assetPath }),
     createPipeline: async () => getActiveRecognitionPipeline(store),
+    getUploadStatus: (uploadId, target) => readAcceptedPhotoUpload(store, uploadId, target),
     acceptPdf: (input) => pdfPipeline.acceptPdf(input),
     onUploadActivity: notifyCompanionUploadActivity,
     pwaStaticRootDir: bundledPwaStaticRootDir(),
@@ -1880,9 +1916,9 @@ async function createPdfRecognitionRunner(store: BlockStore, concurrency: number
     maxConcurrency: 4,
     onJobChanged: async (job) => {
       if (job.status === "running") {
-        activeRecognitionCancels.set(job.id, () => runner.cancelJob(job.id));
+        activeRecognitionCancels.set(recognitionTaskKey(job, job.id), () => runner.cancelJob(job.id));
       } else {
-        activeRecognitionCancels.delete(job.id);
+        activeRecognitionCancels.delete(recognitionTaskKey(job, job.id));
       }
       notifyRecognitionJobChanged(job);
     },
@@ -2024,7 +2060,7 @@ async function ensureDefaultStore(): Promise<BlockStore> {
 function ensureSelectionEditService(): SessionSelectionEditService {
   const rootDir = notesRootDir();
   if (!selectionEditRuntime || selectionEditRuntime.rootDir !== rootDir) {
-    const editor = new SessionEditService(rootDir);
+    const editor = new SessionEditService(rootDir, undefined, new BlockStore(rootDir).getWriteCoordinator());
     selectionEditRuntime = {
       rootDir,
       service: new SessionSelectionEditService(
@@ -2035,6 +2071,14 @@ function ensureSelectionEditService(): SessionSelectionEditService {
     };
   }
   return selectionEditRuntime.service;
+}
+
+function ensureSessionRevisionService(): SessionAiRevisionService {
+  const rootDir = notesRootDir();
+  if (!sessionRevisionRuntime || sessionRevisionRuntime.rootDir !== rootDir) {
+    sessionRevisionRuntime = { rootDir, service: new SessionAiRevisionService(new BlockStore(rootDir), () => createAssistantProviderForCurrentRuntime()) };
+  }
+  return sessionRevisionRuntime.service;
 }
 
 async function initializeDefaultStore(rootDir: string): Promise<void> {
@@ -2211,7 +2255,7 @@ function ensureBlockOrganizeService(): SessionBlockOrganizeService {
   if (!blockOrganizeRuntime || blockOrganizeRuntime.rootDir !== rootDir) {
     blockOrganizeRuntime = {
       rootDir,
-      service: new SessionBlockOrganizeService(rootDir)
+      service: new SessionBlockOrganizeService(rootDir, undefined, new BlockStore(rootDir).getWriteCoordinator())
     };
   }
   return blockOrganizeRuntime.service;

@@ -142,6 +142,8 @@ class UploadTransportTest {
             .get()
         assertEquals(1, scheduled.size)
         workManager.cancelUniqueWork(UploadScheduler.workName(capture.captureId)).result.get()
+        // The explicit worker below must now be due; production workers honor nextAttemptAt.
+        repository.markFailure(capture.captureId, CaptureState.RETRYABLE, null, "test releases scheduled delay", null)
 
         val worker = TestListenableWorkerBuilder<UploadWorker>(
             context = context,

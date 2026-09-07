@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -12,6 +12,7 @@ if (outputRoot !== allowedOutputParent && !outputRoot.startsWith(`${allowedOutpu
 }
 
 const exactRootFiles = new Set([
+  ".gitattributes",
   ".gitignore",
   "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
@@ -60,14 +61,31 @@ const selected = tracked.filter((relativePath) => {
 await rm(outputRoot, { recursive: true, force: true });
 await mkdir(outputRoot, { recursive: true });
 const manifestFiles = [];
+// Export committed blobs, not checkout bytes whose CRLF conversion can differ
+// between Windows and macOS. The manifest must describe the published source.
+const objects = spawnSync("git", ["cat-file", "--batch"], {
+  cwd: projectRoot,
+  input: selected.map((relativePath) => `${commit}:${relativePath}\n`).join(""),
+  maxBuffer: 256 * 1024 * 1024,
+  windowsHide: true
+});
+if (objects.status !== 0) throw new Error("Unable to read committed public-source blobs.");
+let offset = 0;
 for (const relativePath of selected) {
-  const source = path.join(projectRoot, relativePath);
-  const metadata = await stat(source);
-  if (!metadata.isFile()) throw new Error(`Only regular files may be exported: ${relativePath}`);
+  const end = objects.stdout.indexOf(0x0a, offset);
+  if (end < 0) throw new Error(`Missing committed blob header: ${relativePath}`);
+  const header = objects.stdout.subarray(offset, end).toString("utf8");
+  const match = header.match(/^[a-f0-9]+ blob (\d+)$/);
+  if (!match) throw new Error(`Only committed blobs may be exported: ${relativePath}`);
+  const size = Number(match[1]);
+  const bytes = objects.stdout.subarray(end + 1, end + 1 + size);
+  offset = end + 1 + size + 1;
+  if (bytes.length !== size || objects.stdout[offset - 1] !== 0x0a) {
+    throw new Error(`Incomplete committed blob: ${relativePath}`);
+  }
   const destination = path.join(outputRoot, relativePath);
   await mkdir(path.dirname(destination), { recursive: true });
-  await copyFile(source, destination);
-  const bytes = await readFile(destination);
+  await writeFile(destination, bytes);
   manifestFiles.push({ path: relativePath, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });
 }
 

@@ -35,26 +35,16 @@ type NotebookMetadata = {
 };
 
 export async function readNotesCatalog(args: { rootDir: string }): Promise<NotesCatalog> {
-  const notebooks = await listNotebooks(args);
-  return {
-    notebooks: await Promise.all(notebooks.map(async (notebook) => ({
-      ...notebook,
-      sessions: await listNotebookSessions({ rootDir: args.rootDir, notebookId: notebook.notebookId })
-    })))
-  };
-}
-
-export async function listNotebooks(args: { rootDir: string }): Promise<NotebookSummary[]> {
   const notebooksDir = join(args.rootDir, "notebooks");
   let entries;
   try {
     entries = await readdir(notebooksDir, { withFileTypes: true });
   } catch (error) {
-    if (isMissingFile(error)) return [];
+    if (isMissingFile(error)) return { notebooks: [] };
     throw error;
   }
 
-  const notebooks: NotebookSummary[] = [];
+  const notebooks: NotebookCatalogEntry[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const sessions = await listNotebookSessions({ rootDir: args.rootDir, notebookId: entry.name });
@@ -64,12 +54,18 @@ export async function listNotebooks(args: { rootDir: string }): Promise<Notebook
       notebookId: entry.name,
       title: metadata?.title || entry.name,
       sessionCount: sessions.length,
+      sessions,
       createdAt: metadata?.createdAt || sessions.at(-1)?.createdAt || "",
       updatedAt: [metadata?.updatedAt, newestSession?.updatedAt].filter(Boolean).sort().at(-1) || ""
     });
   }
 
-  return notebooks.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return { notebooks: notebooks.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)) };
+}
+
+export async function listNotebooks(args: { rootDir: string }): Promise<NotebookSummary[]> {
+  const catalog = await readNotesCatalog(args);
+  return catalog.notebooks.map(({ sessions: _sessions, ...notebook }) => notebook);
 }
 
 export async function createNotebook(args: {

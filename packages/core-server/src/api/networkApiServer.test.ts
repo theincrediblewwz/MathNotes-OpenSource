@@ -180,6 +180,57 @@ describe("NetworkApiServer", () => {
     });
   });
 
+  it("reads a scoped upload receipt without activating the recognition provider", async () => {
+    let providerStarts = 0;
+    const queried: unknown[] = [];
+    const receipt: IngestPhotoResult = {
+      uploadId: "upload-finished", notebookId: "analysis", sessionId: "lecture", originalName: "processed.png",
+      mimeType: "image/png", sha256: "b".repeat(64), assetPath: "assets/photos/processed.png", imageBlockId: "0002",
+      transcriptBlockId: "0003", recognitionJobId: "recognition-finished", recognitionStatus: "succeeded",
+      receivedAt: "2026-09-07T00:00:00Z", duplicate: false
+    };
+    const server = new NetworkApiServer({
+      host: "127.0.0.1", port: 0, token: "test-token",
+      createPipeline: async () => { providerStarts += 1; throw new Error("Provider is not configured"); },
+      getUploadStatus: async (id, target) => { queried.push({ id, target }); return receipt; },
+      getPairingTargets: async () => [{ notebookId: "analysis", sessionId: "lecture", title: "Lecture" }]
+    });
+    servers.push(server);
+    const url = await startAtFetchSafePort(server), headers = { authorization: "Bearer test-token" };
+    const catalog = await fetch(`${url}/api/v1/pairing/verify`, { headers });
+    expect((await catalog.json()).capabilities.recognition).toEqual({ status: true, retry: false });
+    const result = await fetch(`${url}/api/v1/uploads/status?uploadId=upload-finished&notebookId=analysis&sessionId=lecture`, { headers });
+    expect(result.status).toBe(200);
+    expect(await result.json()).toMatchObject({ notebookId: "analysis", sessionId: "lecture", sha256: "b".repeat(64), mimeType: "image/png", originalName: "processed.png", transcriptBlockId: "0003", recognitionStatus: "succeeded" });
+    expect(queried).toEqual([{ id: "upload-finished", target: { notebookId: "analysis", sessionId: "lecture" } }]);
+    expect(providerStarts).toBe(0);
+    expect((await fetch(`${url}/api/v1/uploads/status?uploadId=upload-finished`)).status).toBe(401);
+    expect(queried).toHaveLength(1);
+  });
+
+  it("does not expose upload metadata for a removed or mismatched note", async () => {
+    let reads = 0;
+    const server = new NetworkApiServer({
+      host: "127.0.0.1", port: 0, token: "test-token",
+      getUploadStatus: async () => {
+        reads += 1;
+        return { uploadId: "shared-id", notebookId: "private", sessionId: "another", originalName: "hidden.png",
+          mimeType: "image/png", sha256: "c".repeat(64), assetPath: "assets/photos/hidden.png", imageBlockId: "0002",
+          recognitionJobId: "job", recognitionStatus: "succeeded", receivedAt: "now", duplicate: false };
+      },
+      getPairingTargets: async () => [{ notebookId: "analysis", sessionId: "lecture", title: "Lecture" }]
+    });
+    servers.push(server);
+    const url = await startAtFetchSafePort(server), headers = { authorization: "Bearer test-token" };
+    const forbidden = await fetch(`${url}/api/v1/uploads/status?uploadId=shared-id&notebookId=private&sessionId=another`, { headers });
+    expect(forbidden.status).toBe(404); expect(reads).toBe(0);
+    for (const query of ["&notebookId=analysis&sessionId=lecture", ""]) {
+      const mismatch = await fetch(`${url}/api/v1/uploads/status?uploadId=shared-id${query}`, { headers });
+      expect(mismatch.status).toBe(404);
+      expect(await mismatch.text()).not.toContain("hidden.png");
+    }
+  });
+
   it("rolls back its event subscription and listener when binding fails", async () => {
     const occupied = createServer();
     await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve));

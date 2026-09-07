@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   type ImageTransformSidecar,
@@ -14,6 +15,21 @@ import { parseProtectedSpans, sha256Text } from "../common/lockSpan";
 import { validateAiMarkdownUpdate } from "../common/lockValidation";
 
 const appendWrites = new SessionWriteCoordinator();
+
+function desktopWriteScope(rootDir: string, notebookId: string): string {
+  const root = resolve(rootDir);
+  return `${process.platform === "win32" ? root.toLowerCase() : root}\0${notebookId}`;
+}
+
+class DesktopSessionWriteCoordinator extends SessionWriteCoordinator {
+  constructor(private readonly rootDir: string) { super(); }
+  override run<T>(notebookId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
+    return appendWrites.run(desktopWriteScope(this.rootDir, notebookId), sessionId, operation);
+  }
+  override runMany<T>(sessions: readonly { notebookId: string; sessionId: string }[], operation: () => Promise<T>): Promise<T> {
+    return appendWrites.runMany(sessions.map((session) => ({ ...session, notebookId: desktopWriteScope(this.rootDir, session.notebookId) })), operation);
+  }
+}
 
 export type CreateSessionArgs = {
   notebookId: string;
@@ -301,6 +317,74 @@ export class BlockStore {
     });
   }
 
+  /** Publish all AI replacements with a single manifest rename. Old files remain recoverable. */
+  async applySessionAiRevision(args: {
+    notebookId: string;
+    sessionId: string;
+    proposalId: string;
+    baseSessionHash: string;
+    baseMarkdownHashes: Record<string, string>;
+    updates: Array<{ blockId: string; markdown: string }>;
+    now: string;
+  }): Promise<void> {
+    return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
+      if (!/^session_[0-9a-f-]{36}$/.test(args.proposalId)) throw new Error("invalid_proposal");
+      const session = await this.readSession(args.notebookId, args.sessionId);
+      if (args.updates.length === 0) return;
+      // Retry safely when the manifest committed but persisting the proposal status failed.
+      if (args.updates.every((update) => session.blocks.some((block) =>
+        block.id === update.blockId && basename(block.path).startsWith(`${block.id}_${args.proposalId}_`)))) {
+        const applied = await Promise.all(args.updates.map(async (update) => {
+          const { block } = requireMarkdownBlock(session, update.blockId);
+          return await readFile(join(this.sessionDir(args.notebookId, args.sessionId), block.path), "utf8") === update.markdown;
+        }));
+        if (applied.every(Boolean)) return;
+      }
+      if (await sha256Text(JSON.stringify(session)) !== args.baseSessionHash) throw new Error("revision_conflict");
+      const sessionDir = this.sessionDir(args.notebookId, args.sessionId);
+      const before = new Map<string, string>();
+      for (const block of session.blocks.filter((candidate) => candidate.type === "markdown")) {
+        const markdown = await readFile(join(sessionDir, block.path), "utf8");
+        if (await sha256Text(markdown) !== args.baseMarkdownHashes[block.id]) throw new Error("revision_conflict");
+        before.set(block.id, markdown);
+      }
+      const seen = new Set<string>();
+      for (const update of args.updates) {
+        if (seen.has(update.blockId)) throw new Error("duplicate_block");
+        seen.add(update.blockId);
+        const { block } = requireMarkdownBlock(session, update.blockId);
+        if (block.status === "locked" || block.readonly || !["user", "user_revision", "mixed", "ai_transcription"].includes(block.source)) {
+          throw new Error("block_locked");
+        }
+        const validation = await validateAiMarkdownUpdate({
+          blockId: block.id, beforeMarkdown: before.get(block.id)!, afterMarkdown: update.markdown, locks: session.locks
+        });
+        if (!validation.ok) throw new Error(`AI update rejected: ${validation.reason}`);
+      }
+      const createdPaths: string[] = [];
+      const attemptId = randomUUID();
+      try {
+        for (const update of args.updates) {
+          const { block } = requireMarkdownBlock(session, update.blockId);
+          // Keep the same parent so relative image references keep their meaning.
+          const nextPath = join(dirname(block.path), `${block.id}_${args.proposalId}_${attemptId}.md`).replace(/\\/g, "/");
+          const target = join(sessionDir, nextPath);
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, update.markdown, { encoding: "utf8", flag: "wx" });
+          createdPaths.push(target);
+          block.path = nextPath;
+          block.updatedAt = args.now;
+          session.locks = syncProtectedSpanLocks({ blockId: block.id, existingLocks: session.locks, markdown: update.markdown, now: args.now });
+        }
+        session.updatedAt = args.now;
+        await this.writeSession(args.notebookId, args.sessionId, session);
+      } catch (error) {
+        await Promise.all(createdPaths.map((target) => rm(target, { force: true })));
+        throw error;
+      }
+    });
+  }
+
   async setMarkdownBlockLock(args: SetMarkdownBlockLockArgs): Promise<BlockRef> {
     return appendWrites.run(this.writeScope(args.notebookId), args.sessionId, async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
@@ -475,9 +559,13 @@ export class BlockStore {
     return this.rootDir;
   }
 
+  /** Core adapters must share the same root-scoped queue as desktop lock/save operations. */
+  getWriteCoordinator(): SessionWriteCoordinator {
+    return new DesktopSessionWriteCoordinator(this.rootDir);
+  }
+
   private writeScope(notebookId: string): string {
-    const normalizedRoot = resolve(this.rootDir);
-    return `${process.platform === "win32" ? normalizedRoot.toLowerCase() : normalizedRoot}\0${notebookId}`;
+    return desktopWriteScope(this.rootDir, notebookId);
   }
 
   private async writeSession(notebookId: string, sessionId: string, session: SessionRecord): Promise<void> {

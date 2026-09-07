@@ -40,6 +40,7 @@ type PreviewPaneProps = {
   forceStatic?: boolean;
   sessionDir?: string;
   onLocateSource: (location: PreviewSourceLocationInput) => void;
+  onAssetPreview?: (reference: { target: string }) => void;
   onHover: (event: MouseEvent<HTMLElement>, block: RenderBlock, location: PreviewSourceLocationInput) => void;
   onLeave: () => void;
 };
@@ -170,8 +171,15 @@ markdownParser.renderer.rules.image = (tokens, index, options, env, self) => {
   const token = tokens[index];
   const srcIndex = token.attrIndex("src");
   if (srcIndex >= 0 && token.attrs) {
+    const asset = resolveSessionAssetPreview({ sessionDir: env.sessionDir, target: token.attrs[srcIndex][1] });
+    if (asset) {
+      token.attrSet("data-session-asset", asset.assetPath.split("/").map(encodeURIComponent).join("/"));
+      token.attrSet("tabindex", "0");
+      token.attrSet("title", "点击放大照片");
+    }
     token.attrs[srcIndex][1] = resolvePreviewImageSrc(token.attrs[srcIndex][1], env.sessionDir);
   }
+  token.attrSet("alt", token.content);
   return self.renderToken(tokens, index, options);
 };
 markdownParser.renderer.rules.fence = (tokens, index, options, env, self) => {
@@ -185,7 +193,7 @@ markdownParser.renderer.rules.fence = (tokens, index, options, env, self) => {
   return rendered.replace("<pre", `<pre class="preview-code-block"${language}`);
 };
 
-export function PreviewPane({ blocks, focusRequest, forceStatic = false, sessionDir, onLocateSource, onHover, onLeave }: PreviewPaneProps) {
+export function PreviewPane({ blocks, focusRequest, forceStatic = false, sessionDir, onLocateSource, onAssetPreview, onHover, onLeave }: PreviewPaneProps) {
   const pointerGesture = useRef<{ pointerId: number; x: number; y: number; scrollInteraction: boolean } | null>(null);
   const previewRootRef = useRef<HTMLDivElement | null>(null);
   const previewArticleRef = useRef<HTMLElement | null>(null);
@@ -399,6 +407,7 @@ export function PreviewPane({ blocks, focusRequest, forceStatic = false, session
     if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 5) {
       return;
     }
+    if (onAssetPreview && event.target instanceof Element && event.target.closest("img[data-session-asset]")) return;
 
     const sourceBlock = event.currentTarget;
     if (sourceBlock.dataset.blockId && sourceBlock.dataset.source) {
@@ -408,6 +417,12 @@ export function PreviewPane({ blocks, focusRequest, forceStatic = false, session
 
   function handleBlockClick(event: MouseEvent<HTMLElement>) {
     if (!(event.target instanceof Element)) {
+      return;
+    }
+    const image = event.target.closest<HTMLImageElement>("img[data-session-asset]");
+    if (image?.dataset.sessionAsset && onAssetPreview) {
+      event.preventDefault();
+      onAssetPreview({ target: image.dataset.sessionAsset });
       return;
     }
     if (event.target.closest("a")) {
@@ -446,6 +461,14 @@ export function PreviewPane({ blocks, focusRequest, forceStatic = false, session
         data-testid="render-block"
         key={block.id}
         onClick={handleBlockClick}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          const image = event.target instanceof Element ? event.target.closest<HTMLImageElement>("img[data-session-asset]") : null;
+          if (image?.dataset.sessionAsset && onAssetPreview) {
+            event.preventDefault();
+            onAssetPreview({ target: image.dataset.sessionAsset });
+          }
+        }}
         onMouseLeave={onLeave}
         onMouseMove={(event) => onHover(event, block, locationFromElement(event.currentTarget, event.clientY))}
         onMouseEnter={(event) => onHover(event, block, locationFromElement(event.currentTarget, event.clientY))}

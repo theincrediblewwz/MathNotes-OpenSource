@@ -36,7 +36,9 @@ export async function validateAiMarkdownUpdate(args: {
     }
   }
 
-  const afterSpans = new Map(parseProtectedSpans(args.afterMarkdown).map((span) => [span.id, span]));
+  const parsedAfterSpans = parseProtectedSpans(args.afterMarkdown);
+  const beforeSpans = new Map(parseProtectedSpans(args.beforeMarkdown).map((span) => [span.id, span]));
+  const afterSpans = new Map(parsedAfterSpans.map((span) => [span.id, span]));
   for (const lock of locksForBlock.filter((candidate) => candidate.kind === "span")) {
     const afterSpan = afterSpans.get(lock.id);
     if (!afterSpan) {
@@ -47,7 +49,9 @@ export async function validateAiMarkdownUpdate(args: {
         blockId: args.blockId
       };
     }
-    if (afterSpan.hash !== lock.contentHash) {
+    const beforeSpan = beforeSpans.get(lock.id);
+    if (!beforeSpan || parsedAfterSpans.filter((span) => span.id === lock.id).length !== 1 ||
+      afterSpan.content !== beforeSpan.content || afterSpan.hash !== lock.contentHash || await sha256Text(afterSpan.content) !== lock.contentHash) {
       return {
         ok: false,
         reason: "locked_span_changed",

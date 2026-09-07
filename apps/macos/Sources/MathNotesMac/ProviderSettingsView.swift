@@ -26,6 +26,7 @@ struct ProviderSettingsView: View {
     @State private var isSavingWorkspace = false
     @State private var backupMessage: String?
     @State private var isCreatingBackup = false
+    @State private var didCopyVersion = false
 
     @State private var appearanceMode = AppAppearanceMode.load()
     @State private var sourceFont = MacTypographyPreferences.sourcePreset()
@@ -136,6 +137,30 @@ struct ProviderSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.section) {
                 settingsHeading("通用", detail: "选择笔记正本与导出时默认打开的位置。")
+
+                GroupBox("关于 MathNotes") {
+                    HStack(spacing: MathNotesTheme.Spacing.standard) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("版本 \(MacAppVersion.current.version)")
+                                .font(.body.weight(.medium))
+                                .accessibilityIdentifier("settings-app-version")
+                            Text("构建 \(MacAppVersion.current.build)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("settings-app-build")
+                        }
+                        .textSelection(.enabled)
+                        Spacer()
+                        Button(didCopyVersion ? "已复制" : "复制版本信息") {
+                            NSPasteboard.general.clearContents()
+                            didCopyVersion = NSPasteboard.general.setString(
+                                MacAppVersion.current.copyText, forType: .string
+                            )
+                        }
+                        .accessibilityIdentifier("settings-copy-version")
+                    }
+                    .padding(8)
+                }
 
                 GroupBox("文件位置") {
                     VStack(spacing: MathNotesTheme.Spacing.standard) {

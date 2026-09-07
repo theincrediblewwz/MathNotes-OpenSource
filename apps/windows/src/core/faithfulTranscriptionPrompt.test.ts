@@ -38,7 +38,9 @@ describe("buildFaithfulTranscriptionPrompt", () => {
     expect(prompt).toContain("[图片：");
     expect(prompt).toContain("图中出现无法用 Markdown 忠实表达的几何图、坐标轴、箭头关系或示意图");
     expect(prompt).toContain("不要输出 Markdown 代码围栏包住整篇转写");
-    expect(prompt.length).toBeLessThan(760);
+    expect(prompt).toContain("[[mathnotes:source-image]]");
+    expect(prompt).toContain("不裁图、不猜坐标");
+    expect(prompt.length).toBeLessThan(1000);
   });
 
   it("validates transcription output against the faithful Markdown contract", () => {

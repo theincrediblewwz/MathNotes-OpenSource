@@ -1,4 +1,5 @@
 import type { BlockRef } from "@mathnotes/shared";
+import { bindSourceImageMarkers } from "@mathnotes/core-server";
 import type { BlockStore } from "./blockStore";
 
 export type WriteAiTranscriptArgs = {
@@ -28,7 +29,7 @@ export class BlockWriter {
       notebookId: args.notebookId,
       sessionId: args.sessionId,
       source: "ai_transcription",
-      markdown: args.markdown,
+      markdown: bindSourceImageMarkers(args.markdown, args.sourcePageImagePath ?? (args.fromAssets.length === 1 ? args.fromAssets[0] : undefined)),
       fromAssets: args.fromAssets,
       sourcePageNumber: args.sourcePageNumber,
       sourcePageImagePath: args.sourcePageImagePath,
@@ -38,11 +39,18 @@ export class BlockWriter {
   }
 
   async updateAiTranscript(args: UpdateAiTranscriptArgs): Promise<BlockRef> {
-    return this.store.updateMarkdownBlock({
+    let markdown = args.markdown;
+    if (markdown.includes("[[mathnotes:source-image]]")) {
+      const session = await this.store.readSession(args.notebookId, args.sessionId);
+      const block = session.blocks.find(candidate => candidate.id === args.blockId);
+      const sourceAsset = block?.sourcePageImagePath ?? (block?.fromAssets?.length === 1 ? block.fromAssets[0] : undefined);
+      markdown = bindSourceImageMarkers(markdown, sourceAsset);
+    }
+    return this.store.updateMarkdownBlockFromAi({
       notebookId: args.notebookId,
       sessionId: args.sessionId,
       blockId: args.blockId,
-      markdown: args.markdown,
+      markdown,
       now: args.now
     });
   }

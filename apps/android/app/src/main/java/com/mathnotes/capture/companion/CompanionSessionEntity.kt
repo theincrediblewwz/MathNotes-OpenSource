@@ -1,6 +1,7 @@
 package com.mathnotes.capture.companion
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 
 @Entity(
     tableName = "companion_sessions",
@@ -15,5 +16,6 @@ data class CompanionSessionEntity(
     val markdown: String,
     val html: String,
     val updatedAt: String,
-    val syncedAt: Long
+    val syncedAt: Long,
+    @ColumnInfo(defaultValue = "''") val notebookTitle: String = ""
 )

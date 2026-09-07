@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import com.mathnotes.capture.pairing.PairingConfig
+import com.mathnotes.capture.upload.UploadPolicy
 import com.mathnotes.capture.imageedit.AndroidImageTransformer
 import com.mathnotes.capture.imageedit.ImageEditDraft
 import com.mathnotes.capture.imageedit.ImageAnnotationObject
@@ -299,14 +300,9 @@ class CaptureRepository(
     }
 
     suspend fun markAttemptStarted(captureId: String, now: Long = System.currentTimeMillis()): CaptureEntity? =
-        update(captureId) { capture ->
-            capture.copy(
-                state = CaptureState.UPLOADING,
-                attemptCount = capture.attemptCount + 1,
-                nextAttemptAt = null,
-                lastError = null,
-                updatedAt = now
-            )
+        withContext(Dispatchers.IO) {
+            if (dao.startAutomaticAttempt(captureId, UploadPolicy.MAX_AUTOMATIC_ATTEMPTS, now) != 1) return@withContext null
+            dao.find(captureId)
         }
 
     suspend fun markUploaded(
@@ -339,15 +335,7 @@ class CaptureRepository(
         nextAttemptAt: Long?,
         now: Long = System.currentTimeMillis()
     ) {
-        update(captureId) { capture ->
-            capture.copy(
-                state = state,
-                nextAttemptAt = nextAttemptAt,
-                lastHttpStatus = httpStatus,
-                lastError = message,
-                updatedAt = now
-            )
-        }
+        withContext(Dispatchers.IO) { dao.recordAutomaticFailure(captureId, state, httpStatus, message, nextAttemptAt, now) }
     }
 
     suspend fun prepareManualRetry(
@@ -402,14 +390,7 @@ class CaptureRepository(
     }
 
     suspend fun markCancelled(captureId: String, now: Long = System.currentTimeMillis()) {
-        update(captureId) { capture ->
-            if (capture.state == CaptureState.UPLOADED) capture else capture.copy(
-                state = CaptureState.PAUSED,
-                nextAttemptAt = null,
-                lastError = "上传已暂停，可手动重试",
-                updatedAt = now
-            )
-        }
+        withContext(Dispatchers.IO) { dao.pauseUnlessUploaded(captureId, "上传已暂停，可手动重试", now) }
     }
 
     private suspend fun update(

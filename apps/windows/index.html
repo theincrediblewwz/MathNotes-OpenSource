@@ -7,10 +7,17 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: mathnotes-asset:; font-src 'self' data:; connect-src 'self' mathnotes-asset:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
     />
-    <title>Math Notes Windows</title>
+    <title>MathNotes</title>
+    <style>
+      html, body { margin: 0; min-height: 100%; background: #fbfaf7; }
+      .startup-shell { position: fixed; inset: 0; display: grid; place-content: center; gap: 14px; color: #373b34; font: 14px "Segoe UI", "Microsoft YaHei", sans-serif; text-align: center; }
+      .startup-shell strong { font-size: 25px; font-weight: 600; letter-spacing: -.6px; }
+      .startup-shell span { color: #77796f; }
+      .startup-shell button { margin: 0 auto; padding: 8px 18px; border: 1px solid #d6d9cd; border-radius: 12px; color: #305d45; background: white; cursor: pointer; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="startup-shell" role="status"><strong>MathNotes</strong><span>正在打开笔记…</span></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

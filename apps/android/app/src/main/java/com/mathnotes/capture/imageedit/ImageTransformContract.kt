@@ -46,6 +46,16 @@ sealed interface ImageAnnotationObject {
         override val color: String,
         override val width: Double
     ) : ImageAnnotationObject
+
+    /** Old freehand masks remain black; new rectangular masks replace pixels with solid white. */
+    data class Redaction(
+        override val id: String,
+        val points: List<NormalizedPoint>,
+        override val width: Double,
+        val rectangular: Boolean = false
+    ) : ImageAnnotationObject {
+        override val color: String = if (rectangular) "#ffffff" else "#000000"
+    }
 }
 
 data class ImageTransformSidecar(
@@ -167,6 +177,10 @@ object ImageTransformContract {
             when (annotation) {
                 is ImageAnnotationObject.Pen -> {
                     require(annotation.points.size >= 2) { "Pen annotation requires at least two points" }
+                    annotation.points.forEach(::requireNormalizedPoint)
+                }
+                is ImageAnnotationObject.Redaction -> {
+                    require(annotation.points.size >= 2) { "Redaction requires at least two points" }
                     annotation.points.forEach(::requireNormalizedPoint)
                 }
                 is ImageAnnotationObject.Arrow -> {

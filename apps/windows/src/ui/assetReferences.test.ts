@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   findMarkdownImageReferenceAtPosition,
+  normalizeSessionAssetPath,
   resolveSessionAssetPreview,
   toAssetProtocolUrl
 } from "./assetReferences";
 
 describe("assetReferences", () => {
+  it("decodes Markdown URL escapes once before resolving a session asset", () => {
+    expect(resolveSessionAssetPreview({ sessionDir: "C:/notes/session", target: "../assets/photos/%E5%9B%BE%20%E7%89%87.png" })).toMatchObject({
+      assetPath: "assets/photos/图 片.png",
+      previewUrl: "mathnotes-asset://local/C:/notes/session/assets/photos/%E5%9B%BE%20%E7%89%87.png"
+    });
+    expect(normalizeSessionAssetPath("assets/photos/literal%252e.png")).toBe("assets/photos/literal%2e.png");
+  });
+
+  it.each([
+    "../assets/%2e%2e/secret.png", "assets/photos/%2E%2E/%2E%2E/secret.png",
+    "assets/photos/..%5c..%5csecret.png", "assets/photos/%2e%2e%2f%2e%2e%2fsecret.png",
+    "assets/..", "assets/photos/%00.png", "assets/photos/%E5.png", "assets/photos/file%3Asecret.png"
+  ])("rejects encoded traversal or invalid path %s", (target) => {
+    expect(normalizeSessionAssetPath(target)).toBeNull();
+  });
+
   it("resolves session embedded asset references to preview urls", () => {
     const preview = resolveSessionAssetPreview({
       sessionDir: "C:\\Users\\MathNotesUser\\AppData\\Roaming\\Electron\\MyMathNotes\\notebooks\\n\\sessions\\s",

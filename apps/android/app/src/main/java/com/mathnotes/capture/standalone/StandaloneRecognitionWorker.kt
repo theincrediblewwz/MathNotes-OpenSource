@@ -33,12 +33,13 @@ class StandaloneRecognitionWorker(appContext: Context, params: WorkerParameters)
                 }
                 val asset = repository.findBlock(task.assetBlockId)
                     ?: throw KnownProviderFailure("识别图片已不存在")
+                val actualImage = java.io.File(asset.localPath)
                 val markdown = OpenAiCompatibleStandaloneTransport().transcribe(
                     task,
-                    java.io.File(asset.localPath),
+                    actualImage,
                     profileStore.secret(profile)
                 )
-                repository.completeRecognition(task, markdown)
+                repository.completeRecognition(task, markdown, actualImage)
                 Result.success()
             }
         } catch (cancelled: CancellationException) {

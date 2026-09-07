@@ -96,11 +96,13 @@ fun QueueScreen(
     onDeleteLocalTask: (StandaloneRecognitionTaskEntity) -> Unit = {},
     connectionLabel: String = "本机识别",
     captureTargetLabel: String = "本机笔记",
-    onContinueCapture: () -> Unit = {}
+    onContinueCapture: () -> Unit = {},
+    onOpenNote: (com.mathnotes.capture.notes.NoteReadingRequest) -> Unit = {},
+    findPairing: (CaptureEntity) -> com.mathnotes.capture.pairing.PairingConfig? = { null }
 ) {
     var view by remember { mutableStateOf(LibraryView.RECENT) }
     var preview by remember { mutableStateOf<CaptureEntity?>(null) }
-    var localPreview by remember { mutableStateOf<Pair<StandaloneRecognitionTaskEntity, CaptureGalleryItem>?>(null) }
+    var localPreview by remember { mutableStateOf<StandaloneRecognitionTaskEntity?>(null) }
     var confirmClearRecent by remember { mutableStateOf(false) }
     var confirmClearHistory by remember { mutableStateOf(false) }
     val recentCaptures = remember(captures) { captures.filterNot { it.hiddenFromRecent } }
@@ -262,17 +264,7 @@ fun QueueScreen(
                         localNotebooks.firstOrNull { it.id == session.notebookId }
                     },
                     onDelete = onDeleteLocalTask,
-                    onPreview = {
-                        if (block != null && File(block.localPath).isFile) {
-                            localPreview = task to CaptureGalleryItem(
-                                id = "queue-local:${task.id}",
-                                path = block.localPath,
-                                label = localSessions.firstOrNull { it.id == task.sessionId }?.title ?: "本机拍摄",
-                                canDelete = task.status != StandaloneTaskStatus.CLAIMED,
-                                createdAt = task.createdAt
-                            )
-                        }
-                    }
+                    onPreview = { localPreview = task }
                 )
             }
             items(displayedRecentCaptures, key = { it.captureId }) { capture ->
@@ -297,17 +289,7 @@ fun QueueScreen(
                         localNotebooks.firstOrNull { it.id == session.notebookId }
                     },
                     onDelete = onDeleteLocalTask,
-                    onPreview = {
-                        if (block != null && File(block.localPath).isFile) {
-                            localPreview = task to CaptureGalleryItem(
-                                id = "queue-local:${task.id}",
-                                path = block.localPath,
-                                label = localSessions.firstOrNull { it.id == task.sessionId }?.title ?: "本机拍摄",
-                                canDelete = task.status != StandaloneTaskStatus.CLAIMED,
-                                createdAt = task.createdAt
-                            )
-                        }
-                    }
+                    onPreview = { localPreview = task }
                 )
             }
             item {
@@ -317,16 +299,11 @@ fun QueueScreen(
     }
 
     preview?.let { capture ->
-        MaterialPreview(capture, onDismiss = { preview = null })
+        UploadTaskPreview(capture, findPairing(capture), onClose = { preview = null }, onOpenNote = onOpenNote)
     }
-    localPreview?.let { (task, item) ->
-        CapturePreviewGallery(
-            items = listOf(item),
-            initialSelectedId = item.id,
-            detailOnly = true,
-            onClose = { localPreview = null },
-            onDelete = { onDeleteLocalTask(task) }
-        )
+    localPreview?.let { task ->
+        LocalTaskPreview(localTasks.firstOrNull { it.id == task.id } ?: task, localBlocks,
+            onClose = { localPreview = null }, onOpenNote = onOpenNote)
     }
     if (confirmClearRecent) {
         AlertDialog(
@@ -496,7 +473,7 @@ private fun CaptureCard(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
                 .combinedClickable(
-                    onClick = { if (localFileExists) onPreview(capture) },
+                    onClick = { onPreview(capture) },
                     onLongClick = { confirmDeleteTask = true }
                 )
         ) {
@@ -528,7 +505,7 @@ private fun CaptureCard(
             style = MaterialTheme.typography.bodySmall
         )
         Text(
-            if (localFileExists) "点击预览原素材 · ${capture.byteLength / 1024} KB" else "本地副本已清理，上传回执仍保留",
+            if (localFileExists) "点击查看上传成品 · ${capture.byteLength / 1024} KB" else "点击从原电脑读取上传成品",
             color = if (localFileExists) MathNotesColors.Accent else MathNotesColors.Warning,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 5.dp)

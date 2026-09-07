@@ -4,6 +4,50 @@ import { RecognitionQueue } from "./recognitionQueue";
 import type { BlockWriter } from "./blockWriter";
 
 describe("RecognitionQueue", () => {
+  it.each([false, true])("selects same-ID jobs by session in either order (reverse: %s)", async (reverse) => {
+    const seen: string[] = [];
+    const writer = writerReturning("0003");
+    const queue = new RecognitionQueue({ writer, provider: { name: "mock", async transcribe(input) {
+      seen.push(input.imagePaths[0]); return { markdown: input.sessionId! };
+    } } });
+    const jobs = ["first", "second"].map(sessionId => queue.enqueue({ notebookId: "notes", sessionId,
+      imageBlockId: "0002", assetPath: `assets/photos/${sessionId}.png`, imagePath: `C:/tmp/${sessionId}.png`, now: "2026-09-07T00:00:00Z" }));
+    expect(jobs[0].id).toBe(jobs[1].id);
+    const restored = new RecognitionQueue({ writer, provider: providerReturning("unused") });
+    for (const job of jobs) restored.restorePersisted(job);
+    expect(restored.listJobs()).toHaveLength(2);
+    for (const job of jobs) expect(restored.getJob(job.id, job)).toMatchObject({ sessionId: job.sessionId });
+    const ordered = reverse ? [...jobs].reverse() : jobs;
+    for (const job of ordered) expect(await queue.processNext(job.id, job)).toMatchObject({ sessionId: job.sessionId, status: "succeeded" });
+    expect(seen).toEqual(ordered.map(job => job.imagePath));
+    expect(writer.calls).toEqual(ordered.map(job => expect.objectContaining({ sessionId: job.sessionId, markdown: job.sessionId, fromAssets: [job.assetPath] })));
+    expect(queue.getJob(jobs[0].id, { notebookId: "missing", sessionId: "first" })).toBeUndefined();
+  });
+
+  it.each(["first", "second"])("cancels only the targeted same-ID running job (%s)", async (cancelledSession) => {
+    const running = new Map<string, { signal: AbortSignal; release: () => void }>();
+    const writer = writerReturning("0003");
+    const queue = new RecognitionQueue({ writer, provider: { name: "mock", async transcribe(input) {
+      await new Promise<void>(resolve => running.set(input.sessionId!, { signal: input.abortSignal!, release: resolve }));
+      // Deliberately ignore cancellation in the fake provider; the queue must still prevent its writeback.
+      return { markdown: input.sessionId! };
+    } } });
+    const jobs = ["first", "second"].map(sessionId => queue.enqueue({ notebookId: "notes", sessionId,
+      imageBlockId: "0002", assetPath: `assets/photos/${sessionId}.png`, imagePath: `C:/tmp/${sessionId}.png`, now: "2026-09-07T00:00:00Z" }));
+    const results = jobs.map(job => queue.processNext(job.id, job));
+    await waitFor(() => running.size === 2);
+    const cancelled = jobs.find(job => job.sessionId === cancelledSession)!;
+    const surviving = jobs.find(job => job.sessionId !== cancelledSession)!;
+    expect(queue.cancel(cancelled.id, cancelled)).toMatchObject({ sessionId: cancelledSession, status: "cancelled" });
+    expect(running.get(cancelledSession)!.signal.aborted).toBe(true);
+    expect(running.get(surviving.sessionId)!.signal.aborted).toBe(false);
+    for (const control of running.values()) control.release();
+    const settled = await Promise.all(results);
+    expect(settled.find(job => job?.sessionId === cancelledSession)?.status).toBe("cancelled");
+    expect(settled.find(job => job?.sessionId === surviving.sessionId)?.status).toBe("succeeded");
+    expect(writer.calls).toEqual([expect.objectContaining({ sessionId: surviving.sessionId })]);
+  });
+
   it("enqueues and processes a recognition job into an ai transcript block", async () => {
     const provider = providerReturning("## OCR 草稿");
     const writer = writerReturning("0003");

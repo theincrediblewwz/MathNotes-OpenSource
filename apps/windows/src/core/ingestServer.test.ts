@@ -227,7 +227,7 @@ describe("IngestServer", () => {
       targets: [{ notebookId: "functional_analysis", sessionId: "lecture", title: "Lecture" }],
       capabilities: {
         upload: { image: true, pdf: true },
-        recognition: { status: false, retry: false }
+        recognition: { status: true, retry: false }
       }
     });
   });
@@ -474,11 +474,10 @@ describe("IngestServer", () => {
     url = await startAtFetchSafePort(server);
     server.publishCompanionChange("functional_analysis", "lecture", "revision-1");
     server.publishCompanionChange("functional_analysis", "lecture", "revision-2");
-    await vi.waitFor(async () => {
-      const persisted = JSON.parse(await readFile(eventFile, "utf8"));
-      expect(persisted.nextId).toBe(3);
-    });
+    // Stop drains the durable event queue. Polling the file while Windows replaces
+    // it can itself hold the destination open and make the rename fail on CI.
     await server.stop();
+    expect(JSON.parse(await readFile(eventFile, "utf8")).nextId).toBe(3);
 
     server = createServerWithRevisionLog(eventFile, 2);
     url = await startAtFetchSafePort(server);
@@ -493,10 +492,6 @@ describe("IngestServer", () => {
     replayController.abort();
 
     server.publishCompanionChange("functional_analysis", "lecture", "revision-3");
-    await vi.waitFor(async () => {
-      const persisted = JSON.parse(await readFile(eventFile, "utf8"));
-      expect(persisted.nextId).toBe(4);
-    });
     const resetController = new AbortController();
     const resetResponse = await fetch(`${url}/api/v1/companion/catalog-events`, {
       headers: { Authorization: "Bearer test-token", "Last-Event-ID": "0" },
@@ -506,6 +501,8 @@ describe("IngestServer", () => {
     expect(resetText).toContain("event: resync-required");
     expect(resetText).toContain('"scope":"catalog"');
     resetController.abort();
+    await server.stop();
+    expect(JSON.parse(await readFile(eventFile, "utf8")).nextId).toBe(4);
   });
 
   it("publishes authenticated catalog and deletion events", async () => {

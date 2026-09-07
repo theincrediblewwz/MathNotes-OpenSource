@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.mathnotes.capture.pairing.PairingConfig
@@ -37,7 +38,7 @@ class MainActivityTest {
         composeRule.onNodeWithText("github.com/theincrediblewwz").assertIsDisplayed()
         composeRule.onNodeWithText("连接电脑").assertIsDisplayed()
         composeRule.onNodeWithText("扫描新电脑").assertIsDisplayed()
-        composeRule.onNodeWithText("上传通知").assertIsDisplayed()
+        composeRule.onNodeWithText("上传通知").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -46,7 +47,7 @@ class MainActivityTest {
         PairingStore(instrumentation.targetContext).save(
             PairingConfig(
                 1,
-                "192.168.137.1",
+                "127.0.0.1",
                 43424,
                 "0123456789abcdef",
                 "functional_analysis",
@@ -61,7 +62,8 @@ class MainActivityTest {
 
         composeRule.onNodeWithText("拍摄").performClick()
         composeRule.onNodeWithContentDescription("导入图片或 PDF").performClick()
-        composeRule.onNodeWithText("使用系统相机（厂商算法）").assertIsEnabled()
+        composeRule.onNodeWithText("打开手机原相机 · 拍完后导入").assertIsEnabled()
+        composeRule.onNodeWithText("系统相机快捷拍摄 · 自动返回").assertIsEnabled()
         composeRule.onNodeWithText("从相册选择").assertIsEnabled()
         composeRule.onNodeWithText("导入 PDF").assertIsNotEnabled()
         composeRule.onNodeWithText("连续拍摄（MathNotes）").assertDoesNotExist()
@@ -80,7 +82,7 @@ class MainActivityTest {
         PairingStore(instrumentation.targetContext).save(
             PairingConfig(
                 1,
-                "192.168.137.1",
+                "127.0.0.1",
                 43424,
                 "0123456789abcdef",
                 "functional_analysis",

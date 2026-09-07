@@ -1,4 +1,5 @@
 import type { SessionDocument } from "../common/sessionDocument";
+import type { SessionAiRevision } from "../core/sessionAiRevision";
 import type { NotebookSessionSummary, NotebookSummary } from "../core/sessionCatalog";
 import type { UserSettings } from "../core/userSettingsStore";
 import type { RecognitionTaskSummary } from "../core/uploadTaskLog";
@@ -283,6 +284,7 @@ export type ReorderSessionBlocksInput = {
   sessionId: string;
   blockIds: string[];
   direction: "up" | "down";
+  targetBlockId?: string;
 };
 
 export type TransferSessionBlocksInput = {
@@ -610,6 +612,9 @@ export type MathNotesApi = {
   createSession(input?: CreateSessionInput): Promise<SessionDocument>;
   createMarkdownBlock(input: CreateMarkdownBlockInput): Promise<SessionDocument>;
   proposeSelectionEdit(input: ProposeSelectionEditInput): Promise<SelectionEditProposal>;
+  proposeSessionRevision(input: AssistantSessionInput & { taskId: string; instruction: string }): Promise<SessionAiRevision>;
+  applySessionRevision(input: AssistantSessionInput & { proposalId: string }): Promise<{ proposal: SessionAiRevision; document: SessionDocument }>;
+  cancelSessionRevision(input: AssistantSessionInput & { proposalId: string }): Promise<SessionAiRevision>;
   applySelectionEdit(input: SelectionEditProposalCommand): Promise<SessionDocument>;
   cancelSelectionEdit(input: SelectionEditProposalCommand): Promise<SelectionEditProposal>;
   saveMarkdownBlock(input: SaveMarkdownBlockInput): Promise<SessionDocument>;

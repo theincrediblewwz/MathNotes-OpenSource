@@ -79,7 +79,11 @@ fun StandaloneScreen(
     libraryHeader: (@Composable () -> Unit)? = null,
     libraryQuery: String = "",
     onSelectSessionForCapture: ((StandaloneSessionEntity) -> Unit)? = null,
-    onCancelCaptureSelection: (() -> Unit)? = null
+    onCancelCaptureSelection: (() -> Unit)? = null,
+    readingRequest: com.mathnotes.capture.notes.NoteReadingRequest? = null,
+    onReadingTap: () -> Unit = {},
+    onReaderActive: (Boolean) -> Unit = {},
+    bottomBarHidden: Boolean = false
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var openedNotebookId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -89,6 +93,9 @@ fun StandaloneScreen(
     var deleteTarget by remember { mutableStateOf<StandaloneLibraryTarget?>(null) }
     var pendingExportTarget by remember { mutableStateOf<StandaloneLibraryTarget?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(readingRequest?.requestId) {
+        readingRequest?.takeIf { it.pairing == null }?.let { openedSessionId = it.sessionId }
+    }
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { target ->
         val libraryTarget = pendingExportTarget
         pendingExportTarget = null
@@ -134,8 +141,13 @@ fun StandaloneScreen(
             StandaloneSessionReader(
                 session = activeSession,
                 blocks = state.blocks,
+                tasks = state.tasks,
                 themeId = themeId,
-                onBack = { openedSessionId = null }
+                onBack = { openedSessionId = null },
+                readingRequest = readingRequest?.takeIf { it.sessionId == activeSession.id },
+                onReadingTap = onReadingTap,
+                onReaderActive = onReaderActive,
+                bottomBarHidden = bottomBarHidden
             )
         }
     } else if (openedNotebookId == null) {
@@ -148,6 +160,7 @@ fun StandaloneScreen(
             sessions = state.sessions,
             activeSession = state.activeSession,
             activeSessionBlocks = state.activeSession?.let { active -> state.allBlocks.filter { it.sessionId == active.id } }.orEmpty(),
+            activeSessionTasks = state.activeSession?.let { active -> state.allTasks.filter { it.sessionId == active.id } }.orEmpty(),
             themeId = themeId,
             captureSelectionMode = onSelectSessionForCapture != null,
             onContinue = { session ->
@@ -313,6 +326,7 @@ private fun StandaloneNotebookBrowser(
     sessions: List<StandaloneSessionEntity>,
     activeSession: StandaloneSessionEntity?,
     activeSessionBlocks: List<StandaloneBlockEntity>,
+    activeSessionTasks: List<StandaloneRecognitionTaskEntity>,
     themeId: MathNotesThemeId,
     captureSelectionMode: Boolean,
     onContinue: (StandaloneSessionEntity) -> Unit,
@@ -323,6 +337,10 @@ private fun StandaloneNotebookBrowser(
     libraryHeader: (@Composable () -> Unit)?
 ) {
     val previewMarkdown = remember(activeSessionBlocks) { prepareStandaloneSessionMarkdown(activeSessionBlocks) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val previewImages = remember(activeSession, activeSessionBlocks, activeSessionTasks) {
+        activeSession?.let { standaloneReaderImages(context, it.id, activeSessionBlocks, activeSessionTasks) }.orEmpty()
+    }
     LazyVerticalGrid(
         columns = GridCells.Fixed(3),
         modifier = Modifier.fillMaxSize(),
@@ -422,6 +440,7 @@ private fun StandaloneNotebookBrowser(
                             StandaloneMarkdownPreview(
                                 markdown = previewMarkdown,
                                 themeId = themeId,
+                                images = previewImages,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -636,11 +655,19 @@ private fun StandaloneSessionBrowser(
 private fun StandaloneSessionReader(
     session: StandaloneSessionEntity,
     blocks: List<StandaloneBlockEntity>,
+    tasks: List<StandaloneRecognitionTaskEntity>,
     themeId: MathNotesThemeId,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    readingRequest: com.mathnotes.capture.notes.NoteReadingRequest? = null,
+    onReadingTap: () -> Unit = {},
+    onReaderActive: (Boolean) -> Unit = {},
+    bottomBarHidden: Boolean = false
 ) {
     val markdown = remember(blocks) { prepareStandaloneSessionMarkdown(blocks) }
-    StandaloneMarkdownReader(session.title, markdown, themeId, onBack)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val images = remember(session.id, blocks, tasks) { standaloneReaderImages(context, session.id, blocks, tasks) }
+    StandaloneMarkdownReader(session.title, markdown, themeId, onBack, images, blocks, readingRequest,
+        onReadingTap, onReaderActive, bottomBarHidden)
 }
 
 @Composable

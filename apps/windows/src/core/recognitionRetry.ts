@@ -15,6 +15,7 @@ import {
 } from "./recognitionQueue";
 import { validateFaithfulTranscriptionOutput } from "./faithfulTranscriptionPrompt";
 import { StreamingOutputGuard, type OutputGuardReason } from "./streamingOutputGuard";
+import { resolve } from "node:path";
 
 export type RetryRecognitionJobArgs = {
   rootDir: string;
@@ -29,7 +30,18 @@ export type RetryRecognitionJobArgs = {
   onRuntimeEvent?: (event: RecognitionRuntimeEvent) => void | Promise<void>;
 };
 
+const activeRetries = new Set<string>();
+
 export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promise<RecognitionJob> {
+  const root = resolve(args.rootDir);
+  const key = JSON.stringify([process.platform === "win32" ? root.toLowerCase() : root, args.notebookId, args.sessionId, args.jobId]);
+  if (activeRetries.has(key)) throw new Error("该识别任务仍在进行中，请等待完成或中断后重试。");
+  activeRetries.add(key);
+  try { return await runRecognitionRetry(args); }
+  finally { activeRetries.delete(key); }
+}
+
+async function runRecognitionRetry(args: RetryRecognitionJobArgs): Promise<RecognitionJob> {
   const jobs = await readRecognitionJobs({
     rootDir: args.rootDir,
     notebookId: args.notebookId,
@@ -39,27 +51,30 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
   if (!job) {
     throw new Error(`Recognition job not found: ${args.jobId}`);
   }
-  if (job.status === "succeeded") {
-    return job;
-  }
+  let transcriptBlock = await findReusableTranscriptBlock(args.store, job);
+  const preserveTranscript = Boolean(transcriptBlock && (job.status === "succeeded" || job.hasSuccessfulTranscript));
+  const startedAt = Date.now();
   const nextAttempt = job.attempts + 1;
   const providerLabel = recognitionProviderLabel(args.provider.name);
 
   const runningJob: RecognitionJob = {
     ...job,
+    now: args.now,
     status: "running",
+    hasSuccessfulTranscript: preserveTranscript,
     attempts: nextAttempt,
     maxAttempts: Math.max(job.maxAttempts, nextAttempt),
     error: undefined,
     failureKind: undefined,
     providerName: args.provider.name,
-    providerLabel
+    providerLabel,
+    warnings: undefined,
+    timing: { acceptedAt: args.now, runningAt: new Date(startedAt).toISOString(), queueMs: 0 }
   };
   await upsertRecognitionJob({ rootDir: args.rootDir, job: runningJob });
   await args.onJobChanged?.(runningJob);
 
   const writer = new BlockWriter(args.store);
-  let transcriptBlock: BlockRef | undefined = await findReusableTranscriptBlock(args.store, job);
   const runAbortController = new AbortController();
   const forwardAbort = () => runAbortController.abort(args.abortSignal?.reason);
   if (args.abortSignal?.aborted) {
@@ -105,7 +120,7 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
       });
     };
 
-    if (supportsEvents) {
+    if (supportsEvents && !preserveTranscript) {
       const draftMarkdown = buildRecognitionDraftMarkdown([`${providerLabel} 正在准备识别。`], "", providerLabel);
       transcriptBlock =
         transcriptBlock ??
@@ -145,6 +160,9 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
       sessionId: job.sessionId,
       abortSignal: runAbortController.signal
     };
+    runAbortController.signal.throwIfAborted();
+    const providerStartedAt = Date.now();
+    runningJob.timing!.providerStartedAt = new Date(providerStartedAt).toISOString();
     const transcript = args.provider.transcribeWithEvents
       ? await args.provider.transcribeWithEvents({
           ...transcribeInput,
@@ -157,6 +175,10 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
               runtimeLines.push(message);
             }
             if (event.type === "stdout") {
+              if (!runningJob.timing!.firstOutputAt) {
+                runningJob.timing!.firstOutputAt = new Date().toISOString();
+                runningJob.timing!.firstOutputMs = Date.now() - providerStartedAt;
+              }
               const observation = outputGuard.observe(event.text);
               stdout = observation.state === "tripped" ? observation.safeText : observation.text;
               if (observation.state !== "healthy" && !anomalyWarningSent) {
@@ -186,7 +208,7 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
               transcriptBlockId: transcriptBlock?.id,
               previewChanged: false
             });
-            if (transcriptBlock) {
+            if (transcriptBlock && !preserveTranscript) {
               updateDraft(buildRecognitionDraftMarkdown(runtimeLines, stdout, providerLabel), message ?? "draft updated", level);
             }
           }
@@ -195,7 +217,9 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
     if (outputAnomaly) {
       throw new Error("Recognition output anomaly");
     }
+    runAbortController.signal.throwIfAborted();
     await updateChain;
+    runningJob.timing!.providerMs = Date.now() - providerStartedAt;
 
     const block =
       transcriptBlock ??
@@ -236,10 +260,12 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
     const succeededJob: RecognitionJob = {
       ...runningJob,
       status: "succeeded",
+      hasSuccessfulTranscript: true,
       transcriptBlockId: block.id,
       warnings: mergeWarnings(transcript.warnings, validateFaithfulTranscriptionOutput(transcript.markdown)),
       error: undefined,
-      failureKind: undefined
+      failureKind: undefined,
+      timing: { ...runningJob.timing!, completedAt: new Date().toISOString(), totalMs: Date.now() - startedAt }
     };
     await upsertRecognitionJob({ rootDir: args.rootDir, job: succeededJob });
     await args.onJobChanged?.(succeededJob);
@@ -254,7 +280,7 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
         : error instanceof Error
           ? error.message
           : "unknown error";
-    if (transcriptBlock) {
+    if (transcriptBlock && !preserveTranscript) {
       await writer.updateAiTranscript({
         notebookId: job.notebookId,
         sessionId: job.sessionId,
@@ -265,13 +291,14 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
             ? buildRecognitionCancelledMarkdown(providerLabel)
             : buildRecognitionFailureMarkdown(message, providerLabel),
         now: new Date().toISOString()
-      });
+      }).catch(() => undefined); // A newly applied user lock also protects failure/cancel draft writes.
     }
     const failedJob: RecognitionJob = {
       ...runningJob,
       status: cancelled ? "cancelled" : "failed",
       error: message,
-      failureKind: outputAnomaly ? "output_anomaly" : undefined
+      failureKind: outputAnomaly ? "output_anomaly" : undefined,
+      timing: { ...runningJob.timing!, completedAt: new Date().toISOString(), totalMs: Date.now() - startedAt }
     };
     await upsertRecognitionJob({ rootDir: args.rootDir, job: failedJob });
     await args.onRuntimeEvent?.({
@@ -283,7 +310,7 @@ export async function retryRecognitionJob(args: RetryRecognitionJobArgs): Promis
           ? `识别已中断：${providerLabel}。`
           : `识别服务失败（${providerLabel}）：${failedJob.error}`,
       transcriptBlockId: transcriptBlock?.id ?? failedJob.transcriptBlockId,
-      previewChanged: Boolean(transcriptBlock)
+      previewChanged: Boolean(transcriptBlock && !preserveTranscript)
     });
     await args.onJobChanged?.(failedJob);
     return failedJob;
@@ -303,7 +330,10 @@ async function findReusableTranscriptBlock(store: BlockStore, job: RecognitionJo
     return undefined;
   }
   if (block.fromAssets?.length && !block.fromAssets.includes(job.assetPath)) {
-    return undefined;
+    throw new Error("原识别块的素材关联已改变，未执行重新识别。");
+  }
+  if (block.readonly || !block.editableByAi || block.status === "locked" || session.locks.some(lock => lock.blockId === block.id)) {
+    throw new Error("该块或其中的选区已锁定，请先解除锁定后重新识别。");
   }
 
   return block;

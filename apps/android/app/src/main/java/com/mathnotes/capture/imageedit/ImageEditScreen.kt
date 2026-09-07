@@ -2,7 +2,6 @@ package com.mathnotes.capture.imageedit
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -49,10 +48,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -88,11 +91,15 @@ fun ImageEditScreen(
     onWorkingDraftChange: (ImageEditDraft) -> Unit,
     onDiscard: () -> Unit
 ) {
+    var previewMessage by remember(draft.sourceFile) { mutableStateOf<String?>(null) }
     val sourcePreview by produceState<Bitmap?>(initialValue = null, draft.sourceFile) {
-        value = withContext(Dispatchers.IO) { AndroidImageTransformer.loadPreview(draft.sourceFile) }
+        value = null
+        val result = withContext(Dispatchers.IO) { runCatching { AndroidImageTransformer.loadPreview(draft.sourceFile) } }
+        result.fold(onSuccess = { value = it }, onFailure = { previewMessage = "无法打开图片：${it.message ?: "请重新选择"}" })
     }
     var quarterTurns by remember(draft.sourceFile) { mutableIntStateOf(0) }
-    var selectionTool by remember(draft.sourceFile) { mutableStateOf(ImageSelectionTool.RECTANGLE) }
+    var selectionTool by remember { mutableStateOf(ImageSelectionTool.RECTANGLE) }
+    var brushMenuOpen by remember { mutableStateOf(false) }
     var cropRect by remember(draft.sourceFile) { mutableStateOf(FULL_RECT) }
     var cropUndo by remember(draft.sourceFile) { mutableStateOf<NormalizedRect?>(null) }
     var lassoPoints by remember(draft.sourceFile) { mutableStateOf(emptyList<NormalizedPoint>()) }
@@ -105,6 +112,7 @@ fun ImageEditScreen(
     var selectedAnnotationId by remember(draft.sourceFile) { mutableStateOf<String?>(null) }
     var annotationColor by remember { mutableStateOf(ANNOTATION_COLORS.first()) }
     var annotationWidth by remember { mutableStateOf(DEFAULT_ANNOTATION_WIDTH) }
+    var redactionWidth by remember { mutableStateOf(0.05f) }
     var stageApplying by remember(draft.sourceFile) { mutableStateOf(false) }
     var stageMessage by remember(draft.sourceFile) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -116,6 +124,54 @@ fun ImageEditScreen(
         cropRect != FULL_RECT ||
         lassoPoints.size >= 3 ||
         annotations.isNotEmpty()
+
+    fun applyStage(nextTool: ImageSelectionTool? = null) {
+        val stageTurns = quarterTurns
+        val stagePerspective = perspectiveCorners.takeIf { perspectiveEnabled }
+        val stageCrop = cropRect.takeUnless { it == FULL_RECT }
+        val stageLasso = lassoPoints.takeIf { it.size >= 3 }
+        val stageAnnotations = annotations
+        stageApplying = true
+        stageMessage = null
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    AndroidImageTransformer.renderStage(
+                        draft = draft,
+                        outputDirectory = File(draft.sourceFile.parentFile, "edit-stages"),
+                        rotationQuarterTurns = stageTurns,
+                        perspectiveCorners = stagePerspective,
+                        cropRect = stageCrop,
+                        lassoPoints = stageLasso,
+                        annotations = stageAnnotations
+                    )
+                }
+            }.fold(
+                onSuccess = {
+                    onWorkingDraftChange(it)
+                    if (nextTool != null) selectionTool = nextTool
+                },
+                onFailure = { stageMessage = "无法应用当前操作：${it.message ?: "请重试"}" }
+            )
+            stageApplying = false
+        }
+    }
+
+    fun selectTool(tool: ImageSelectionTool) {
+        // Crop/annotation coordinates belong to the image actually on screen. Bake a pending
+        // perspective before leaving it (and bake existing edits before entering perspective).
+        if ((perspectiveEnabled && tool != ImageSelectionTool.PERSPECTIVE) ||
+            (tool == ImageSelectionTool.PERSPECTIVE && selectionTool != tool && hasPendingEdits)) {
+            applyStage(tool)
+        } else {
+            selectionTool = tool
+        }
+    }
+
+    // Tool selection survives a staged image replacement; its geometry is reset to that image.
+    androidx.compose.runtime.LaunchedEffect(draft.sourceFile, selectionTool) {
+        if (selectionTool == ImageSelectionTool.PERSPECTIVE) perspectiveEnabled = true
+    }
 
     DisposableEffect(preview) {
         onDispose {
@@ -139,7 +195,7 @@ fun ImageEditScreen(
                 Text("裁剪素材", style = MaterialTheme.typography.titleLarge, color = MathNotesColors.Ink)
                 Text(draft.sourceName, style = MaterialTheme.typography.bodySmall, color = MathNotesColors.Muted, maxLines = 1)
             }
-            IconButton(enabled = !saving, onClick = onDiscard) {
+            IconButton(enabled = !saving && !stageApplying, onClick = onDiscard) {
                 Icon(painterResource(R.drawable.ic_mathnotes_close), contentDescription = "放弃这张素材", tint = MathNotesColors.Ink)
             }
         }
@@ -151,16 +207,19 @@ fun ImageEditScreen(
         ) {
             if (preview == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MathNotesColors.Accent)
+                    if (previewMessage != null) Text(previewMessage!!, modifier = Modifier.padding(24.dp), color = MathNotesColors.Muted)
+                    else CircularProgressIndicator(color = MathNotesColors.Accent)
                 }
             } else {
                 Box(Modifier.fillMaxSize()) {
-                    Image(
-                        bitmap = preview!!.asImageBitmap(),
-                        contentDescription = "待裁剪图片",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
+                    val bitmap = preview!!
+                    val bitmapPaint = remember { android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG) }
+                    Canvas(Modifier.fillMaxSize().semantics { contentDescription = "待裁剪图片" }) {
+                        val display = fittedImageRect(size, bitmap.width, bitmap.height, IMAGE_CANVAS_INSET_DP.dp.toPx())
+                        drawIntoCanvas { canvas ->
+                            canvas.nativeCanvas.drawBitmap(bitmap, null, android.graphics.RectF(display.left, display.top, display.right, display.bottom), bitmapPaint)
+                        }
+                    }
                     when (selectionTool) {
                         ImageSelectionTool.PERSPECTIVE -> PerspectiveOverlay(
                             bitmapWidth = preview!!.width,
@@ -188,21 +247,31 @@ fun ImageEditScreen(
                             onPointsChange = { lassoPoints = it },
                             modifier = Modifier.fillMaxSize()
                         )
-                        ImageSelectionTool.PEN, ImageSelectionTool.ARROW -> Unit
+                        ImageSelectionTool.PEN, ImageSelectionTool.ARROW, ImageSelectionTool.REDACTION -> Unit
                     }
                     AnnotationOverlay(
                         bitmapWidth = preview!!.width,
                         bitmapHeight = preview!!.height,
                         annotations = annotations,
                         selectedId = selectedAnnotationId,
-                        activeTool = selectionTool.takeIf { it == ImageSelectionTool.PEN || it == ImageSelectionTool.ARROW },
+                        activeTool = selectionTool.takeIf { it.isAnnotation() },
                         annotationColor = annotationColor,
-                        annotationWidth = annotationWidth,
+                        annotationWidth = if (selectionTool == ImageSelectionTool.REDACTION) redactionWidth else annotationWidth,
                         onInteractionStart = { annotationHistory = annotationHistory + listOf(annotations) },
                         onAnnotationsChange = { annotations = it },
                         onSelectedIdChange = { selectedAnnotationId = it },
                         modifier = Modifier.fillMaxSize()
                     )
+                    if (saving || stageApplying) {
+                        Box(
+                            Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.35f)).pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) awaitPointerEvent().changes.forEach { it.consume() }
+                                }
+                            },
+                            contentAlignment = Alignment.Center
+                        ) { CircularProgressIndicator(color = MathNotesColors.Accent) }
+                    }
                 }
             }
         }
@@ -213,31 +282,28 @@ fun ImageEditScreen(
         ) {
             MathNotesSecondaryButton(
                 text = "透视",
-                onClick = {
-                    perspectiveEnabled = true
-                    selectionTool = ImageSelectionTool.PERSPECTIVE
-                },
-                enabled = preview != null && !saving,
+                onClick = { selectTool(ImageSelectionTool.PERSPECTIVE) },
+                enabled = preview != null && !saving && !stageApplying,
                 selected = selectionTool == ImageSelectionTool.PERSPECTIVE,
                 modifier = Modifier.weight(1f)
             )
             MathNotesSecondaryButton(
                 text = "矩形裁剪",
                 onClick = {
-                    selectionTool = ImageSelectionTool.RECTANGLE
+                    selectTool(ImageSelectionTool.RECTANGLE)
                     lassoPoints = emptyList()
                 },
-                enabled = preview != null && !saving,
+                enabled = preview != null && !saving && !stageApplying,
                 selected = selectionTool == ImageSelectionTool.RECTANGLE,
                 modifier = Modifier.weight(1f)
             )
             MathNotesSecondaryButton(
                 text = "套索裁剪",
                 onClick = {
-                    selectionTool = ImageSelectionTool.LASSO
+                    selectTool(ImageSelectionTool.LASSO)
                     cropRect = FULL_RECT
                 },
-                enabled = preview != null && !saving,
+                enabled = preview != null && !saving && !stageApplying,
                 selected = selectionTool == ImageSelectionTool.LASSO,
                 modifier = Modifier.weight(1f)
             )
@@ -246,20 +312,21 @@ fun ImageEditScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            MathNotesSecondaryButton(
-                text = "画笔",
-                onClick = { selectionTool = ImageSelectionTool.PEN },
-                enabled = preview != null && !saving,
-                selected = selectionTool == ImageSelectionTool.PEN,
-                modifier = Modifier.weight(1f)
-            )
-            MathNotesSecondaryButton(
-                text = "箭头",
-                onClick = { selectionTool = ImageSelectionTool.ARROW },
-                enabled = preview != null && !saving,
-                selected = selectionTool == ImageSelectionTool.ARROW,
-                modifier = Modifier.weight(1f)
-            )
+            Box(Modifier.weight(1f)) {
+                MathNotesSecondaryButton(
+                    text = when (selectionTool) { ImageSelectionTool.PEN -> "画笔 · 笔"; ImageSelectionTool.ARROW -> "画笔 · 箭头"; ImageSelectionTool.REDACTION -> "画笔 · 马赛克"; else -> "画笔" },
+                    onClick = { brushMenuOpen = true },
+                    enabled = preview != null && !saving && !stageApplying,
+                    selected = selectionTool.isAnnotation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                androidx.compose.material3.DropdownMenu(expanded = brushMenuOpen, onDismissRequest = { brushMenuOpen = false }) {
+                    listOf("笔" to ImageSelectionTool.PEN, "箭头" to ImageSelectionTool.ARROW, "马赛克（矩形遮盖）" to ImageSelectionTool.REDACTION).forEach { (label, tool) ->
+                        androidx.compose.material3.DropdownMenuItem(text = { Text(if (selectionTool == tool) "$label ✓" else label) },
+                            onClick = { brushMenuOpen = false; selectTool(tool) })
+                    }
+                }
+            }
             MathNotesSecondaryButton(
                 text = "删除标注",
                 onClick = {
@@ -270,7 +337,7 @@ fun ImageEditScreen(
                         selectedAnnotationId = null
                     }
                 },
-                enabled = preview != null && !saving && selectedAnnotationId != null,
+                enabled = preview != null && !saving && !stageApplying && selectedAnnotationId != null,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -279,37 +346,41 @@ fun ImageEditScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("标注颜色", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Muted)
-            ANNOTATION_COLORS.forEach { color ->
+            if (selectionTool == ImageSelectionTool.REDACTION) {
+                Text("拖出矩形，隐藏区域会以纯白完全覆盖", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Muted)
+            } else {
+              Text("标注颜色", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Muted)
+              ANNOTATION_COLORS.forEach { color ->
                 val selected = annotationColor == color
                 Surface(
                     modifier = Modifier
                         .size(if (selected) 30.dp else 26.dp)
                         .clip(CircleShape)
-                        .clickable(enabled = !saving) { annotationColor = color },
+                        .clickable(enabled = !saving && !stageApplying) { annotationColor = color },
                     shape = CircleShape,
                     color = Color(android.graphics.Color.parseColor(color)),
                     border = BorderStroke(if (selected) 3.dp else 1.dp, if (selected) MathNotesColors.Paper else MathNotesColors.Line),
                     shadowElevation = if (selected) 3.dp else 0.dp,
                     content = {}
                 )
+              }
             }
         }
-        Row(
+        if (selectionTool != ImageSelectionTool.REDACTION) Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("粗细", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Muted)
+            Text(if (selectionTool == ImageSelectionTool.REDACTION) "遮盖范围" else "粗细", style = MaterialTheme.typography.labelMedium, color = MathNotesColors.Muted)
             Slider(
-                value = annotationWidth,
-                onValueChange = { annotationWidth = it },
-                valueRange = MIN_ANNOTATION_WIDTH..MAX_ANNOTATION_WIDTH,
-                enabled = !saving,
+                value = if (selectionTool == ImageSelectionTool.REDACTION) redactionWidth else annotationWidth,
+                onValueChange = { if (selectionTool == ImageSelectionTool.REDACTION) redactionWidth = it else annotationWidth = it },
+                valueRange = if (selectionTool == ImageSelectionTool.REDACTION) 0.02f..0.1f else MIN_ANNOTATION_WIDTH..MAX_ANNOTATION_WIDTH,
+                enabled = !saving && !stageApplying,
                 modifier = Modifier.weight(1f)
             )
             Text(
-                text = "${(annotationWidth * 1000).toInt()}",
+                text = "${((if (selectionTool == ImageSelectionTool.REDACTION) redactionWidth else annotationWidth) * 1000).toInt()}",
                 style = MaterialTheme.typography.labelMedium,
                 color = MathNotesColors.Ink
             )
@@ -329,18 +400,19 @@ fun ImageEditScreen(
                     perspectiveEnabled = false
                     perspectiveCorners = DEFAULT_PERSPECTIVE_CORNERS
                     perspectiveUndo = null
-                    annotations = emptyList()
-                    annotationHistory = emptyList()
+                    annotations = annotations.map(::rotateAnnotationClockwise)
+                    annotationHistory = annotationHistory.map { history -> history.map(::rotateAnnotationClockwise) }
                     selectedAnnotationId = null
+                    if (selectionTool == ImageSelectionTool.PERSPECTIVE) selectionTool = ImageSelectionTool.RECTANGLE
                 },
-                enabled = preview != null && !saving,
+                enabled = preview != null && !saving && !stageApplying,
                 modifier = Modifier.weight(1f)
             )
             MathNotesSecondaryButton(
                 text = "撤销",
                 onClick = {
                     var handled = false
-                    if (selectionTool == ImageSelectionTool.PEN || selectionTool == ImageSelectionTool.ARROW) {
+                    if (selectionTool.isAnnotation()) {
                         if (annotationHistory.isNotEmpty()) {
                             annotations = annotationHistory.last()
                             annotationHistory = annotationHistory.dropLast(1)
@@ -368,8 +440,8 @@ fun ImageEditScreen(
                         onWorkingDraftChange(draft.undoStage())
                     }
                 },
-                enabled = preview != null && !saving && (
-                    ((selectionTool == ImageSelectionTool.PEN || selectionTool == ImageSelectionTool.ARROW) && annotationHistory.isNotEmpty()) ||
+                enabled = preview != null && !saving && !stageApplying && (
+                    (selectionTool.isAnnotation() && annotationHistory.isNotEmpty()) ||
                         (selectionTool == ImageSelectionTool.PERSPECTIVE && perspectiveUndo != null) ||
                         (selectionTool == ImageSelectionTool.RECTANGLE && cropUndo != null) ||
                         (selectionTool == ImageSelectionTool.LASSO && lassoHistory.isNotEmpty()) ||
@@ -391,36 +463,15 @@ fun ImageEditScreen(
                     annotations = emptyList()
                     annotationHistory = emptyList()
                     selectedAnnotationId = null
+                    selectionTool = ImageSelectionTool.RECTANGLE
                 },
-                enabled = preview != null && !saving,
+                enabled = preview != null && !saving && !stageApplying,
                 modifier = Modifier.weight(1f)
             )
         }
         MathNotesSecondaryButton(
             text = if (stageApplying) "正在应用当前操作…" else "应用当前操作",
-            onClick = {
-                stageApplying = true
-                stageMessage = null
-                scope.launch {
-                    runCatching {
-                        withContext(Dispatchers.IO) {
-                            AndroidImageTransformer.renderStage(
-                                draft = draft,
-                                outputDirectory = File(draft.sourceFile.parentFile, "edit-stages"),
-                                rotationQuarterTurns = quarterTurns,
-                                perspectiveCorners = perspectiveCorners.takeIf { perspectiveEnabled },
-                                cropRect = cropRect.takeUnless { it == FULL_RECT },
-                                lassoPoints = lassoPoints.takeIf { it.size >= 3 },
-                                annotations = annotations
-                            )
-                        }
-                    }.fold(
-                        onSuccess = onWorkingDraftChange,
-                        onFailure = { stageMessage = "无法应用当前操作：${it.message ?: "请重试"}" }
-                    )
-                    stageApplying = false
-                }
-            },
+            onClick = { applyStage(ImageSelectionTool.RECTANGLE) },
             enabled = preview != null && !saving && !stageApplying && hasPendingEdits,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp)
         )
@@ -464,7 +515,7 @@ private fun PerspectiveOverlay(
             val handleHitRadius = 58.dp.toPx()
             detectDragGestures(
                 onDragStart = { position ->
-                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight)
+                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
                     val displayCorners = currentCorners.map { it.toDisplayOffset(display) }
                     activeCorner = displayCorners.indices.minByOrNull { index ->
                         val point = displayCorners[index]
@@ -477,14 +528,14 @@ private fun PerspectiveOverlay(
                 onDrag = { change, _ ->
                     val index = activeCorner ?: return@detectDragGestures
                     change.consume()
-                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight)
+                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
                     val next = currentCorners.toMutableList().apply { this[index] = change.position.toNormalized(display) }
                     if (ImageTransformContract.isValidPerspectiveCorners(next)) currentOnCornersChange(next)
                 }
             )
         }
     ) {
-        val display = fittedImageRect(size, bitmapWidth, bitmapHeight)
+        val display = fittedImageRect(size, bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
         val displayCorners = corners.map { it.toDisplayOffset(display) }
         val path = Path().apply {
             moveTo(displayCorners[0].x, displayCorners[0].y)
@@ -522,7 +573,7 @@ private fun CropOverlay(
             detectDragGestures(
                 onDragStart = { position ->
                     currentOnInteractionStart()
-                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight)
+                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
                     val crop = currentCropRect.toDisplayRect(display)
                     dragMode = dragModeAt(position, crop, handleHitRadius)
                     dragStart = position
@@ -532,7 +583,7 @@ private fun CropOverlay(
                 onDragCancel = { dragMode = null },
                 onDrag = { change, _ ->
                     change.consume()
-                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight)
+                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
                     val current = change.position
                     val startNormalized = dragStart.toNormalized(display)
                     val currentNormalized = current.toNormalized(display)
@@ -553,7 +604,7 @@ private fun CropOverlay(
             )
         }
     ) {
-        val display = fittedImageRect(size, bitmapWidth, bitmapHeight)
+        val display = fittedImageRect(size, bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
         val crop = cropRect.toDisplayRect(display)
         val shade = Color.Black.copy(alpha = 0.43f)
         drawRect(shade, display.topLeft, Size(display.width, max(0f, crop.top - display.top)))
@@ -599,7 +650,7 @@ private fun LassoOverlay(
         modifier.pointerInput(bitmapWidth, bitmapHeight) {
             detectDragGestures(
                 onDragStart = { position ->
-                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight)
+                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
                     val point = position.toNormalized(display)
                     currentOnInteractionStart()
                     dragState = if (currentPoints.size >= 3 && pointInPolygon(point, currentPoints)) {
@@ -622,7 +673,7 @@ private fun LassoOverlay(
                 },
                 onDrag = { change, _ ->
                     change.consume()
-                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight)
+                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
                     val point = change.position.toNormalized(display)
                     when (val state = dragState) {
                         is LassoDragState.Draw -> {
@@ -642,7 +693,7 @@ private fun LassoOverlay(
             )
         }
     ) {
-        val display = fittedImageRect(size, bitmapWidth, bitmapHeight)
+        val display = fittedImageRect(size, bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
         if (points.isNotEmpty()) {
             val displayPoints = points.map { point ->
                 Offset(
@@ -689,24 +740,26 @@ private fun AnnotationOverlay(
     val currentOnInteractionStart by rememberUpdatedState(onInteractionStart)
     val currentOnAnnotationsChange by rememberUpdatedState(onAnnotationsChange)
     val currentOnSelectedIdChange by rememberUpdatedState(onSelectedIdChange)
-    val interactionModifier = if (activeTool == ImageSelectionTool.PEN || activeTool == ImageSelectionTool.ARROW) {
+    val interactionModifier = if (activeTool?.isAnnotation() == true) {
         modifier.pointerInput(bitmapWidth, bitmapHeight, activeTool, annotationColor, annotationWidth) {
             detectDragGestures(
                 onDragStart = { position ->
-                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight)
+                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
                     val point = position.toNormalized(display)
                     currentOnInteractionStart()
-                    val hit = currentAnnotations.lastOrNull { annotationHitTest(it, point) }
+                    val hit = if (activeTool == ImageSelectionTool.REDACTION) null else currentAnnotations.lastOrNull {
+                        it !is ImageAnnotationObject.Redaction && annotationHitTest(it, point)
+                    }
                     if (hit != null) {
                         currentOnSelectedIdChange(hit.id)
                         dragState = AnnotationDragState.Move(hit.id, point, hit, currentAnnotations)
                     } else {
                         val id = "annotation-${UUID.randomUUID()}"
                         currentOnSelectedIdChange(id)
-                        if (activeTool == ImageSelectionTool.PEN) {
+                        if (activeTool == ImageSelectionTool.PEN || activeTool == ImageSelectionTool.REDACTION) {
                             val points = listOf(point, point)
                             dragState = AnnotationDragState.DrawPen(id, currentAnnotations, points)
-                            currentOnAnnotationsChange(currentAnnotations + ImageAnnotationObject.Pen(id, points, annotationColor, annotationWidth.toDouble()))
+                            currentOnAnnotationsChange(currentAnnotations + strokeAnnotation(id, points, annotationColor, annotationWidth.toDouble(), activeTool == ImageSelectionTool.REDACTION))
                         } else {
                             dragState = AnnotationDragState.DrawArrow(id, currentAnnotations, point, point)
                             currentOnAnnotationsChange(currentAnnotations + ImageAnnotationObject.Arrow(id, point, point, annotationColor, annotationWidth.toDouble()))
@@ -717,14 +770,15 @@ private fun AnnotationOverlay(
                 onDragCancel = { dragState = null },
                 onDrag = { change, _ ->
                     change.consume()
-                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight)
+                    val display = fittedImageRect(Size(size.width.toFloat(), size.height.toFloat()), bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
                     val point = change.position.toNormalized(display)
                     when (val state = dragState) {
                         is AnnotationDragState.DrawPen -> {
-                            val nextPoints = if (distance(state.points.last(), point) >= MIN_LASSO_POINT_DISTANCE) state.points + point else state.points
+                            val nextPoints = if (activeTool == ImageSelectionTool.REDACTION) listOf(state.points.first(), point)
+                                else if (distance(state.points.last(), point) >= MIN_LASSO_POINT_DISTANCE) state.points + point else state.points
                             val nextState = state.copy(points = nextPoints)
                             dragState = nextState
-                            currentOnAnnotationsChange(nextState.base + ImageAnnotationObject.Pen(nextState.id, nextPoints, annotationColor, annotationWidth.toDouble()))
+                            currentOnAnnotationsChange(nextState.base + strokeAnnotation(nextState.id, nextPoints, annotationColor, annotationWidth.toDouble(), activeTool == ImageSelectionTool.REDACTION))
                         }
                         is AnnotationDragState.DrawArrow -> {
                             val nextState = state.copy(end = point)
@@ -741,10 +795,11 @@ private fun AnnotationOverlay(
         }
     } else modifier
     Canvas(interactionModifier) {
-        val display = fittedImageRect(size, bitmapWidth, bitmapHeight)
-        annotations.forEach { annotation ->
+        val display = fittedImageRect(size, bitmapWidth, bitmapHeight, IMAGE_CANVAS_INSET_DP.dp.toPx())
+        annotations.sortedBy { it is ImageAnnotationObject.Redaction }.forEach { annotation ->
             val color = Color(android.graphics.Color.parseColor(annotation.color))
-            val strokeWidth = max(2.dp.toPx(), annotation.width.toFloat() * min(display.width, display.height))
+            val strokeWidth = if (annotation is ImageAnnotationObject.Redaction) annotation.width.toFloat() * min(display.width, display.height)
+                else max(2.dp.toPx(), annotation.width.toFloat() * min(display.width, display.height))
             val selectedExtra = if (annotation.id == selectedId) 3.dp.toPx() else 0f
             when (annotation) {
                 is ImageAnnotationObject.Pen -> {
@@ -755,7 +810,23 @@ private fun AnnotationOverlay(
                         }
                     }
                     if (selectedExtra > 0) drawPath(path, Color.White.copy(alpha = 0.9f), style = Stroke(width = strokeWidth + selectedExtra))
-                    drawPath(path, color, style = Stroke(width = strokeWidth))
+                    drawPath(path, color, style = Stroke(width = strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                }
+                is ImageAnnotationObject.Redaction -> {
+                    if (annotation.rectangular) {
+                        val bounds = ImageTransformContract.boundingBoxForPoints(annotation.points)
+                        val topLeft = NormalizedPoint(bounds.x, bounds.y).toDisplayOffset(display)
+                        drawRect(Color.White, topLeft, Size((bounds.width * display.width).toFloat(), (bounds.height * display.height).toFloat()))
+                    } else {
+                    val path = Path().apply {
+                        annotation.points.forEachIndexed { index, point ->
+                            val displayPoint = point.toDisplayOffset(display)
+                            if (index == 0) moveTo(displayPoint.x, displayPoint.y) else lineTo(displayPoint.x, displayPoint.y)
+                        }
+                    }
+                    drawPath(path, Color.Black, style = Stroke(width = strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    annotation.points.firstOrNull()?.let { drawCircle(Color.Black, strokeWidth / 2f, it.toDisplayOffset(display)) }
+                    }
                 }
                 is ImageAnnotationObject.Arrow -> {
                     val start = annotation.start.toDisplayOffset(display)
@@ -802,15 +873,18 @@ private sealed interface LassoDragState {
     data class Move(val start: NormalizedPoint, val original: List<NormalizedPoint>) : LassoDragState
 }
 
-private enum class ImageSelectionTool { PERSPECTIVE, RECTANGLE, LASSO, PEN, ARROW }
+private enum class ImageSelectionTool { PERSPECTIVE, RECTANGLE, LASSO, PEN, ARROW, REDACTION }
+
+private fun ImageSelectionTool.isAnnotation() = this == ImageSelectionTool.PEN || this == ImageSelectionTool.ARROW || this == ImageSelectionTool.REDACTION
+
+private fun strokeAnnotation(id: String, points: List<NormalizedPoint>, color: String, width: Double, redaction: Boolean): ImageAnnotationObject =
+    if (redaction) ImageAnnotationObject.Redaction(id, points, width.coerceIn(0.001, 0.1), rectangular = true) else ImageAnnotationObject.Pen(id, points, color, width.coerceIn(0.001, 0.1))
 
 private enum class DragMode { NEW, MOVE, NW, NE, SW, SE }
 
-private fun fittedImageRect(canvasSize: Size, bitmapWidth: Int, bitmapHeight: Int): Rect {
-    val scale = min(canvasSize.width / bitmapWidth, canvasSize.height / bitmapHeight)
-    val width = bitmapWidth * scale
-    val height = bitmapHeight * scale
-    return Rect((canvasSize.width - width) / 2, (canvasSize.height - height) / 2, (canvasSize.width + width) / 2, (canvasSize.height + height) / 2)
+private fun fittedImageRect(canvasSize: Size, bitmapWidth: Int, bitmapHeight: Int, inset: Float): Rect {
+    val display = imageDisplayRect(canvasSize.width, canvasSize.height, bitmapWidth, bitmapHeight, inset)
+    return Rect(display.left, display.top, display.left + display.width, display.top + display.height)
 }
 
 private fun NormalizedRect.toDisplayRect(display: Rect): Rect = Rect(
@@ -889,6 +963,7 @@ private fun annotationHitTest(annotation: ImageAnnotationObject, point: Normaliz
         is ImageAnnotationObject.Pen -> annotation.points.zipWithNext().any { (start, end) ->
             distanceToSegment(point, start, end) <= threshold
         }
+        is ImageAnnotationObject.Redaction -> annotation.points.zipWithNext().any { (start, end) -> distanceToSegment(point, start, end) <= threshold }
         is ImageAnnotationObject.Arrow -> distanceToSegment(point, annotation.start, annotation.end) <= threshold
     }
 }
@@ -905,6 +980,7 @@ private fun distanceToSegment(point: NormalizedPoint, start: NormalizedPoint, en
 private fun translateAnnotation(annotation: ImageAnnotationObject, requestedDx: Double, requestedDy: Double): ImageAnnotationObject {
     val points = when (annotation) {
         is ImageAnnotationObject.Pen -> annotation.points
+        is ImageAnnotationObject.Redaction -> annotation.points
         is ImageAnnotationObject.Arrow -> listOf(annotation.start, annotation.end)
     }
     val minX = points.minOf { it.x }
@@ -916,6 +992,7 @@ private fun translateAnnotation(annotation: ImageAnnotationObject, requestedDx: 
     fun move(point: NormalizedPoint) = ImageTransformContract.normalizePoint(NormalizedPoint(point.x + dx, point.y + dy))
     return when (annotation) {
         is ImageAnnotationObject.Pen -> annotation.copy(points = annotation.points.map(::move))
+        is ImageAnnotationObject.Redaction -> annotation.copy(points = annotation.points.map(::move))
         is ImageAnnotationObject.Arrow -> annotation.copy(start = move(annotation.start), end = move(annotation.end))
     }
 }
@@ -945,6 +1022,7 @@ private val DEFAULT_PERSPECTIVE_CORNERS = listOf(
     NormalizedPoint(0.04, 0.96)
 )
 private const val MIN_CROP_SIZE = 0.02
+private const val IMAGE_CANVAS_INSET_DP = 24f
 private const val MIN_LASSO_POINT_DISTANCE = 0.006
 private const val LASSO_DASH_DP = 12f
 private const val LASSO_GAP_DP = 8f

@@ -10,12 +10,13 @@ import {
   type IngestPhotoArgs,
   type IngestPhotoResult,
   type PhotoIngestPort,
+  readNotesCatalog,
   UploadError
 } from "@mathnotes/core-server";
 import type { BlockStore } from "./blockStore";
 import { BlockWriter } from "./blockWriter";
 import { RecognitionQueue, type RecognitionJob, type RecognitionJobStatus, type RecognitionRuntimeEvent } from "./recognitionQueue";
-import { upsertRecognitionJob } from "./recognitionJobLog";
+import { readRecognitionJobs, upsertRecognitionJob } from "./recognitionJobLog";
 import { buildRecognitionContextForJob } from "./sessionRecognitionContext";
 
 const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -101,7 +102,7 @@ export class PhotoIngestPipeline implements PhotoIngestPort {
         throw new UploadError("capture identity already exists with different bytes", 409);
       }
       if (identityMatch) {
-        const result = { ...identityMatch, duplicate: true };
+        const result = await this.currentUploadResult(identityMatch, args, true);
         await this.deps.onIngested?.(result);
         return result;
       }
@@ -109,7 +110,7 @@ export class PhotoIngestPipeline implements PhotoIngestPort {
         (record) => record.sha256 === computedHash && uploadRecordBlocksStillExist(session, record)
       );
       if (duplicate) {
-        const result = { ...duplicate, duplicate: true };
+        const result = await this.currentUploadResult(duplicate, args, true);
         await this.deps.onIngested?.(result);
         return result;
       }
@@ -169,17 +170,26 @@ export class PhotoIngestPipeline implements PhotoIngestPort {
       await this.writeUploadLog(args.notebookId, args.sessionId, uploadLog);
       this.acceptedSessionKeys.set(record.uploadId, `${args.notebookId}/${args.sessionId}`);
 
-      const result = { ...record, duplicate: false };
+      const result = { ...record, notebookId: args.notebookId, sessionId: args.sessionId, duplicate: false };
       await this.deps.onIngested?.(result);
       return result;
     });
+  }
+
+  async getAcceptedUpload(uploadId: string, target?: { notebookId: string; sessionId: string }): Promise<IngestPhotoResult> {
+    return readAcceptedPhotoUpload(this.deps.store, uploadId, target);
+  }
+
+  private async currentUploadResult(record: UploadRecord, target: { notebookId: string; sessionId: string }, duplicate: boolean): Promise<IngestPhotoResult> {
+    return currentUploadResult(this.deps.store, record, target, duplicate);
   }
 
   async processAcceptedRecognition(accepted: IngestPhotoResult): Promise<IngestPhotoResult> {
     if (accepted.duplicate) {
       return accepted;
     }
-    const sessionKey = this.acceptedSessionKeys.get(accepted.uploadId);
+    const sessionKey = accepted.notebookId && accepted.sessionId
+      ? `${accepted.notebookId}/${accepted.sessionId}` : this.acceptedSessionKeys.get(accepted.uploadId);
     if (!sessionKey) {
       throw new UploadError(`Missing accepted upload context: ${accepted.uploadId}`, 500);
     }
@@ -191,7 +201,10 @@ export class PhotoIngestPipeline implements PhotoIngestPort {
   }
 
   private async processAcceptedRecognitionUnlocked(accepted: IngestPhotoResult): Promise<IngestPhotoResult> {
-    const processedJob = await this.queue.processNext(accepted.recognitionJobId);
+    const target = accepted.notebookId && accepted.sessionId
+      ? { notebookId: accepted.notebookId, sessionId: accepted.sessionId }
+      : undefined;
+    const processedJob = await this.queue.processNext(accepted.recognitionJobId, target);
     if (!processedJob) {
       throw new UploadError(`Recognition job was not processed: ${accepted.recognitionJobId}`, 500);
     }
@@ -209,21 +222,12 @@ export class PhotoIngestPipeline implements PhotoIngestPort {
         await this.writeUploadLog(processedJob.notebookId, processedJob.sessionId, records);
       }
     });
-    const result = { ...updated, duplicate: false, warnings: processedJob.warnings };
+    const result = { ...updated, notebookId: processedJob.notebookId, sessionId: processedJob.sessionId, duplicate: false, warnings: processedJob.warnings };
     return result;
   }
 
   private async readUploadLog(notebookId: string, sessionId: string): Promise<UploadRecord[]> {
-    try {
-      const records = JSON.parse(await readFile(this.uploadLogPath(notebookId, sessionId), "utf8")) as StoredUploadRecord[];
-      return records.map(normalizeUploadRecord);
-    } catch (error) {
-      if (isMissingFile(error)) {
-        return [];
-      }
-
-      throw error;
-    }
+    return readUploadRecords(this.deps.store, { notebookId, sessionId });
   }
 
   private async writeUploadLog(notebookId: string, sessionId: string, records: UploadRecord[]): Promise<void> {
@@ -239,6 +243,41 @@ export class PhotoIngestPipeline implements PhotoIngestPort {
   private uploadLogPath(notebookId: string, sessionId: string): string {
     return join(this.deps.store.getSessionDir(notebookId, sessionId), "logs", "uploads.json");
   }
+}
+
+/** Reads persisted receipts without creating a recognition provider or queue. */
+export async function readAcceptedPhotoUpload(store: BlockStore, uploadId: string, target?: { notebookId: string; sessionId: string }): Promise<IngestPhotoResult> {
+  const targets = target ? [target] : (await readNotesCatalog({ rootDir: store.getRootDir() })).notebooks.flatMap(notebook => notebook.sessions);
+  const matches: IngestPhotoResult[] = [];
+  for (const candidate of targets) {
+    if ([candidate.notebookId, candidate.sessionId].some(value => !value || value === "." || value === ".." || /[\\/\u0000:]/.test(value))) {
+      throw new UploadError("Invalid upload target", 400);
+    }
+    try { await store.readSession(candidate.notebookId, candidate.sessionId); }
+    catch (error) { if (isMissingFile(error)) continue; throw error; }
+    const records = await readUploadRecords(store, candidate);
+    for (const record of records.filter(item => item.uploadId === uploadId)) {
+      matches.push(await currentUploadResult(store, record, candidate, false));
+    }
+    if (matches.length > 1) throw new UploadError("Upload ID is ambiguous; specify notebookId and sessionId", 409);
+  }
+  if (!matches.length) throw new UploadError(`Accepted upload not found: ${uploadId}`, 404);
+  return matches[0];
+}
+
+async function currentUploadResult(store: BlockStore, record: UploadRecord, target: { notebookId: string; sessionId: string }, duplicate: boolean): Promise<IngestPhotoResult> {
+  const jobs = await readRecognitionJobs({ rootDir: store.getRootDir(), ...target, recoverRunning: false });
+  const job = jobs.find(item => item.id === record.recognitionJobId && item.notebookId === target.notebookId && item.sessionId === target.sessionId
+    && item.imageBlockId === record.imageBlockId && item.assetPath === record.assetPath);
+  return { ...record, notebookId: target.notebookId, sessionId: target.sessionId, duplicate,
+    ...(job ? { recognitionStatus: job.status, transcriptBlockId: job.transcriptBlockId, warnings: job.warnings } : {}) };
+}
+
+async function readUploadRecords(store: BlockStore, target: { notebookId: string; sessionId: string }): Promise<UploadRecord[]> {
+  try {
+    const records = JSON.parse(await readFile(join(store.getSessionDir(target.notebookId, target.sessionId), "logs/uploads.json"), "utf8")) as StoredUploadRecord[];
+    return records.map(normalizeUploadRecord);
+  } catch (error) { if (isMissingFile(error)) return []; throw error; }
 }
 
 function sha256(bytes: Buffer): string {

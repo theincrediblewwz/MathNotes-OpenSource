@@ -53,13 +53,14 @@ class CaptureLibraryScreenTest {
         composeRule.onNodeWithText("functional_analysis").performClick()
 
         composeRule.onNodeWithText("泛函分析第 3 讲").assertIsDisplayed()
-        composeRule.onNodeWithText("本地副本已清理，上传回执仍保留").assertIsDisplayed()
+        composeRule.onNodeWithText("点击从原电脑读取上传成品").assertIsDisplayed()
     }
 
     @Test
     fun localImageOpensAFullScreenSourcePreview() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        previewFile = File(context.cacheDir, "preview-source.jpg").also { file ->
+        previewFile = File(context.filesDir, "captures/preview-source.jpg").also { file ->
+            file.parentFile!!.mkdirs()
             val bitmap = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888)
             try {
                 file.outputStream().use { output -> bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output) }
@@ -73,8 +74,8 @@ class CaptureLibraryScreenTest {
 
         composeRule.onNodeWithText("blackboard.jpg").performClick()
 
-        composeRule.onNodeWithText("原素材预览").assertIsDisplayed()
-        composeRule.onNodeWithText("关闭").assertIsDisplayed()
+        composeRule.onNodeWithText("任务素材（实际上传成品）").assertIsDisplayed()
+        composeRule.onNodeWithText("关闭素材").assertIsDisplayed()
     }
 
     @Test
@@ -94,7 +95,7 @@ class CaptureLibraryScreenTest {
 
         composeRule.onNodeWithText("lecture.pdf").performClick()
 
-        composeRule.onNodeWithText("用系统应用打开").assertIsDisplayed()
+        composeRule.waitUntil(5_000) { runCatching { composeRule.onNodeWithText("打开实际上传的 PDF").assertIsDisplayed(); true }.getOrDefault(false) }
     }
 
     @Test
@@ -202,7 +203,8 @@ class CaptureLibraryScreenTest {
     @Test
     fun tappingProcessedLocalTaskOpensPhotoDetail() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        previewFile = File(context.cacheDir, "processed-local.jpg").also { file ->
+        previewFile = File(context.filesDir, "standalone/assets/session-preview/asset-preview.jpg").also { file ->
+            file.parentFile!!.mkdirs()
             val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
             try {
                 file.outputStream().use { output -> bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output) }
@@ -252,8 +254,8 @@ class CaptureLibraryScreenTest {
 
         composeRule.onNodeWithText("第 8 讲").performClick()
 
-        composeRule.onNodeWithContentDescription("第 8 讲 1 / 1").assertIsDisplayed()
-        composeRule.onNodeWithText("关闭").assertIsDisplayed()
+        composeRule.onNodeWithText("任务素材（实际上传成品）").assertIsDisplayed()
+        composeRule.onNodeWithText("关闭素材").assertIsDisplayed()
     }
 
     @Test
@@ -300,8 +302,8 @@ class CaptureLibraryScreenTest {
         deviceId = "phone-1",
         localPath = localPath,
         mimeType = mimeType,
-        byteLength = 123,
-        sha256 = "abc",
+        byteLength = File(localPath).takeIf { it.isFile }?.length() ?: 123,
+        sha256 = File(localPath).takeIf { it.isFile }?.let(::queueFileSha256) ?: "abc",
         notebookId = "functional_analysis",
         sessionId = "lecture-3",
         endpointId = "192.168.137.1:43424",

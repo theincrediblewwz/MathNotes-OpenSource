@@ -25,6 +25,11 @@ class CompanionAssetStore(context: Context) {
         root.mkdirs()
         val data = File(root, "$key.bin")
         val metadata = File(root, "$key.mime")
+        val digestFile = File(root, "$key.sha256")
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val effectiveMimeType = mimeType.ifBlank { asset.mimeType }
+        if (data.isFile && digestFile.takeIf(File::isFile)?.readText() == digest &&
+            metadata.takeIf(File::isFile)?.readText() == effectiveMimeType) return
         val temporary = File(root, "$key.tmp")
         temporary.outputStream().use { output ->
             output.write(bytes)
@@ -32,8 +37,19 @@ class CompanionAssetStore(context: Context) {
         }
         if (data.exists()) data.delete()
         check(temporary.renameTo(data)) { "无法保存同步素材" }
-        metadata.writeText(mimeType.ifBlank { asset.mimeType }, Charsets.UTF_8)
+        metadata.writeText(effectiveMimeType, Charsets.UTF_8)
+        digestFile.writeText(digest, Charsets.UTF_8)
     }
+
+    /** Only assets used by this document participate; a 304 or unchanged payload is stable. */
+    fun contentRevision(pairing: PairingConfig, target: PairingTarget, assetIds: List<String>): String =
+        assetIds.distinct().sorted().joinToString("|") { id ->
+            val key = cacheKey(pairing, target, id)
+            val data = File(root, "$key.bin")
+            val digest = File(root, "$key.sha256")
+            val revision = if (!data.isFile) "missing" else if (digest.isFile) digest.readText() else "${data.length()}:${data.lastModified()}"
+            "$id:$revision"
+        }
 
     fun read(pairing: PairingConfig, target: PairingTarget, assetId: String): CachedCompanionAsset? {
         val key = cacheKey(pairing, target, assetId)

@@ -18,18 +18,37 @@ import com.mathnotes.capture.storage.CaptureState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
-class UploadWorker(
+class UploadWorker internal constructor(
     appContext: Context,
-    params: WorkerParameters
+    params: WorkerParameters,
+    private val runtime: UploadRuntime
 ) : CoroutineWorker(appContext, params) {
+    constructor(appContext: Context, params: WorkerParameters) : this(appContext, params, UploadRuntime())
+
     private val repository = CaptureRepository(appContext)
 
     override suspend fun doWork(): Result {
+        val startedAt = runtime.elapsedRealtime()
         val captureId = inputData.getString(CAPTURE_ID) ?: return Result.failure()
+        var locked = false
+        return try {
+            val acquired = withTimeoutOrNull(runtime.backgroundBudgetMillis) {
+                UploadQueueLock.mutex.lock()
+                locked = true
+                true
+            } ?: false
+            if (!acquired) return Result.retry()
+            uploadLocked(captureId, startedAt)
+        } finally {
+            if (locked) UploadQueueLock.mutex.unlock()
+        }
+    }
+
+    private suspend fun uploadLocked(captureId: String, startedAt: Long): Result {
+        // Recovery and upload share this lock; waiting workers reread every decision here.
         val queued = repository.find(captureId) ?: return Result.success()
         if (!isAutomaticUploadState(queued.state)) return Result.success()
         if (queued.attemptCount >= UploadPolicy.MAX_AUTOMATIC_ATTEMPTS) {
@@ -56,12 +75,28 @@ class UploadWorker(
             return Result.failure()
         }
 
-        return uploadQueue.withLock {
-            val active = repository.markAttemptStarted(captureId) ?: return@withLock Result.success()
-            setProgress(workDataOf(PROGRESS to 5))
-            setForeground(createForegroundInfo(active.localPath))
-            try {
-                val (outcome, resolvedPairing) = uploadWithBoundedFallback(active, pairingStore, pairing)
+        // An offline scheduling wake-up is not an upload attempt and must not exhaust the queue.
+        if ((queued.nextAttemptAt ?: 0L) > System.currentTimeMillis()) return Result.retry()
+        if (!runtime.hasConnectedNetwork(applicationContext)) {
+            runtime.armOfflineWake(applicationContext)
+            return Result.retry()
+        }
+            var attemptStarted = false
+            return try {
+                setProgress(workDataOf(PROGRESS to 5))
+                val foreground = tryUploadForeground { setForeground(createForegroundInfo(queued.localPath)) }
+                val remaining = runtime.backgroundBudgetMillis - (runtime.elapsedRealtime() - startedAt)
+                if (!foreground && remaining <= 0) return Result.retry()
+                val active = repository.markAttemptStarted(captureId) ?: return Result.success()
+                if (active.state != CaptureState.UPLOADING) return Result.success()
+                attemptStarted = true
+                val (outcome, resolvedPairing) = if (foreground) {
+                    uploadWithBoundedFallback(active, pairingStore, pairing)
+                } else {
+                    // Cancellation reaches OkHttp Call.cancel() through its await implementation.
+                    withTimeoutOrNull(remaining) { uploadWithBoundedFallback(active, pairingStore, pairing) }
+                        ?: (UploadOutcome.Retryable(null, "本次后台上传超时，将稍后重试") to pairing)
+                }
                 when (outcome) {
                 is UploadOutcome.Accepted -> {
                     pairingStore.save(resolvedPairing)
@@ -97,10 +132,9 @@ class UploadWorker(
                 }
                 }
             } catch (cancelled: CancellationException) {
-                withContext(NonCancellable) { repository.markCancelled(captureId) }
+                if (attemptStarted) withContext(NonCancellable) { repository.markCancelled(captureId) }
                 throw cancelled
             }
-        }
     }
 
     private suspend fun uploadWithBoundedFallback(
@@ -111,7 +145,7 @@ class UploadWorker(
         val candidates = pairingStore.endpointCandidates(pairing).take(MAX_ENDPOINT_CANDIDATES)
         var lastRetryable: UploadOutcome.Retryable? = null
         for (candidate in candidates) {
-            when (val outcome = OkHttpUploadTransport().upload(capture, candidate)) {
+            when (val outcome = runtime.transport().upload(capture, candidate)) {
                 is UploadOutcome.Retryable -> lastRetryable = outcome
                 else -> return outcome to candidate
             }
@@ -146,7 +180,7 @@ class UploadWorker(
                 NotificationChannel(CHANNEL_ID, "素材上传", NotificationManager.IMPORTANCE_LOW)
             )
         }
-        val cancelIntent = WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
+        val cancelIntent = UploadPauseReceiver.pendingIntent(applicationContext, inputData.getString(CAPTURE_ID).orEmpty())
         val fileName = File(localPath).name
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
@@ -170,7 +204,6 @@ class UploadWorker(
         private const val CHANNEL_ID = "mathnotes_uploads"
         private const val NOTIFICATION_BASE = 4_200
         private const val MAX_ENDPOINT_CANDIDATES = 6
-        private val uploadQueue = Mutex()
     }
 }
 

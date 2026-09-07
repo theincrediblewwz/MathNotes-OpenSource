@@ -33,7 +33,7 @@ interface CompanionSessionDao {
     suspend fun deleteLegacy()
 }
 
-@Database(entities = [CompanionSessionEntity::class], version = 5, exportSchema = true)
+@Database(entities = [CompanionSessionEntity::class], version = 6, exportSchema = true)
 abstract class CompanionDatabase : RoomDatabase() {
     abstract fun sessionDao(): CompanionSessionDao
 
@@ -45,7 +45,7 @@ abstract class CompanionDatabase : RoomDatabase() {
                 context.applicationContext,
                 CompanionDatabase::class.java,
                 "mathnotes-companion-cache.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
         }
 
         internal val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -93,6 +93,12 @@ abstract class CompanionDatabase : RoomDatabase() {
                 // Full note bodies live in atomic files from v5 onward. Existing rows are
                 // derivative cache, so clear them and the revision to force a fresh snapshot.
                 database.execSQL("UPDATE companion_sessions SET markdown = '', html = '', revision = ''")
+            }
+        }
+
+        internal val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE companion_sessions ADD COLUMN notebookTitle TEXT NOT NULL DEFAULT ''")
             }
         }
     }

@@ -34,6 +34,7 @@ export * from "./api/localShellServer";
 export * from "./adapters/node/workspaceContextStore";
 export * from "./domain/assistantPrompt";
 export * from "./domain/faithfulTranscriptionPrompt";
+export * from "./domain/sourceImageMarkers";
 export * from "./domain/streamingOutputGuard";
 export * from "./provider/imageDataUrl";
 export * from "./provider/openAiCompatibleVisionProvider";

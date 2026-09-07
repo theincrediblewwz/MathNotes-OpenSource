@@ -28,8 +28,22 @@ describe("createReaderDocument", () => {
     expect(document.html).not.toContain("/fonts/old-katex.woff2");
     expect(document.html).not.toContain("fonts/KaTeX_");
     expect(document.html).toContain("data:image/png;base64,aW1hZ2U=");
+    expect(document.html).toContain('<details class="mathnotes-image-preview">');
+    expect(document.html).toContain('aria-label="图片大图"');
+    expect(document.html).toContain("关闭大图");
+    expect(document.html).not.toContain("<script");
+    expect(document.html).not.toContain("onclick=");
+    expect(document.html).not.toContain("href=");
+    expect(document.html.match(/<details class="mathnotes-image-preview">/g)?.length).toBe(1);
     expect(document.missingAssets).toBe(1);
     document.dispose();
+  });
+
+  it("does not turn remote or missing images into navigable previews", async () => {
+    const document = await createReaderDocument(session('<img src="https://example.com/photo.png"><img src="">'), []);
+    expect(document.html).not.toContain('<details class="mathnotes-image-preview">');
+    expect(document.html).toContain("default-src 'none'");
+    expect(document.html).not.toContain("allow-scripts");
   });
 });
 

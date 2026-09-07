@@ -13,6 +13,7 @@ const outputDir = await mkdtemp(path.join(tmpdir(), "mathnotes-native-contract-"
 const executable = path.join(outputDir, "MathNotesMacContract");
 try {
   await run("swiftc", [
+    path.join(root, "apps", "macos", "Sources", "MathNotesMac", "MacAppVersion.swift"),
     path.join(root, "apps", "macos", "Sources", "MathNotesMac", "SidecarProtocol.swift"),
     path.join(root, "apps", "macos", "Sources", "MathNotesMac", "ProviderPreferences.swift"),
     path.join(root, "apps", "macos", "Sources", "MathNotesMac", "ProviderRestoration.swift"),

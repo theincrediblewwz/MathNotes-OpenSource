@@ -50,7 +50,7 @@ export type IngestPhotoResult = {
 export interface PhotoIngestPort {
   acceptPhoto(input: IngestPhotoArgs): Promise<IngestPhotoResult>;
   processAcceptedRecognition(accepted: IngestPhotoResult): Promise<IngestPhotoResult>;
-  getAcceptedUpload?(uploadId: string): Promise<IngestPhotoResult>;
+  getAcceptedUpload?(uploadId: string, target?: { notebookId: string; sessionId: string }): Promise<IngestPhotoResult>;
   retryAcceptedRecognition?(uploadId: string): Promise<IngestPhotoResult>;
 }
 

@@ -1,3 +1,5 @@
+import { sourceImageMarkerInstruction } from "./sourceImageMarkers";
+
 export const defaultFaithfulTranscriptionPromptContent = [
   "你将看到数学板书/手写笔记/书页照片。请忠实转写为 Markdown。",
   "不要总结、润色、改写或补充证明；保持原始顺序。",
@@ -19,7 +21,7 @@ export function buildFaithfulTranscriptionPrompt(
   templateContent = defaultFaithfulTranscriptionPromptContent,
   domainGuidance?: string
 ): string {
-  return [templateContent.trim(), domainGuidance, context ? `上下文：${context}` : ""]
+  return [templateContent.trim(), sourceImageMarkerInstruction, domainGuidance, context ? `上下文：${context}` : ""]
     .filter(Boolean)
     .join("\n");
 }

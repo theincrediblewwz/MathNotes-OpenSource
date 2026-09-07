@@ -32,7 +32,7 @@ export async function buildCompanionSessionSnapshot(args: {
       assets.set(id, { id, path: assetPath, mimeType: "application/pdf" });
       const pageLabel = block.pageCount && block.pageCount > 0 ? `${block.pageCount} 页` : "页数待确认";
       sections.push(
-        `<section class="note-block pdf-block" data-block-id="${escapeAttribute(block.id)}">` +
+        `<section class="note-block pdf-block" id="mathnotes-block-${escapeAttribute(block.id)}" data-block-id="${escapeAttribute(block.id)}">` +
         `<strong>${escapeHtml(block.sourceName || "PDF 文档")}</strong>` +
         `<span>PDF · ${pageLabel}</span></section>`
       );
@@ -42,8 +42,8 @@ export async function buildCompanionSessionSnapshot(args: {
     const markdownPath = resolve(sessionDir, block.path);
     assertInside(sessionDir, markdownPath);
     const markdown = await readFile(markdownPath, "utf8");
-    const rendered = await renderCompanionMarkdown({ markdown, markdownPath, sessionDir, assets });
-    sections.push(`<section class="note-block" data-block-id="${escapeAttribute(block.id)}">${rendered}</section>`);
+    const rendered = await renderCompanionMarkdown({ markdown, markdownPath, sessionDir, assets, blockId: block.id });
+    sections.push(`<section class="note-block" id="mathnotes-block-${escapeAttribute(block.id)}" data-block-id="${escapeAttribute(block.id)}">${rendered}</section>`);
     markdownSections.push(`<!-- block:${block.id} source:${block.source} -->\n${markdown.trimEnd()}`);
   }
 
@@ -99,12 +99,16 @@ async function renderCompanionMarkdown(args: {
   markdownPath: string;
   sessionDir: string;
   assets: Map<string, CompanionSessionAsset>;
+  blockId: string;
 }): Promise<string> {
-  return renderPortableMarkdown({
+  const rendered = await renderPortableMarkdown({
     markdown: args.markdown,
     rewriteImage: async (source) => {
-      if (/^(?:data:|https?:|\/\/|#)/i.test(source) || isAbsolute(source)) return { source: "", missing: true };
-      const target = resolve(dirname(args.markdownPath), source);
+      let decoded: string;
+      try { decoded = decodeURIComponent(source); }
+      catch { return { source: "", missing: true }; }
+      if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(decoded) || decoded.includes("\0") || isAbsolute(decoded)) return { source: "", missing: true };
+      const target = resolve(dirname(args.markdownPath), decoded);
       assertInside(resolve(args.sessionDir, "assets"), target);
       try {
         await stat(target);
@@ -117,6 +121,14 @@ async function renderCompanionMarkdown(args: {
         return { source: "", missing: true };
       }
     }
+  });
+  const anchored = new Set<string>();
+  return rendered.replace(/<img\b[^>]*>/gi, image => {
+    const assetId = image.match(/\bsrc="mathnotes-companion-asset:\/\/([a-f0-9]{24})"/)?.[1];
+    if (!assetId) return image;
+    const anchor = anchored.has(assetId) ? "" : ` id="mathnotes-block-${escapeAttribute(args.blockId)}-asset-${assetId}"`;
+    anchored.add(assetId);
+    return image.replace(/^<img\b/i, `<img${anchor} data-companion-asset-id="${assetId}"`);
   });
 }
 

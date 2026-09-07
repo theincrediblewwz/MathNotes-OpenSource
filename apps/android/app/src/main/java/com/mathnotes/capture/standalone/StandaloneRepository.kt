@@ -77,22 +77,27 @@ class StandaloneRepository(
         val notebook = requireNotNull(dao.findNotebook(notebookId)) { "Notebook 已不存在" }
         val sessions = dao.findSessionsForNotebook(notebookId)
         val blocksBySession = sessions.associate { session -> session.id to dao.findBlocksForSession(session.id) }
-        val markdown = buildStandaloneNotebookExportMarkdown(notebook, sessions, blocksBySession)
+        val parts = standaloneNotebookExportParts(notebook, sessions, blocksBySession)
         context.contentResolver.openOutputStream(target, "wt").use { output ->
             requireNotNull(output) { "无法打开导出位置" }
-            output.write(markdown.toByteArray(Charsets.UTF_8))
-            output.flush()
+            parts.forEach { part ->
+                val images = part.sessionId?.let { sessionId ->
+                    standaloneReaderImages(context, sessionId, blocksBySession[sessionId].orEmpty(), dao.findTasksForSession(sessionId))
+                }.orEmpty()
+                writeStandalonePortableMarkdown(output, part.markdown, images)
+            }
         }
         return sessions.size
     }
 
     suspend fun exportSessionMarkdown(sessionId: String, target: Uri) {
         val session = requireNotNull(dao.findSession(sessionId)) { "Session 已不存在" }
-        val markdown = buildStandaloneSessionExportMarkdown(session, dao.findBlocksForSession(sessionId))
+        val blocks = dao.findBlocksForSession(sessionId)
+        val markdown = buildStandaloneSessionExportMarkdown(session, blocks)
+        val images = standaloneReaderImages(context, sessionId, blocks, dao.findTasksForSession(sessionId))
         context.contentResolver.openOutputStream(target, "wt").use { output ->
             requireNotNull(output) { "无法打开导出位置" }
-            output.write(markdown.toByteArray(Charsets.UTF_8))
-            output.flush()
+            writeStandalonePortableMarkdown(output, markdown, images)
         }
     }
 
@@ -269,16 +274,24 @@ class StandaloneRepository(
         completeRecognition(task, "# 识别草稿\n\n[本地假识别] 已读取 ${File(asset.localPath).name}。\n\n此草稿用于验证手机独立任务闭环，不曾调用付费 Provider。")
     }
 
-    suspend fun completeRecognition(task: StandaloneRecognitionTaskEntity, markdown: String) {
+    suspend fun completeRecognition(task: StandaloneRecognitionTaskEntity, markdown: String, actualImage: File? = null) {
         require(markdown.isNotBlank()) { "识别草稿不能为空" }
         val now = System.currentTimeMillis()
         val resultId = UUID.randomUUID().toString()
+        val storedTask = dao.findTask(task.id)
+        val asset = dao.findBlock(task.assetBlockId).takeIf {
+            storedTask?.assetBlockId == task.assetBlockId && storedTask.sessionId == task.sessionId
+        }
+        val trustedFile = asset?.let { trustedStandaloneSourceFile(context, task.sessionId, it) }
+        val trustedLink = if (actualImage != null && trustedFile != null && runCatching { actualImage.canonicalFile == trustedFile }.getOrDefault(false)) {
+            recognitionSourceImageLink(task.id, task.assetBlockId)
+        } else null
         val draft = StandaloneBlockEntity(
             id = resultId,
             sessionId = task.sessionId,
             kind = StandaloneBlockKind.MARKDOWN_DRAFT,
             localPath = "",
-            markdown = markdown,
+            markdown = resolveRecognitionSourceImage(markdown, trustedLink),
             locked = false,
             createdAt = now,
             updatedAt = now

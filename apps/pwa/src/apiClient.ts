@@ -160,12 +160,14 @@ export class CompanionApiClient {
     if (!uploadId) {
       throw new CompanionApiError("电脑没有返回上传编号，请稍后重试。", 502, "invalid_upload_response");
     }
-    return parseUploadMaterialResult(payload, uploadId);
+    const result = parseUploadMaterialResult(payload, uploadId);
+    assertReceiptTarget(result, task);
+    return result;
   }
 
-  async fetchUploadStatus(token: string, uploadId: string): Promise<UploadMaterialResult> {
+  async fetchUploadStatus(token: string, uploadId: string, target?: Pick<PairingTarget, "notebookId" | "sessionId">): Promise<UploadMaterialResult> {
     const response = await this.authorized(
-      `/api/v1/uploads/status?uploadId=${encodeURIComponent(uploadId)}`,
+      `/api/v1/uploads/status?uploadId=${encodeURIComponent(uploadId)}${target ? `&${targetQuery(target)}` : ""}`,
       token,
       undefined,
       "识别状态检查"
@@ -173,10 +175,12 @@ export class CompanionApiClient {
     const payload = await readJson(response);
     if (!response.ok) throw apiError(response, payload);
     const returnedId = stringValue(payload.uploadId);
-    if (!returnedId) {
+    if (returnedId !== uploadId) {
       throw new CompanionApiError("电脑没有返回上传状态。", 502, "invalid_upload_status");
     }
-    return parseUploadMaterialResult(payload, returnedId);
+    const result = parseUploadMaterialResult(payload, returnedId);
+    if (target) assertReceiptTarget(result, target);
+    return result;
   }
 
   async retryRecognition(token: string, uploadId: string): Promise<UploadMaterialResult> {
@@ -266,6 +270,11 @@ export class CompanionApiClient {
 export type UploadMaterialResult = Readonly<{
   uploadId: string;
   duplicate: boolean;
+  notebookId?: string;
+  sessionId?: string;
+  sha256?: string;
+  mimeType?: string;
+  originalName?: string;
   assetPath?: string;
   imageBlockId?: string;
   transcriptBlockId?: string;
@@ -311,6 +320,11 @@ function parseUploadMaterialResult(
   return {
     uploadId,
     duplicate: payload.duplicate === true,
+    ...(stringValue(payload.notebookId) ? { notebookId: stringValue(payload.notebookId) } : {}),
+    ...(stringValue(payload.sessionId) ? { sessionId: stringValue(payload.sessionId) } : {}),
+    ...(stringValue(payload.sha256) ? { sha256: stringValue(payload.sha256).toLowerCase() } : {}),
+    ...(stringValue(payload.mimeType) ? { mimeType: stringValue(payload.mimeType) } : {}),
+    ...(stringValue(payload.originalName) ? { originalName: stringValue(payload.originalName) } : {}),
     assetPath: stringValue(payload.assetPath) || undefined,
     imageBlockId: stringValue(payload.imageBlockId) || undefined,
     transcriptBlockId: stringValue(payload.transcriptBlockId) || undefined,
@@ -420,8 +434,14 @@ function numberValue(input: unknown): number {
   return typeof input === "number" ? input : Number.NaN;
 }
 
-function targetQuery(target: PairingTarget): string {
+function targetQuery(target: Pick<PairingTarget, "notebookId" | "sessionId">): string {
   return `notebookId=${encodeURIComponent(target.notebookId)}&sessionId=${encodeURIComponent(target.sessionId)}`;
+}
+
+function assertReceiptTarget(result: UploadMaterialResult, target: Pick<PairingTarget, "notebookId" | "sessionId">): void {
+  if ((result.notebookId && result.notebookId !== target.notebookId) || (result.sessionId && result.sessionId !== target.sessionId)) {
+    throw new CompanionApiError("上传回执属于另一份笔记，已停止读取。", 502, "upload_target_mismatch");
+  }
 }
 
 function revisionEtag(revision: string): string {

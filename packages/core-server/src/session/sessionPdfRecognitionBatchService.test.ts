@@ -26,12 +26,18 @@ describe("SessionPdfRecognitionBatchService", () => {
   it("stages selected pages and writes ordered PDF transcripts with bounded concurrency", async () => {
     let active = 0;
     let peak = 0;
+    let calls = 0;
+    let releasePair!: () => void;
+    const firstPairEntered = new Promise<void>((resolve) => { releasePair = resolve; });
     const provider: RecognitionProvider = {
       name: "pdf-fixture",
       async transcribe(input) {
         active += 1;
         peak = Math.max(peak, active);
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        calls += 1;
+        if (calls === 2) releasePair();
+        // Wait for both workers rather than assuming filesystem staging takes under 20 ms.
+        if (calls <= 2) await firstPairEntered;
         active -= 1;
         return { markdown: `## 第 ${input.imagePaths[0].match(/page-(\d+)/)?.[1]} 页\n` };
       }

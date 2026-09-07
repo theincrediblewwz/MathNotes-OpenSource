@@ -5,18 +5,29 @@ internal fun buildStandaloneNotebookExportMarkdown(
     sessions: List<StandaloneSessionEntity>,
     blocksBySession: Map<String, List<StandaloneBlockEntity>>
 ): String {
+    return standaloneNotebookExportParts(notebook, sessions, blocksBySession).joinToString("") { it.markdown }
+}
+
+internal data class StandaloneNotebookExportPart(val sessionId: String?, val markdown: String)
+
+internal fun standaloneNotebookExportParts(
+    notebook: StandaloneNotebookEntity,
+    sessions: List<StandaloneSessionEntity>,
+    blocksBySession: Map<String, List<StandaloneBlockEntity>>
+): List<StandaloneNotebookExportPart> {
     val notebookTitle = notebook.title.singleLineTitle("未命名 Notebook")
     val orderedSessions = sessions
         .filter { it.notebookId == notebook.id }
         .sortedWith(compareBy<StandaloneSessionEntity> { it.createdAt }.thenBy { it.id })
-    if (orderedSessions.isEmpty()) return "# $notebookTitle\n\n_这个 Notebook 还没有 Session。_\n"
+    if (orderedSessions.isEmpty()) return listOf(StandaloneNotebookExportPart(null, "# $notebookTitle\n\n_这个 Notebook 还没有 Session。_\n"))
 
-    val sections = orderedSessions.map { session ->
+    val sections = orderedSessions.mapIndexed { index, session ->
         val sessionTitle = session.title.singleLineTitle("未命名 Session")
         val markdown = prepareStandaloneSessionMarkdown(blocksBySession[session.id].orEmpty()).trim()
-        "## $sessionTitle\n\n${markdown.ifBlank { "_这份 Session 还没有正文。_" }}"
+        val separator = if (index == orderedSessions.lastIndex) "\n" else "\n\n---\n\n"
+        StandaloneNotebookExportPart(session.id, "## $sessionTitle\n\n${markdown.ifBlank { "_这份 Session 还没有正文。_" }}$separator")
     }
-    return "# $notebookTitle\n\n${sections.joinToString("\n\n---\n\n")}\n"
+    return listOf(StandaloneNotebookExportPart(null, "# $notebookTitle\n\n")) + sections
 }
 
 internal fun buildStandaloneSessionExportMarkdown(
