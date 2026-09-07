@@ -504,6 +504,12 @@ try {
   );
   assert.match(await readFile(exportedAfterPromotion.outPath, "utf8"), /Mock 学习助手/);
 
+  // The fixture calls IPC directly instead of the UI promotion handler, which
+  // normally applies the returned document and revision to the editor. Reload
+  // that committed state before testing later UI writes with a fresh baseline.
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector("[data-testid='preview-pane']")?.textContent?.includes("Mock 学习助手"));
+
   console.log("[electron smoke] search popover locates source");
   await page.getByRole("button", { name: "搜索", exact: true }).click();
   await assertVisible(page, "[data-testid='search-popover']");
@@ -519,7 +525,7 @@ try {
   );
 
   console.log("[electron smoke] new text block quick action");
-  const sourceBlockCountBeforeCreate = await page.locator("[data-testid='source-block']").count();
+  const sourceBlockCountBeforeCreate = await page.evaluate(async () => (await window.mathNotes.loadCurrentSession()).editableBlocks.length);
   await page.getByRole("button", { name: "添加内容", exact: true }).click();
   await page.waitForFunction(() => document.querySelector(".source-create-menu")?.classList.contains("open"), undefined, {
     timeout: 3000
@@ -528,7 +534,7 @@ try {
   await createTextBlockAction.waitFor({ state: "visible", timeout: 3000 });
   await createTextBlockAction.click();
   await page.waitForFunction(
-    (before) => document.querySelectorAll("[data-testid='source-block']").length > before,
+    async (before) => (await window.mathNotes.loadCurrentSession()).editableBlocks.length === before + 1,
     sourceBlockCountBeforeCreate,
     { timeout: 5000 }
   );
