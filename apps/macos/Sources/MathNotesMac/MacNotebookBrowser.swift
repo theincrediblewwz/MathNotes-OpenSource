@@ -3,7 +3,7 @@ import SwiftUI
 private enum MacSessionPreviewState: Equatable {
     case idle
     case loading
-    case loaded(String)
+    case loaded([ContinuousMarkdownBlock])
     case failed(String)
 }
 
@@ -11,13 +11,22 @@ struct MacNotebookBrowser: View {
     let notebooks: [NotebookCatalogItem]
     let sourceMode: WorkspaceSourceMode
     let supervisor: SidecarSupervisor
-    let companionReader: CompanionReaderStore
+    @ObservedObject var companionReader: CompanionReaderStore
     let initialNotebookID: String?
+    let hasUnsavedDrafts: Bool
     let onCreateNotebook: () -> Void
     let onCreateSession: (NotebookCatalogItem) -> Void
     let onOpenSession: (SessionCatalogItem) -> Void
     let onClose: () -> Void
 
+    @State private var managementTarget: BrowserManagementTarget?
+    @State private var renameTitle = ""
+    @State private var showRename = false
+    @State private var showDelete = false
+    @State private var showTrash = false
+    @State private var trashEntries: [WorkspaceTrashEntry] = []
+    @State private var isManaging = false
+    @State private var managementError: String?
     @State private var openedNotebookID: String?
     @State private var searchText = ""
     @State private var hoveredSessionID: String?
@@ -30,6 +39,7 @@ struct MacNotebookBrowser: View {
         supervisor: SidecarSupervisor,
         companionReader: CompanionReaderStore,
         initialNotebookID: String?,
+        hasUnsavedDrafts: Bool = false,
         onCreateNotebook: @escaping () -> Void,
         onCreateSession: @escaping (NotebookCatalogItem) -> Void,
         onOpenSession: @escaping (SessionCatalogItem) -> Void,
@@ -40,6 +50,7 @@ struct MacNotebookBrowser: View {
         self.supervisor = supervisor
         self.companionReader = companionReader
         self.initialNotebookID = initialNotebookID
+        self.hasUnsavedDrafts = hasUnsavedDrafts
         self.onCreateNotebook = onCreateNotebook
         self.onCreateSession = onCreateSession
         self.onOpenSession = onOpenSession
@@ -60,9 +71,50 @@ struct MacNotebookBrowser: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .overlayPreferenceValue(SessionPreviewAnchorKey.self) { anchors in
+            GeometryReader { geometry in
+                if let id = hoveredSessionID,
+                   let anchor = anchors[id],
+                   let notebook = openedNotebook,
+                   let session = notebook.sessions.first(where: { $0.id == id }) {
+                    let card = geometry[anchor]
+                    let width: CGFloat = 360
+                    let height: CGFloat = 320
+                    let x = card.maxX + width + 12 <= geometry.size.width
+                        ? card.maxX + 12 : max(12, card.minX - width - 12)
+                    let y = max(12, min(card.minY, geometry.size.height - height - 12))
+                    sessionPreview(session, notebook: notebook)
+                        .frame(width: width, height: height)
+                        .background(MathNotesTheme.sidebar, in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(MathNotesTheme.separator))
+                        .shadow(color: .black.opacity(0.15), radius: 18, y: 6)
+                        .position(x: x + width / 2, y: y + height / 2)
+                        .task(id: session.id) { await loadPreview(session) }
+                }
+            }
+        }
         .frame(minWidth: 820, idealWidth: 940, minHeight: 560, idealHeight: 660)
         .background(MathNotesTheme.canvas)
         .tint(MathNotesTheme.accent)
+        .alert("重命名", isPresented: $showRename) {
+            TextField("名称", text: $renameTitle)
+            Button("取消", role: .cancel) {}
+            Button("保存") {
+                if let target = managementTarget { runManagement(target.request("rename", title: renameTitle)) }
+            }
+            .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .confirmationDialog("移至废纸篓？", isPresented: $showDelete, titleVisibility: .visible) {
+            Button("移至废纸篓", role: .destructive) {
+                if let target = managementTarget { runManagement(target.request("trash")) }
+            }
+        } message: {
+            Text("“\(managementTarget?.title ?? "")”及其素材会完整保留，可从 Notebooks 的废纸篓恢复。")
+        }
+        .alert("操作未完成", isPresented: Binding(get: { managementError != nil && !showTrash }, set: { if !$0 { managementError = nil } })) {
+            Button("好") { managementError = nil }
+        } message: { Text(managementError ?? "") }
+        .sheet(isPresented: $showTrash) { trashView }
     }
 
     private var browserHeader: some View {
@@ -90,22 +142,27 @@ struct MacNotebookBrowser: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 250)
                 .accessibilityLabel("搜索 Notebook 或 Session")
-            if sourceMode == .local {
+            if canManageWorkspace {
                 if let notebook = openedNotebook {
                     Button {
                         onCreateSession(notebook)
                     } label: {
                         Label("新建 Session", systemImage: "doc.badge.plus")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
                 } else {
                     Button {
                         onCreateNotebook()
                     } label: {
                         Label("新建 Notebook", systemImage: "folder.badge.plus")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
                 }
+            }
+            if canManageWorkspace {
+                Button { hoveredSessionID = nil; showTrash = true } label: { Image(systemName: "trash") }
+                    .help("废纸篓：恢复已删除笔记")
+                    .accessibilityLabel("打开笔记废纸篓")
             }
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -168,6 +225,7 @@ struct MacNotebookBrowser: View {
             .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
+        .contextMenu { managementMenu(BrowserManagementTarget(notebookId: notebook.notebookId, sessionId: nil, title: notebook.title)) }
         .accessibilityLabel("Notebook \(notebook.title)，\(notebook.sessionCount) 个 Session")
     }
 
@@ -198,6 +256,7 @@ struct MacNotebookBrowser: View {
 
     private func sessionCard(_ session: SessionCatalogItem, notebook: NotebookCatalogItem) -> some View {
         Button {
+            hoveredSessionID = nil
             onOpenSession(session)
             onClose()
         } label: {
@@ -231,33 +290,112 @@ struct MacNotebookBrowser: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            hoveredSessionID = hovering ? session.id : (hoveredSessionID == session.id ? nil : hoveredSessionID)
             if hovering {
-                previewSessionID = session.id
-                previewState = .loading
+                hoveredSessionID = session.id
+                if previewSessionID != session.id {
+                    previewSessionID = session.id
+                    previewState = .loading
+                }
             }
         }
-        .popover(
-            isPresented: Binding(
-                get: { hoveredSessionID == session.id },
-                set: { if !$0, hoveredSessionID == session.id { hoveredSessionID = nil } }
-            ),
-            attachmentAnchor: .rect(.bounds),
-            arrowEdge: .trailing
-        ) {
-            sessionPreview(session, notebook: notebook)
-                .frame(width: 360, height: 300)
-                .task(id: session.id) { await loadPreview(session) }
+        .anchorPreference(key: SessionPreviewAnchorKey.self, value: .bounds) {
+            [session.id: $0]
         }
+        .contextMenu { managementMenu(BrowserManagementTarget(notebookId: notebook.notebookId, sessionId: session.sessionId, title: session.title)) }
         .accessibilityLabel("Session \(session.title)，位于 \(notebook.title)")
+    }
+
+    @ViewBuilder
+    private func managementMenu(_ target: BrowserManagementTarget) -> some View {
+        if canManageWorkspace {
+            Button("重命名…") {
+                hoveredSessionID = nil
+                managementTarget = target
+                renameTitle = target.title
+                showRename = true
+            }
+            .disabled(isManaging || hasUnsavedDrafts)
+            Button("移至废纸篓…", role: .destructive) {
+                hoveredSessionID = nil
+                managementTarget = target
+                showDelete = true
+            }
+            .disabled(isManaging || hasUnsavedDrafts)
+            if hasUnsavedDrafts { Text("请先保存当前编辑") }
+        }
+    }
+
+    private func runManagement(_ input: WorkspaceManageRequest) {
+        guard !isManaging, !hasUnsavedDrafts else { return }
+        isManaging = true
+        managementError = nil
+        Task {
+            defer { isManaging = false }
+            do {
+                try await supervisor.manageWorkspace(input)
+                if input.action == "trash", input.sessionId == nil { openedNotebookID = nil }
+                if showTrash { trashEntries = try await supervisor.workspaceTrash() }
+            } catch { managementError = error.localizedDescription }
+        }
+    }
+
+    private var canManageWorkspace: Bool {
+        sourceMode == .local || (companionReader.replicaSupervisor != nil && companionReader.syncResult?.catalogManagementAvailable == true)
+    }
+
+    private var trashView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("笔记废纸篓").font(.title2.bold())
+                Spacer()
+                Button("完成") { showTrash = false }.keyboardShortcut(.cancelAction)
+            }
+            Text("删除的笔记和素材保留在这里。恢复 Notebook 后，再恢复其中单独删除的 Session。")
+                .font(.callout).foregroundStyle(.secondary)
+            if trashEntries.isEmpty {
+                ContentUnavailableView("废纸篓为空", systemImage: "trash")
+            } else {
+                List(trashEntries) { entry in
+                    HStack {
+                        Image(systemName: entry.sessionId == nil ? "folder" : "doc.text")
+                        VStack(alignment: .leading) {
+                            Text(entry.title)
+                            Text(entry.sessionId == nil ? "Notebook" : "Session").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("恢复") {
+                            runManagement(WorkspaceManageRequest(action: "restore", notebookId: entry.notebookId,
+                                sessionId: entry.sessionId, deletionId: entry.id))
+                        }
+                        .disabled(isManaging || hasUnsavedDrafts)
+                    }
+                }
+            }
+            if let managementError { Text(managementError).font(.callout).foregroundStyle(.red) }
+            if isManaging { ProgressView().controlSize(.small) }
+        }
+        .padding(24)
+        .frame(width: 560, height: 420)
+        .task {
+            do { trashEntries = try await supervisor.workspaceTrash() }
+            catch { managementError = error.localizedDescription }
+        }
     }
 
     private func sessionPreview(_ session: SessionCatalogItem, notebook: NotebookCatalogItem) -> some View {
         VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.standard) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(session.title)
-                    .font(.headline)
-                    .lineLimit(2)
+                HStack {
+                    Text(session.title)
+                        .font(.headline)
+                        .lineLimit(2)
+                    Spacer()
+                    Button { hoveredSessionID = nil } label: {
+                        Image(systemName: "xmark").frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("关闭正文预览")
+                }
                 Text(notebook.title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -273,12 +411,12 @@ struct MacNotebookBrowser: View {
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case let .loaded(markdown):
-                    ScrollView {
-                        Text(previewText(markdown))
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                case let .loaded(blocks):
+                    if blocks.isEmpty {
+                        ContentUnavailableView("这份笔记还没有正文", systemImage: "doc.text")
+                    } else {
+                        StableSessionMarkdownWebView(blocks: blocks, activeBlockID: .constant(nil), compact: true)
+                            .accessibilityIdentifier("session-hover-rendered-preview")
                     }
                 case let .failed(message):
                     ContentUnavailableView(
@@ -298,25 +436,12 @@ struct MacNotebookBrowser: View {
         previewSessionID = session.id
         previewState = .loading
         do {
-            let markdown: String
-            if sourceMode == .local {
-                let manifest = try await supervisor.fetchSessionManifest(session)
-                var parts: [String] = []
-                for block in manifest.blocks where block.type == "markdown" && parts.count < 3 {
-                    try Task.checkCancellation()
-                    let payload = try await supervisor.fetchSessionBlock(session, blockId: block.id)
-                    if case let .markdown(content) = payload.content,
-                       !content.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        parts.append(content.markdown)
-                    }
-                }
-                markdown = parts.joined(separator: "\n\n---\n\n")
-            } else {
-                markdown = try await companionReader.loadDocument(session).markdown
-            }
+            let blocks = try await MacSessionPreviewLoader.load(
+                session, sourceMode: sourceMode, supervisor: supervisor, companionReader: companionReader
+            )
             try Task.checkCancellation()
             guard previewSessionID == session.id else { return }
-            previewState = .loaded(markdown.isEmpty ? "这份笔记还没有正文。" : markdown)
+            previewState = .loaded(blocks)
         } catch is CancellationError {
             return
         } catch {
@@ -351,9 +476,62 @@ struct MacNotebookBrowser: View {
         }
         return date.formatted(date: .abbreviated, time: .shortened)
     }
+}
 
-    private func previewText(_ markdown: String) -> AttributedString {
-        let bounded = String(markdown.prefix(4_000))
-        return (try? AttributedString(markdown: bounded)) ?? AttributedString(bounded)
+@MainActor
+enum MacSessionPreviewLoader {
+    static func load(
+        _ session: SessionCatalogItem,
+        sourceMode: WorkspaceSourceMode,
+        supervisor: SidecarSupervisor,
+        companionReader: CompanionReaderStore
+    ) async throws -> [ContinuousMarkdownBlock] {
+        if sourceMode == .local || companionReader.replicaSupervisor != nil {
+            let manifest = try await supervisor.fetchSessionManifest(session)
+            var blocks: [ContinuousMarkdownBlock] = []
+            let groups = sessionMarkdownGroups(manifest.blocks.filter { $0.renderInNote && $0.type == "markdown" })
+            for group in groups.prefix(3) {
+                try Task.checkCancellation()
+                guard let first = group.first else { continue }
+                var pieces: [String] = []
+                var singleHTML = ""
+                for block in group {
+                    let payload = try await supervisor.fetchSessionBlock(session, blockId: block.id)
+                    if case let .markdown(content) = payload.content {
+                        pieces.append(content.markdown)
+                        singleHTML = content.html
+                    }
+                }
+                let markdown = pieces.joined()
+                guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                let html = group.count > 1 ? try await supervisor.previewMarkdown(session, blockId: first.id, markdown: markdown) : singleHTML
+                blocks.append(ContinuousMarkdownBlock(id: first.id, order: first.order,
+                    html: markdownBodyFragment(html), version: first.updatedAt, memberIDs: group.map(\.id)))
+            }
+            return blocks
+        }
+        let document = try await companionReader.loadDocument(session)
+        // Remote HTML must not enter the script-enabled local reading shell.
+        // Render its Markdown with the local sanitizer and formula renderer.
+        let html = try await supervisor.previewStandaloneMarkdown(document.markdown)
+        return [ContinuousMarkdownBlock(
+            id: session.id, order: 0, html: markdownBodyFragment(html), version: document.manifest.revision
+        )]
+    }
+}
+
+private struct SessionPreviewAnchorKey: PreferenceKey {
+    static var defaultValue: [String: Anchor<CGRect>] { [:] }
+    static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+
+private struct BrowserManagementTarget {
+    let notebookId: String
+    let sessionId: String?
+    let title: String
+    func request(_ action: String, title: String? = nil) -> WorkspaceManageRequest {
+        WorkspaceManageRequest(action: action, notebookId: notebookId, sessionId: sessionId, title: title)
     }
 }

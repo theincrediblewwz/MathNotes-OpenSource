@@ -9,6 +9,7 @@ const running = await startMacosSidecar({
   notesRootDir: requiredEnvironment("MATHNOTES_NOTES_ROOT_DIR"),
   tempDir: requiredEnvironment("MATHNOTES_TEMP_DIR"),
   appVersion: process.env.MATHNOTES_APP_VERSION?.trim() || "phase1a-dev",
+  replicaHostId: process.env.MATHNOTES_REPLICA_HOST_ID?.trim() || undefined,
   companionHost: companionEnabled ? {
     token: requiredEnvironment("MATHNOTES_COMPANION_TOKEN"),
     port: optionalPort(process.env.MATHNOTES_COMPANION_PORT, 1051),

@@ -334,6 +334,7 @@ struct CreateSessionResponse: Codable, Equatable, Sendable {
 }
 
 struct SessionBlockManifest: Codable, Equatable, Hashable, Identifiable, Sendable {
+    var continuationGroup: String? = nil
     let id: String
     let order: Int
     let type: String
@@ -882,4 +883,156 @@ enum CatalogSearch {
             )
         }
     }
+}
+
+struct WorkspaceManageRequest: Encodable, Sendable {
+    let action: String
+    let notebookId: String
+    let sessionId: String?
+    var title: String? = nil
+    var deletionId: String? = nil
+}
+
+struct WorkspaceTrashEntry: Decodable, Identifiable, Sendable {
+    let id: String
+    let notebookId: String
+    let sessionId: String?
+    let title: String
+    let deletedAt: String
+}
+struct WorkspaceTrashResponse: Decodable { let entries: [WorkspaceTrashEntry] }
+
+struct RemoteHostIdentity: Codable, Equatable, Sendable {
+    let version: Int
+    let hostId: String
+    let name: String
+}
+struct ReplicaSessionStatus: Codable, Equatable, Identifiable, Sendable {
+    let notebookId: String
+    let sessionId: String
+    let title: String
+    let status: String
+    let error: String?
+    var id: String { "\(notebookId)/\(sessionId)" }
+}
+struct ReplicaSyncResult: Codable, Equatable, Sendable {
+    let hostId: String
+    let sessions: [ReplicaSessionStatus]
+    var catalogOperations: [ReplicaCatalogStatus]? = nil
+    var catalogManagementAvailable: Bool? = nil
+    var pendingCount: Int { sessions.filter { $0.status == "pending" }.count + (catalogOperations ?? []).filter { $0.status == "pending" || $0.status == "prepared" }.count }
+    var conflictCount: Int { sessions.filter { $0.status == "conflict" }.count + (catalogOperations ?? []).filter { $0.status == "conflict" }.count }
+}
+struct ReplicaCatalogStatus: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    let title: String
+    let action: String
+    let status: String
+    let error: String?
+    let notebookId: String
+    let sessionId: String?
+    var actionLabel: String {
+        switch action {
+        case "create_notebook": "新建 Notebook"
+        case "create_session": "新建 Session"
+        case "rename": "重命名"
+        case "trash": "移至废纸篓"
+        case "restore": "恢复"
+        default: "目录操作"
+        }
+    }
+}
+struct ReplicaCatalogConflict: Decodable, Identifiable {
+    let id: String
+    let notebookId: String
+    let title: String
+    let action: String
+    let error: String?
+    let notebookTitle: String
+    let remoteTitle: String?
+    let pendingCount: Int
+    let localText: String
+}
+struct ReplicaCatalogResolveRequest: Encodable {
+    let catalogOperationId: String
+    let choice = "remote"
+}
+struct ReplicaCatalogResolutionResult: Decodable {
+    let notebookId: String
+    let backupRelativePath: String
+}
+struct ReplicaSyncRequest: Encodable {
+    let origin: String
+    let token: String
+    let hostId: String
+}
+struct ReplicaResolveRequest: Encodable {
+    let notebookId: String
+    let sessionId: String
+    let choice: String
+}
+
+struct ReplicaConflictSnapshot: Decodable {
+    struct Session: Decodable {
+        struct Block: Decodable { let id: String; let path: String }
+        let title: String
+        let blocks: [Block]
+    }
+    let session: Session
+    let markdown: [String: String]
+    var text: String { session.blocks.compactMap { markdown[$0.path] }.joined(separator: "\n\n") }
+}
+struct ReplicaConflictEntry: Decodable, Identifiable {
+    struct Versions: Decodable { let remote: ReplicaConflictSnapshot; let local: ReplicaConflictSnapshot }
+    let notebookId: String
+    let sessionId: String
+    let title: String
+    let conflict: Versions
+    var id: String { "\(notebookId)/\(sessionId)" }
+}
+struct ReplicaConflictResponse: Decodable {
+    let conflicts: [ReplicaConflictEntry]
+    let catalogConflicts: [ReplicaCatalogConflict]?
+}
+
+struct SplitLockedSelectionResponse: Codable, Sendable {
+    let version: Int
+    let lockedBlockId: String
+    let blocks: [ReadonlySessionBlock]
+}
+
+struct SessionRewriteChange: Codable, Identifiable, Sendable {
+    let blockId: String
+    let title: String
+    let beforeMarkdown: String
+    let markdown: String
+    let reason: String
+    var id: String { blockId }
+}
+struct SessionRewriteSuggestion: Codable, Identifiable, Sendable {
+    let blockId: String
+    let title: String
+    let reason: String
+    var id: String { blockId }
+}
+struct SessionRewriteProposal: Codable, Identifiable, Sendable {
+    let version: Int
+    let id: String
+    let notebookId: String
+    let sessionId: String
+    let blockId: String?
+    let instruction: String
+    let status: String
+    let summary: String
+    let changes: [SessionRewriteChange]
+    let lockedSuggestions: [SessionRewriteSuggestion]
+    let providerName: String
+    let createdAt: String
+    let updatedAt: String
+}
+struct SessionRewriteList: Codable, Sendable { let proposals: [SessionRewriteProposal] }
+struct SessionRewriteRequest: Codable, Sendable {
+    var instruction: String? = nil
+    var blockId: String? = nil
+    var proposalId: String? = nil
 }

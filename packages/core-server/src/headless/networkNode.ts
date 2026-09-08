@@ -1,3 +1,6 @@
+import { WorkspaceSyncService } from "../sync/workspaceSyncService";
+import { WorkspaceCatalogSyncService } from "../sync/workspaceCatalogSyncService";
+import { SessionWriteCoordinator } from "../session/sessionWriteCoordinator";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -43,7 +46,10 @@ export async function startHeadlessNetworkNode(
     filePath: join(config.userDataDir, "companion-device-identities.json")
   });
   await deviceIdentityService.start();
+  const writes = new SessionWriteCoordinator();
   const server = new NetworkApiServer({
+    workspaceSync: new WorkspaceSyncService(config.notesRootDir, join(config.userDataDir, "workspace-sync"), (n, s, operation) => writes.run(n, s, operation)),
+    workspaceCatalog: new WorkspaceCatalogSyncService(config.notesRootDir, join(config.userDataDir, "workspace-sync"), writes),
     host: config.host,
     port: config.port,
     token: runtime.token,

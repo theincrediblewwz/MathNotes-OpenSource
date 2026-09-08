@@ -13,6 +13,14 @@ import {
 describe("Core API capability policy", () => {
   it("keeps the network inventory explicit and valid", () => {
     expect(NETWORK_API_ROUTES.map((route) => route.id)).toEqual([
+      "workspace.identity",
+      "workspace.catalog",
+      "workspace.snapshot",
+      "workspace.asset",
+      "workspace.asset.stage",
+      "workspace.push",
+      "workspace.catalog.state",
+      "workspace.catalog.operation",
       "health",
       "pairing.challenge",
       "pairing.exchange",
@@ -26,14 +34,6 @@ describe("Core API capability policy", () => {
       "companion.asset",
       "companion.session.events",
       "companion.catalog.events",
-      "workspace.identity",
-      "workspace.catalog",
-      "workspace.catalog.state",
-      "workspace.catalog.operation",
-      "workspace.snapshot",
-      "workspace.asset",
-      "workspace.asset.stage",
-      "workspace.push"
     ]);
     expect(validateNetworkApiContracts()).toEqual([]);
   });
@@ -83,6 +83,12 @@ describe("Core API capability policy", () => {
       "local.catalog",
       "local.notes.backup",
       "local.companion.pairing.challenge",
+      "local.replica.sync",
+      "local.replica.status",
+      "local.replica.conflicts",
+      "local.replica.resolve",
+      "local.workspace.manage",
+      "local.workspace.trash",
       "local.notebook.create",
       "local.session.create",
       "local.session.manifest",
@@ -90,6 +96,7 @@ describe("Core API capability policy", () => {
       "local.session.block.save",
       "local.session.markdown.append",
       "local.session.block.lock",
+      "local.session.block.split-lock",
       "local.session.block.span.protect",
       "local.session.block.span.unlock",
       "local.session.markdown.preview",
@@ -126,6 +133,10 @@ describe("Core API capability policy", () => {
       "local.session.assistant.cancel",
       "local.session.assistant.delete",
       "local.session.assistant.promote",
+      "local.session.rewrite.list",
+      "local.session.rewrite.propose",
+      "local.session.rewrite.apply",
+      "local.session.rewrite.cancel",
       "local.session.selection-edit.propose",
       "local.session.selection-edit.apply",
       "local.session.selection-edit.cancel",

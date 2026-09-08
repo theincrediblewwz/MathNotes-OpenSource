@@ -53,6 +53,58 @@ struct LocalShellClient {
         return try JSONDecoder().decode(NotesCatalog.self, from: data)
     }
 
+    func synchronizeReplica(ready: SidecarReadyMessage, token: String, input: ReplicaSyncRequest) async throws -> ReplicaSyncResult {
+        let (data, response) = try await request(path: "local/v1/replica/sync", ready: ready, token: token,
+            timeout: 300, method: "POST", body: try JSONEncoder().encode(input))
+        guard response.statusCode == 200 else { throw workspaceError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(ReplicaSyncResult.self, from: data)
+    }
+
+    func replicaStatus(ready: SidecarReadyMessage, token: String) async throws -> ReplicaSyncResult {
+        let (data, response) = try await request(path: "local/v1/replica/status", ready: ready, token: token)
+        guard response.statusCode == 200 else { throw workspaceError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(ReplicaSyncResult.self, from: data)
+    }
+
+    func replicaConflicts(ready: SidecarReadyMessage, token: String) async throws -> [ReplicaConflictEntry] {
+        let (data, response) = try await request(path: "local/v1/replica/conflicts", ready: ready, token: token)
+        guard response.statusCode == 200 else { throw workspaceError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(ReplicaConflictResponse.self, from: data).conflicts
+    }
+
+    func resolveReplica(ready: SidecarReadyMessage, token: String, input: ReplicaResolveRequest) async throws {
+        let (data, response) = try await request(path: "local/v1/replica/resolve", ready: ready, token: token,
+            method: "POST", body: try JSONEncoder().encode(input))
+        guard response.statusCode == 200 else { throw workspaceError(data: data, status: response.statusCode) }
+    }
+
+    func replicaCatalogConflicts(ready: SidecarReadyMessage, token: String) async throws -> [ReplicaCatalogConflict] {
+        let (data, response) = try await request(path: "local/v1/replica/conflicts", ready: ready, token: token)
+        guard response.statusCode == 200 else { throw workspaceError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(ReplicaConflictResponse.self, from: data).catalogConflicts ?? []
+    }
+
+    func resolveReplicaCatalog(ready: SidecarReadyMessage, token: String, operationId: String) async throws -> ReplicaCatalogResolutionResult {
+        let (data, response) = try await request(path: "local/v1/replica/resolve", ready: ready, token: token,
+            timeout: 300, method: "POST", body: try JSONEncoder().encode(ReplicaCatalogResolveRequest(catalogOperationId: operationId)))
+        guard response.statusCode == 200 else { throw workspaceError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(ReplicaCatalogResolutionResult.self, from: data)
+    }
+
+    func manageWorkspace(ready: SidecarReadyMessage, token: String, input: WorkspaceManageRequest) async throws {
+        let (data, response) = try await request(
+            path: "local/v1/workspace/manage", ready: ready, token: token,
+            timeout: 300, method: "POST", body: try JSONEncoder().encode(input)
+        )
+        guard response.statusCode == 200 else { throw workspaceError(data: data, status: response.statusCode) }
+    }
+
+    func workspaceTrash(ready: SidecarReadyMessage, token: String) async throws -> [WorkspaceTrashEntry] {
+        let (data, response) = try await request(path: "local/v1/workspace/trash", ready: ready, token: token)
+        guard response.statusCode == 200 else { throw workspaceError(data: data, status: response.statusCode) }
+        return try JSONDecoder().decode(WorkspaceTrashResponse.self, from: data).entries
+    }
+
     func createNotebook(
         ready: SidecarReadyMessage,
         token: String,
@@ -63,6 +115,7 @@ struct LocalShellClient {
             path: "local/v1/notebooks",
             ready: ready,
             token: token,
+            timeout: 300,
             method: "POST",
             body: body
         )
@@ -83,6 +136,7 @@ struct LocalShellClient {
             path: "local/v1/sessions",
             ready: ready,
             token: token,
+            timeout: 300,
             method: "POST",
             body: body
         )
@@ -488,6 +542,42 @@ struct LocalShellClient {
             throw SidecarProtocolError.saveRejected(response.statusCode, payload?.error ?? "unknown", nil)
         }
         return try JSONDecoder().decode(SetMarkdownBlockLockResponse.self, from: data).block
+    }
+
+    func sessionRewrites(ready: SidecarReadyMessage, token: String, notebookId: String, sessionId: String) async throws -> [SessionRewriteProposal] {
+        let (data, response) = try await request(path: "local/v1/session/rewrite",
+            queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId), ready: ready, token: token)
+        guard response.statusCode == 200 else { throw SidecarProtocolError.unhealthyResponse }
+        return try JSONDecoder().decode(SessionRewriteList.self, from: data).proposals
+    }
+
+    func sessionRewrite(ready: SidecarReadyMessage, token: String, notebookId: String, sessionId: String,
+                        action: String, input: SessionRewriteRequest) async throws -> SessionRewriteProposal {
+        let (data, response) = try await request(path: "local/v1/session/rewrite/\(action)",
+            queryItems: sessionQuery(notebookId: notebookId, sessionId: sessionId), ready: ready, token: token,
+            timeout: action == "propose" ? 300 : 15, method: "POST", body: try JSONEncoder().encode(input))
+        guard response.statusCode == 200 else {
+            let payload = try? JSONDecoder().decode(LocalShellErrorPayload.self, from: data)
+            throw SidecarProtocolError.saveRejected(response.statusCode, payload?.error ?? "unknown", nil)
+        }
+        return try JSONDecoder().decode(SessionRewriteProposal.self, from: data)
+    }
+
+    func splitLockedSelection(
+        ready: SidecarReadyMessage, token: String, notebookId: String, sessionId: String,
+        blockId: String, baseRevision: String, selection: SelectionEditTextRange
+    ) async throws -> SplitLockedSelectionResponse {
+        let body = try JSONEncoder().encode(UpdateMarkdownProtectedSpanRequest(
+            baseRevision: baseRevision, from: selection.from, to: selection.to, selectedText: selection.selectedText))
+        let (data, response) = try await request(path: "local/v1/session/block/split-lock",
+            queryItems: [URLQueryItem(name: "notebookId", value: notebookId), URLQueryItem(name: "sessionId", value: sessionId),
+                         URLQueryItem(name: "blockId", value: blockId)], ready: ready, token: token, timeout: 10,
+            method: "POST", body: body)
+        guard response.statusCode == 200 else {
+            let payload = try? JSONDecoder().decode(LocalShellErrorPayload.self, from: data)
+            throw SidecarProtocolError.saveRejected(response.statusCode, payload?.error ?? "unknown", nil)
+        }
+        return try JSONDecoder().decode(SplitLockedSelectionResponse.self, from: data)
     }
 
     func protectMarkdownSelection(
@@ -1344,6 +1434,17 @@ struct LocalShellClient {
         switch code {
         case "invalid_title": return "请输入 1 到 120 个字符的名称。"
         case "notebook_not_found": return "目标 Notebook 已不存在，请刷新目录后重试。"
+        case "host_upgrade_required", "not_found", "workspace_sync_unavailable": return "这台主机需要更新 MathNotes，才能同步可编辑的笔记副本。"
+        case "host_catalog_upgrade_required", "workspace_catalog_unavailable": return "这台主机需要更新 MathNotes，才能同步新建、改名和废纸篓操作。"
+        case "resolve_catalog_conflict_first", "resolve_content_conflict_first": return "这个 Notebook 还有同步冲突。请先在远程同步状态中处理，再继续操作。"
+        case "backup_path_conflict", "backup_source_missing": return "恢复备份尚未完成，已停止后续操作并保留现有内容。请检查副本目录后重试。"
+        case "catalog_content_changed", "replayed_push_changed_remotely": return "主机内容又发生了变化，两边版本均已保留，请重新处理同步冲突。"
+        case "host_identity_changed", "replica_host_mismatch": return "连接地址对应的主机身份已改变，原来的本地副本已保留。请重新添加这台主机。"
+        case "revision_conflict": return "两端都有修改，请处理同步冲突。"
+        case "connection_unavailable": return "暂时连接不上主机；已保存的本地副本和修改会保留。"
+        case "restore_conflict": return "原位置已有笔记，未覆盖任何内容。请先处理同名笔记后再恢复。"
+        case "workspace_item_not_found", "item_not_found": return "笔记或所在 Notebook 已不存在。恢复 Session 前，请先恢复它的 Notebook。"
+        case "unsafe_path", "invalid_id", "invalid_receipt": return "笔记路径或恢复记录无效，未修改数据。"
         case "workspace_conflict": return "无法分配新的笔记目录，请稍后重试。"
         default: return "新建没有完成，请检查笔记目录权限后重试。"
         }
@@ -1375,6 +1476,12 @@ struct LocalShellClient {
         request.timeoutInterval = timeout
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw SidecarProtocolError.unhealthyResponse }
+        if method == "POST", (200..<300).contains(http.statusCode),
+           !path.contains("preview"), !path.contains("replica/"),
+           (path.contains("session") || path.contains("workspace/manage") || path == "local/v1/notebooks") {
+            NotificationCenter.default.post(name: .mathNotesWorkspaceChanged, object: nil,
+                userInfo: ["instanceId": ready.instanceId])
+        }
         return (data, http)
     }
 

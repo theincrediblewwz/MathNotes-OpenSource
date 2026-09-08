@@ -2,13 +2,14 @@ import Foundation
 
 struct MacRecentReadingEntry: Codable, Equatable, Identifiable, Sendable {
     let sourceRawValue: String
+    var hostId: String? = nil
     let notebookId: String
     let notebookTitle: String
     let sessionId: String
     let sessionTitle: String
     let openedAt: TimeInterval
 
-    var id: String { "\(sourceRawValue):\(notebookId)/\(sessionId)" }
+    var id: String { "\(sourceRawValue):\(hostId.map { $0 + ":" } ?? "")\(notebookId)/\(sessionId)" }
 }
 
 enum MacRecentReadingStore {
@@ -34,11 +35,13 @@ enum MacRecentReadingStore {
         session: SessionCatalogItem,
         notebookTitle: String,
         source: WorkspaceSourceMode,
+        hostId: String? = nil,
         now: Date = Date(),
         in entries: [MacRecentReadingEntry]
     ) -> [MacRecentReadingEntry] {
         let next = MacRecentReadingEntry(
             sourceRawValue: source.rawValue,
+            hostId: hostId,
             notebookId: session.notebookId,
             notebookTitle: notebookTitle,
             sessionId: session.sessionId,

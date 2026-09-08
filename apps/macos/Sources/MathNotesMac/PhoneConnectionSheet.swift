@@ -344,7 +344,7 @@ struct PhoneConnectionSheet: View {
                             .textSelection(.enabled)
                     }
 
-                    Text("二维码十分钟内有效，成功连接一次后立即失效。")
+                    Text("二维码十分钟内有效，成功连接一次后立即失效。首次使用会自动准备接收照片的 Session。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
 

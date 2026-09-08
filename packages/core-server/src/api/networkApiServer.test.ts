@@ -165,8 +165,14 @@ describe("NetworkApiServer", () => {
     await expect(status.json()).resolves.toMatchObject({
       uploadId: "upload-1",
       recognitionStatus: "failed",
+      notebookId: "analysis", sessionId: "lecture", sha256: "a".repeat(64),
+      mimeType: "image/jpeg", originalName: "board.jpg",
       warnings: ["provider unavailable"]
     });
+    const scoped = await fetch(`${url}/api/v1/uploads/status?uploadId=upload-1&notebookId=analysis&sessionId=lecture`, { headers });
+    expect(scoped.status).toBe(200);
+    const wrongTarget = await fetch(`${url}/api/v1/uploads/status?uploadId=upload-1&notebookId=analysis&sessionId=missing`, { headers });
+    expect(wrongTarget.status).toBe(404);
 
     const retry = await fetch(`${url}/api/v1/uploads/retry-recognition`, {
       method: "POST",

@@ -11,6 +11,7 @@ struct ReadonlySessionView: View {
     let onOpenRelatedSource: (SessionAssistantRelatedSource) -> Void
     let onOpenSession: (SessionCatalogItem) -> Void
     let onDirtyStateChanged: (Bool) -> Void
+    var readingLocationKey: String? = nil
     @Environment(\.openWindow) private var openWindow
     @State private var state: ManifestLoadState = .loading
     @State private var isSelectingImage = false
@@ -26,6 +27,9 @@ struct ReadonlySessionView: View {
     @State private var exportError: String?
     @State private var exportNotice: String?
     @State private var selectedBlockID: String?
+    @State private var sourceRevealRequest: BlockNavigationRequest?
+    @State private var previewRevealRequest: BlockNavigationRequest?
+    @State private var isFindPresented = false
     @State private var recognitionActivity: SessionRecognitionTask?
     @State private var recognitionActivityDraft = ""
     @State private var recognitionActivityMessage = ""
@@ -37,6 +41,9 @@ struct ReadonlySessionView: View {
     @State private var isActivityPanelExpanded = false
     @State private var isManifestLoading = false
     @State private var needsManifestReload = false
+    @State private var hasDeferredExternalChanges = false
+    @State private var isCompactWorkbench = false
+    @State private var isActionClusterExpanded = false
     @StateObject private var sourceWorkspace = SessionSourceWorkspace()
     @SceneStorage("mathnotes.workbench.compactPane") private var compactPaneRawValue = WorkbenchPane.preview.rawValue
     @SceneStorage("mathnotes.workbench.displayMode") private var displayModeRawValue = WorkbenchDisplayMode.split.rawValue
@@ -60,12 +67,21 @@ struct ReadonlySessionView: View {
         }
         .background(MathNotesTheme.canvas)
         .task(id: session.id) {
+            isActionClusterExpanded = false
+            isActivityPanelExpanded = false
             await load()
             guard !Task.isCancelled else { return }
             await monitorRecognitionActivity()
         }
         .onChange(of: sourceWorkspace.hasDirtyDrafts) { _, isDirty in
             onDirtyStateChanged(isDirty)
+            if !isDirty && hasDeferredExternalChanges { Task { await load(showLoading: false) } }
+        }
+        .onChange(of: session.updatedAt) { _, _ in
+            Task { await load(showLoading: false) }
+        }
+        .onChange(of: supervisor.replicaRefreshGeneration) { _, _ in
+            Task { await load(showLoading: false) }
         }
         .fileImporter(
             isPresented: $isSelectingImage,
@@ -151,52 +167,79 @@ struct ReadonlySessionView: View {
     }
 
     private func sessionContent(_ manifest: ReadonlySessionManifest) -> some View {
-        let sourceBlocks = manifest.blocks.filter { $0.renderInNote && $0.type == "markdown" }
+        let sourceBlocks = manifest.blocks.filter(\.renderInNote)
         let previewBlocks = manifest.blocks.filter(\.renderInNote)
         return GeometryReader { geometry in
-            if geometry.size.width < 760 {
-                VStack(spacing: 0) {
-                    Picker("工作区", selection: compactPaneBinding) {
-                        ForEach(WorkbenchPane.allCases) { pane in
-                            Label(pane.label, systemImage: pane.systemImage).tag(pane)
+            Group {
+                if geometry.size.width < 760 {
+                    VStack(spacing: 0) {
+                        Picker("工作区", selection: compactPaneBinding) {
+                            ForEach(WorkbenchPane.allCases) { pane in
+                                Label(pane.label, systemImage: pane.systemImage).tag(pane)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .padding(5)
+                        .mathNotesControlSurface(interactive: true)
+                        .frame(height: 36)
+                        .padding(.horizontal, MathNotesTheme.Spacing.section)
+                        .padding(.vertical, MathNotesTheme.Spacing.compact)
+
+                        if compactPane == .source {
+                            sourcePane(manifest, blocks: sourceBlocks)
+                        } else {
+                            previewPane(manifest, blocks: previewBlocks)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .padding(5)
-                    .mathNotesControlSurface(interactive: true)
-                    .padding(.horizontal, MathNotesTheme.Spacing.section)
-                    .padding(.vertical, MathNotesTheme.Spacing.compact)
-
-                    if compactPane == .source {
+                } else if displayMode == .reading {
+                    previewPane(manifest, blocks: previewBlocks)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    HSplitView {
                         sourcePane(manifest, blocks: sourceBlocks)
-                    } else {
+                            .frame(minWidth: 300, idealWidth: 420, maxWidth: 720)
                         previewPane(manifest, blocks: previewBlocks)
+                            .frame(minWidth: 360)
                     }
                 }
-            } else if displayMode == .reading {
-                previewPane(manifest, blocks: previewBlocks)
-                    .frame(maxWidth: .infinity)
-            } else {
-                HSplitView {
-                    sourcePane(manifest, blocks: sourceBlocks)
-                        .frame(minWidth: 300, idealWidth: 420, maxWidth: 720)
-                    previewPane(manifest, blocks: previewBlocks)
-                        .frame(minWidth: 360)
-                }
+            }
+            .onChange(of: geometry.size.width, initial: true) { _, width in
+                isCompactWorkbench = width < 760
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            HStack(spacing: MathNotesTheme.Spacing.compact) {
-                activityToggle
-                previewActionCluster(manifest)
+            previewActionCluster(manifest)
+                .padding(12)
+        }
+        .overlay(alignment: .topTrailing) {
+            if isFindPresented {
+                SessionFindReplacePanel(session: session, blocks: manifest.blocks, workspace: sourceWorkspace, supervisor: supervisor,
+                    onNavigate: { match in
+                        selectedBlockID = match.blockID
+                        displayModeRawValue = WorkbenchDisplayMode.split.rawValue
+                        compactPaneRawValue = WorkbenchPane.source.rawValue
+                        sourceWorkspace.findSelection = SourceFindSelection(blockID: match.blockID, range: match.range)
+                        sourceRevealRequest = BlockNavigationRequest(blockID: match.blockID)
+                        previewRevealRequest = BlockNavigationRequest(blockID: match.blockID)
+                    }, onSaved: { await load() }, onClose: { isFindPresented = false })
+                    .padding(12)
+            } else if hasDeferredExternalChanges {
+                Label("笔记已有更新，当前草稿已保留；保存时可比较版本", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    .padding(10)
+                    .allowsHitTesting(false)
             }
-            .padding(MathNotesTheme.Spacing.page)
         }
         .onChange(of: selectedBlockID) { _, blockID in
             if let blockID { sourceWorkspace.activate(blockID: blockID) }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Session \(manifest.title) 的源码与预览工作区")
+        .focusedSceneValue(\.findInSession, { isFindPresented = true })
     }
 
     private func sourcePane(_ manifest: ReadonlySessionManifest, blocks: [SessionBlockManifest]) -> some View {
@@ -209,7 +252,9 @@ struct ReadonlySessionView: View {
             supervisor: supervisor,
             onReordered: { reordered in applyManifest(reordered) },
             onSelectionEditRequested: { draft in presentAssistant(manifest, selectionEditDraft: draft) },
-            onSessionChanged: { await load() }
+            onSessionChanged: { await load() },
+            revealRequest: sourceRevealRequest,
+            onActivateBlock: { previewRevealRequest = BlockNavigationRequest(blockID: $0) }
         )
     }
 
@@ -220,76 +265,122 @@ struct ReadonlySessionView: View {
             blocks: blocks,
             activeBlockID: $selectedBlockID,
             workspace: sourceWorkspace,
-            supervisor: supervisor
+            supervisor: supervisor,
+            readingLocationKey: readingLocationKey,
+            revealRequest: previewRevealRequest,
+            onRevealSource: { blockID in
+                displayModeRawValue = WorkbenchDisplayMode.split.rawValue
+                compactPaneRawValue = WorkbenchPane.source.rawValue
+                sourceRevealRequest = BlockNavigationRequest(blockID: blockID)
+            }
         )
         .accessibilityLabel("Session \(manifest.title) 的连续预览")
     }
 
     private func previewActionCluster(_ manifest: ReadonlySessionManifest) -> some View {
-        HStack(spacing: MathNotesTheme.Spacing.compact) {
-            Button {
-                displayModeRawValue = (
-                    displayMode == .reading
-                        ? WorkbenchDisplayMode.split
-                        : WorkbenchDisplayMode.reading
-                ).rawValue
-            } label: {
-                Image(systemName: displayMode == .reading ? "rectangle.split.2x1" : "book.closed")
-                    .frame(width: 30, height: 30)
-                    .frame(width: 40, height: 44)
-                    .contentShape(Rectangle())
+        VStack(alignment: .trailing, spacing: 6) {
+            if isActionClusterExpanded {
+                secondarySessionActions(manifest)
+                    .padding(3)
+                    .background { MathNotesMaterialBackground(shape: RoundedRectangle(cornerRadius: 11)) }
             }
-            .buttonStyle(.plain)
-            .help(displayMode == .reading ? "恢复左侧 Markdown 源码区" : "收起源码区，只阅读渲染结果")
-            .accessibilityLabel(displayMode == .reading ? "显示源码" : "进入阅读模式")
+
+            HStack(spacing: 3) {
+                Button { presentAssistant(manifest) } label: {
+                    actionLabel("AI 对话", icon: "sparkles", compact: false)
+                }
+                .buttonStyle(SessionActionButtonStyle(prominent: true))
+                .help("与笔记对话：按当前 Session、内容段或选中文字向 AI 提问")
+                .accessibilityLabel("打开与笔记对话")
+
+                readingModeButton
+
+                Button {
+                    isActivityPanelExpanded = false
+                    isActionClusterExpanded.toggle()
+                } label: {
+                    Image(systemName: isActionClusterExpanded ? "chevron.down" : "chevron.up")
+                        .font(.system(size: 11, weight: .semibold))
+                        .overlay(alignment: .topTrailing) {
+                            if hasActiveSessionActivity && !isActionClusterExpanded {
+                                Circle().fill(MathNotesTheme.accent).frame(width: 5, height: 5).offset(x: 4, y: -4)
+                            }
+                        }
+                }
+                .buttonStyle(SessionActionButtonStyle(selected: isActionClusterExpanded))
+                .help(isActionClusterExpanded ? "收起操作" : "展开导出、导入与活动")
+                .accessibilityLabel(isActionClusterExpanded ? "收起笔记操作" : "展开笔记操作")
+                .accessibilityValue(isActionClusterExpanded ? "已展开" : "已收起")
+                .accessibilityIdentifier("session-actions-toggle")
+            }
+            .padding(3)
+            .background { MathNotesMaterialBackground(shape: RoundedRectangle(cornerRadius: 11)) }
+        }
+        .fixedSize()
+        .onChange(of: isActivityPanelExpanded) { _, expanded in
+            if expanded { isActionClusterExpanded = true }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("session-preview-floating-actions")
+    }
+
+    private func secondarySessionActions(_ manifest: ReadonlySessionManifest) -> some View {
+        HStack(spacing: 4) {
+            Button {
+                isActionClusterExpanded = false
+                isFindPresented = true
+            } label: { actionLabel("查找", icon: "magnifyingglass", compact: false) }
+                .buttonStyle(SessionActionButtonStyle())
+                .accessibilityLabel("查找与替换")
+            activityToggle(compact: true)
+
+            Divider().frame(height: 16)
 
             Button {
-                presentAssistant(manifest)
+                isActionClusterExpanded = false
+                Task { await exportMarkdown(manifest) }
             } label: {
-                Image(systemName: "sparkles")
-                    .frame(width: 30, height: 30)
-                    .frame(width: 40, height: 44)
-                    .contentShape(Rectangle())
+                actionLabel("导出", icon: "square.and.arrow.up", compact: false)
             }
-            .buttonStyle(.plain)
-            .help("按当前 Session、内容段或选中文字向 AI 提问")
-            .accessibilityLabel("打开与笔记对话")
+            .buttonStyle(SessionActionButtonStyle())
+            .disabled(isExporting || isImportingImage || isImportingPdf)
+            .help("将当前笔记导出为 Markdown")
+            .accessibilityLabel("导出 Markdown")
 
             Menu {
                 Button {
+                    isActionClusterExpanded = false
                     Task { await exportMarkdown(manifest) }
                 } label: {
                     Label("导出 Markdown", systemImage: "square.and.arrow.up")
                 }
                 .disabled(isExporting || isImportingImage || isImportingPdf)
-
                 Divider()
-
                 Button {
+                    isActionClusterExpanded = false
                     isSelectingImage = true
                 } label: {
                     Label("编辑并插入图片", systemImage: "photo.badge.plus")
                 }
                 .disabled(isImportingImage || isImportingPdf)
-
                 Button {
+                    isActionClusterExpanded = false
                     isSelectingPdf = true
                 } label: {
                     Label("导入 PDF", systemImage: "doc.badge.plus")
                 }
                 .disabled(isImportingImage || isImportingPdf)
             } label: {
-                if isExporting || isImportingImage || isImportingPdf {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 30, height: 30)
-                        .frame(width: 40, height: 44)
-                } else {
-                    Image(systemName: "ellipsis")
-                        .frame(width: 30, height: 30)
-                        .frame(width: 40, height: 44)
-                        .contentShape(Rectangle())
+                HStack(spacing: 5) {
+                    if isExporting || isImportingImage || isImportingPdf {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "ellipsis").font(.system(size: 13, weight: .medium))
+                    }
                 }
+                .padding(.horizontal, 9)
+                .frame(minWidth: 30, minHeight: 30)
+                .contentShape(RoundedRectangle(cornerRadius: 8))
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -297,29 +388,46 @@ struct ReadonlySessionView: View {
             .help("导入与导出")
             .accessibilityLabel("更多笔记操作")
         }
-        .background {
-            MathNotesMaterialBackground(shape: Capsule())
-                .frame(height: 34)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("session-preview-floating-actions")
     }
 
-    private var activityToggle: some View {
+    private var readingModeButton: some View {
         Button {
-            isActivityPanelExpanded.toggle()
+            isActionClusterExpanded = false
+            if isCompactWorkbench {
+                compactPaneRawValue = (compactPane == .source ? WorkbenchPane.preview : WorkbenchPane.source).rawValue
+            } else {
+                displayModeRawValue = (displayMode == .reading ? WorkbenchDisplayMode.split : WorkbenchDisplayMode.reading).rawValue
+            }
         } label: {
-            Image(systemName: hasActiveSessionActivity ? "arrow.up.arrow.down.circle.fill" : "clock.arrow.circlepath")
-                .frame(width: 30, height: 30)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-                .foregroundStyle(hasActiveSessionActivity ? MathNotesTheme.accent : .primary)
+            actionLabel(isShowingSource ? "阅读" : "编辑",
+                        icon: isShowingSource ? "book" : "square.and.pencil", compact: false)
         }
-        .buttonStyle(.plain)
-        .background {
-            MathNotesMaterialBackground(shape: Circle())
-                .frame(width: 34, height: 34)
+        .buttonStyle(SessionActionButtonStyle(selected: !isShowingSource))
+        .help(isShowingSource ? "收起源码区，只阅读渲染结果" : "显示 Markdown 源码以编辑笔记")
+        .accessibilityLabel(isShowingSource ? "进入阅读模式" : "显示源码")
+    }
+
+    private func actionLabel(_ title: String, icon: String, compact: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.system(size: 13, weight: .medium))
+            if !compact { Text(title).lineLimit(1) }
         }
+    }
+
+    private var isShowingSource: Bool {
+        isCompactWorkbench ? compactPane == .source : displayMode != .reading
+    }
+
+    private func activityToggle(compact: Bool) -> some View {
+        Button { isActivityPanelExpanded.toggle() } label: {
+            HStack(spacing: 7) {
+                actionLabel("活动", icon: hasActiveSessionActivity ? "arrow.up.arrow.down" : "clock", compact: compact)
+                if hasActiveSessionActivity {
+                    Circle().fill(MathNotesTheme.accent).frame(width: 6, height: 6)
+                }
+            }
+        }
+        .buttonStyle(SessionActionButtonStyle(selected: isActivityPanelExpanded))
         .help("接收与识别活动")
         .accessibilityLabel(isActivityPanelExpanded ? "收起接收与识别活动" : "展开接收与识别活动")
         .accessibilityIdentifier("session-activity-toggle")
@@ -1004,6 +1112,13 @@ struct ReadonlySessionView: View {
     }
 
     private func applyManifest(_ manifest: ReadonlySessionManifest) {
+        if sourceWorkspace.hasDirtyDrafts, case let .loaded(current) = state, current.revision != manifest.revision {
+            // Keep deleted/reordered dirty blocks visible and their original save
+            // baselines intact until the user saves, compares, or discards them.
+            hasDeferredExternalChanges = true
+            return
+        }
+        hasDeferredExternalChanges = false
         sourceWorkspace.prepare(sessionID: session.id, revision: manifest.revision, blocks: manifest.blocks)
         let visibleIDs = Set(manifest.blocks.filter(\.renderInNote).map(\.id))
         if selectedBlockID == nil || !visibleIDs.contains(selectedBlockID ?? "") {
@@ -1038,7 +1153,14 @@ struct ReadonlySessionView: View {
             selectedTextBlockID: selectionEditDraft?.blockId ?? sourceWorkspace.selectedExcerptBlockID,
             selectionEdit: selectionEdit,
             onOpenRelatedSource: onOpenRelatedSource,
-            onSessionChanged: { await load() }
+            onSessionChanged: { await load() },
+            workspaceSupervisor: supervisor,
+            onPrepareRewrite: {
+                guard !sourceWorkspace.hasDirtyDrafts else {
+                    throw NSError(domain: "MathNotes.Edit", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "请先保存或还原当前草稿，再生成或应用 AI 修改。"])
+                }
+            }
         ))
         openWindow(id: "session-assistant")
     }
@@ -1429,7 +1551,7 @@ private enum WorkbenchPane: String, CaseIterable, Identifiable {
 }
 
 @MainActor
-private final class SessionSourceWorkspace: ObservableObject {
+final class SessionSourceWorkspace: ObservableObject {
     @Published private(set) var payloads: [String: ReadonlySessionBlock] = [:]
     @Published private(set) var errors: [String: String] = [:]
     @Published private(set) var loadingIDs: Set<String> = []
@@ -1442,6 +1564,7 @@ private final class SessionSourceWorkspace: ObservableObject {
     @Published private(set) var selectedExcerptRange: UTF16TextSelection?
     @Published private(set) var recognitionDrafts: [String: String] = [:]
     @Published private(set) var aiEditEpochs: [String: Int] = [:]
+    @Published var findSelection: SourceFindSelection?
 
     private var sessionID: String?
     private var revision: String?
@@ -1462,6 +1585,7 @@ private final class SessionSourceWorkspace: ObservableObject {
             selectedExcerptRange = nil
             recognitionDrafts.removeAll()
             aiEditEpochs.removeAll()
+            findSelection = nil
             loadedUpdatedAt.removeAll()
             hasDirtyDrafts = false
             return
@@ -1498,14 +1622,18 @@ private final class SessionSourceWorkspace: ObservableObject {
         force: Bool = false
     ) async {
         if !force, payloads[block.id] != nil, loadedUpdatedAt[block.id] == block.updatedAt { return }
+        guard !isDirty(blockID: block.id) else { return }
         guard !loadingIDs.contains(block.id) else { return }
         loadingIDs.insert(block.id)
         errors[block.id] = nil
-        let preserveDraft = isDirty(blockID: block.id)
         defer { loadingIDs.remove(block.id) }
         do {
             let payload = try await supervisor.fetchSessionBlock(session, blockId: block.id)
-            store(payload, resetDraft: !preserveDraft)
+            // Typing can start while the request is in flight. Keeping only the
+            // text but replacing its revision would let an old draft overwrite a
+            // newer remote note on the next save.
+            guard !isDirty(blockID: block.id) else { return }
+            store(payload, resetDraft: true)
         } catch is CancellationError {
             return
         } catch {
@@ -1516,6 +1644,11 @@ private final class SessionSourceWorkspace: ObservableObject {
     func setDraft(_ markdown: String, blockID: String) {
         drafts[blockID] = markdown
         refreshDirtyState()
+    }
+
+    func applyExternalDraft(_ markdown: String, blockID: String) {
+        aiEditEpochs[blockID, default: 0] += 1
+        setDraft(markdown, blockID: blockID)
     }
 
     func setSelection(_ selection: String, range: UTF16TextSelection?, blockID: String) {
@@ -1552,8 +1685,11 @@ private final class SessionSourceWorkspace: ObservableObject {
     func beginSaving(blockID: String) { savingIDs.insert(blockID) }
     func endSaving(blockID: String) { savingIDs.remove(blockID) }
 
-    func applySaved(_ payload: ReadonlySessionBlock) {
+    func applySaved(_ payload: ReadonlySessionBlock, submittedDraft: String? = nil) {
+        let blockID = payload.block.id
+        let newerDraft = submittedDraft.flatMap { drafts[blockID] != $0 ? drafts[blockID] : nil }
         store(payload, resetDraft: true)
+        if let newerDraft { setDraft(newerDraft, blockID: blockID) }
     }
 
     func applyAISelectionEdit(_ payload: ReadonlySessionBlock) {
@@ -1588,6 +1724,8 @@ private struct SessionSourcePane: View {
     let onReordered: (ReadonlySessionManifest) -> Void
     let onSelectionEditRequested: (MacSelectionEditDraft) -> Void
     let onSessionChanged: () async -> Void
+    var revealRequest: BlockNavigationRequest? = nil
+    var onActivateBlock: (String) -> Void = { _ in }
     @State private var batchSelection: Set<String> = []
     @State private var isOrganizing = false
     @State private var organizeStatus: String?
@@ -1625,6 +1763,9 @@ private struct SessionSourcePane: View {
                             }
                         }
                         .padding(MathNotesTheme.Spacing.standard)
+                        // Scrollable breathing room keeps the final save button
+                        // reachable above the floating actions in narrow windows.
+                        .padding(.bottom, 48)
                     }
                     .onChange(of: blocks.map(\.id)) { _, blockIDs in
                         guard let pendingInsertedBlockID,
@@ -1635,6 +1776,12 @@ private struct SessionSourcePane: View {
                         }
                         self.pendingInsertedBlockID = nil
                     }
+                    .onChange(of: revealRequest) { _, request in
+                        if let request { proxy.scrollTo(request.blockID, anchor: .top) }
+                    }
+                    .onAppear {
+                        if let request = revealRequest { proxy.scrollTo(request.blockID, anchor: .top) }
+                    }
                 }
             }
             if let pendingDeleteUndo {
@@ -1643,7 +1790,7 @@ private struct SessionSourcePane: View {
             }
         }
         .background(MathNotesTheme.canvas)
-        .accessibilityLabel("Session \(manifest.title) 的 Markdown 源码")
+        .accessibilityLabel("Session \(manifest.title) 的源码与素材")
         .onChange(of: blocks.map(\.id)) { _, blockIDs in
             batchSelection.formIntersection(Set(blockIDs))
             if batchSelection.isEmpty { isSelectionMode = false }
@@ -1681,7 +1828,7 @@ private struct SessionSourcePane: View {
                 isSelectionMode: isSelectionMode,
                 workspace: workspace,
                 supervisor: supervisor,
-                onActivate: { selectedBlockID = block.id },
+                onActivate: { selectedBlockID = block.id; onActivateBlock(block.id) },
                 onToggleBatchSelection: {
                     if batchSelection.contains(block.id) {
                         batchSelection.remove(block.id)
@@ -1937,6 +2084,7 @@ private struct SessionSourceBlockView: View {
     @State private var isConfirmingDelete = false
     @State private var isAddingBlock = false
     @State private var isUpdatingProtectedSpan = false
+    @State private var showBlockRewrite = false
     @State private var isHovering = false
     @State private var editorMeasuredHeight: CGFloat = 96
     @AppStorage(MacPreferenceKeys.sourceFont) private var sourceFontRawValue = MacSourceFontPreset.systemMono.rawValue
@@ -1971,8 +2119,14 @@ private struct SessionSourceBlockView: View {
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
+                .help(assetPreviewValue == nil ? "选择这个内容段" : "点击名称预览原始素材")
                 .draggable("mathnotes-block:\(manifest.id)")
                 .contextMenu {
+                    Button { showBlockRewrite = true } label: {
+                        Label("用 AI 修改该块内容", systemImage: "wand.and.sparkles")
+                    }
+                    .disabled(manifest.type != "markdown")
+
                     Button(action: beginSelectionEdit) {
                         Label("用 AI 修改选中文字", systemImage: "sparkles")
                     }
@@ -2060,6 +2214,15 @@ private struct SessionSourceBlockView: View {
                 supervisor: supervisor,
                 force: false
             )
+        }
+        .sheet(isPresented: $showBlockRewrite) {
+            SessionRewriteWorkspace(session: session, supervisor: supervisor, blockId: manifest.id,
+                onPrepare: {
+                    guard !workspace.hasDirtyDrafts else {
+                        throw NSError(domain: "MathNotes.Edit", code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "请先保存或还原当前草稿，再生成或应用 AI 修改。"])
+                    }
+                }, onApplied: onSessionChanged, onClose: { showBlockRewrite = false })
         }
         .sheet(item: $recognitionTask) { task in
             RecognitionTaskSheet(
@@ -2193,7 +2356,8 @@ private struct SessionSourceBlockView: View {
                 externalEditEpoch: workspace.aiEditEpochs[manifest.id, default: 0],
                 fontPreset: sourceFontRawValue,
                 fontSize: sourceFontSize,
-                onActivate: onActivate
+                onActivate: onActivate,
+                findSelection: workspace.findSelection?.blockID == manifest.id ? workspace.findSelection : nil
             )
                 .frame(
                     height: max(
@@ -2332,7 +2496,7 @@ private struct SessionSourceBlockView: View {
             Task { await updateProtectedSpan(protected: !isUnlocking) }
         } label: {
             Label(
-                isUnlocking ? "解除固定" : "固定选区",
+                isUnlocking ? "解除固定" : "将选区拆成固定块",
                 systemImage: isUnlocking ? "lock.open" : "lock.shield"
             )
         }
@@ -2399,7 +2563,7 @@ private struct SessionSourceBlockView: View {
                 markdown: draft,
                 baseRevision: markdown.baseRevision
             )
-            workspace.applySaved(saved)
+            workspace.applySaved(saved, submittedDraft: draft)
             await onSessionChanged()
         } catch {
             errorMessage = error.localizedDescription
@@ -2422,6 +2586,7 @@ private struct SessionSourceBlockView: View {
     }
 
     private var sourceLabel: String {
+        if manifest.type == "image" || manifest.type == "pdf" { return manifest.sourceName }
         return switch manifest.source {
         case "ai_transcription": "识别草稿 · \(manifest.sourceName)"
         case "user", "user_revision": "用户笔记"
@@ -2446,8 +2611,11 @@ private struct SessionSourceBlockView: View {
     }
 
     private var assetPreviewValue: SessionAssetPreview? {
+        if let assetPath = manifest.assetPath, manifest.type == "image" || manifest.type == "pdf" {
+            return SessionAssetPreview(id: manifest.id, kind: manifest.type == "pdf" ? .pdf : .image, assetPath: assetPath)
+        }
         if let assetPath = manifest.sourceAssetPaths?.first {
-            return SessionAssetPreview(id: manifest.id, kind: .image, assetPath: assetPath)
+            return SessionAssetPreview(id: manifest.id, kind: assetPath.lowercased().hasSuffix(".pdf") ? .pdf : .image, assetPath: assetPath)
         }
         if let pageImagePath = manifest.sourcePageImagePath {
             return SessionAssetPreview(id: manifest.id, kind: .image, assetPath: pageImagePath)
@@ -2508,23 +2676,15 @@ private struct SessionSourceBlockView: View {
         blockActionError = nil
         defer { isUpdatingProtectedSpan = false }
         do {
-            let response: UpdateMarkdownProtectedSpanResponse
             if shouldProtect {
-                response = try await supervisor.protectMarkdownSelection(
-                    session,
-                    blockId: manifest.id,
-                    baseRevision: markdown.baseRevision,
-                    selection: selection
-                )
+                let response = try await supervisor.splitLockedSelection(
+                    session, blockId: manifest.id, baseRevision: markdown.baseRevision, selection: selection)
+                for block in response.blocks { workspace.applySaved(block) }
             } else {
-                response = try await supervisor.unlockMarkdownProtectedSelection(
-                    session,
-                    blockId: manifest.id,
-                    baseRevision: markdown.baseRevision,
-                    selection: selection
-                )
+                let response = try await supervisor.unlockMarkdownProtectedSelection(
+                    session, blockId: manifest.id, baseRevision: markdown.baseRevision, selection: selection)
+                workspace.applySaved(response.block)
             }
-            workspace.applySaved(response.block)
             workspace.setSelection("", range: nil, blockID: manifest.id)
             await onSessionChanged()
         } catch {
@@ -2862,28 +3022,73 @@ private struct SessionAssetPreviewSheet: View {
     }
 }
 
-private struct SessionContinuousPreview: View {
+struct SessionContinuousPreview: View {
     let session: SessionCatalogItem
     let sessionRevision: String
     let blocks: [SessionBlockManifest]
     @Binding var activeBlockID: String?
     @ObservedObject var workspace: SessionSourceWorkspace
     @ObservedObject var supervisor: SidecarSupervisor
+    var readingLocationKey: String? = nil
+    var revealRequest: BlockNavigationRequest? = nil
+    var onRevealSource: (String) -> Void = { _ in }
     @State private var liveRenders: [String: LivePreviewRender] = [:]
 
+    private var plan: SessionPreviewPlan { SessionPreviewPlan(blocks: blocks) }
+    private var markdownBlocks: [SessionBlockManifest] { plan.markdown }
+
+    private var renderGroups: [[SessionBlockManifest]] { sessionMarkdownGroups(markdownBlocks) }
+
     var body: some View {
+        previewContent
+        .background(MathNotesTheme.canvas)
+        .task(id: preloadIdentity) {
+            await preload()
+        }
+        .task(id: livePreviewIdentity) {
+            await refreshLiveRenders()
+        }
+        .onChange(of: markdownBlocks.map(\.id)) { _, validIDs in
+            let valid = Set(validIDs)
+            liveRenders = liveRenders.filter { valid.contains($0.key) }
+        }
+        .accessibilityIdentifier("session-continuous-preview")
+    }
+
+    private var previewContent: some View {
         Group {
-            if blocks.isEmpty {
+            if markdownBlocks.isEmpty {
                 ContentUnavailableView(
                     "这个 Session 还没有可阅读正文",
                     systemImage: "text.page",
-                    description: Text("图片和 PDF 请从左侧内容段标题打开；识别文字会显示在这里。")
+                    description: Text(plan.attachments.isEmpty ? "添加 Markdown 或识别文字后会显示在这里。" : "在源码区点击内容段名称可查看图片或 PDF；识别文字会显示在这里。")
                 )
-            } else if loadedSnapshots.count == blocks.count {
-                StableSessionMarkdownWebView(
-                    blocks: loadedSnapshots,
-                    activeBlockID: $activeBlockID
-                )
+            } else if !loadedSnapshots.isEmpty {
+                VStack(spacing: 0) {
+                    if firstFailedBlock != nil {
+                        HStack {
+                            Label("部分内容未能读取", systemImage: "exclamationmark.triangle")
+                            Spacer()
+                            Button("重试") { Task { await preload() } }
+                        }
+                        .font(.callout)
+                        .padding(12)
+                    } else if loadedSnapshots.count < renderGroups.count {
+                        ProgressView(value: Double(loadedSnapshots.count), total: Double(renderGroups.count))
+                            .progressViewStyle(.linear)
+                            .accessibilityLabel("正在读取其余正文")
+                    }
+                    StableSessionMarkdownWebView(
+                        blocks: loadedSnapshots,
+                        activeBlockID: $activeBlockID,
+                        readingLocationKey: readingLocationKey,
+                        revealRequest: revealRequest,
+                        onRevealSource: onRevealSource,
+                        readingPositionReady: loadedSnapshots.count == renderGroups.count ||
+                            (firstFailedBlock != nil && markdownBlocks.allSatisfy { workspace.payloads[$0.id] != nil || workspace.errors[$0.id] != nil })
+                    )
+                    .help("双击正文可定位到对应源码块")
+                }
             } else if let failed = firstFailedBlock {
                 ContentUnavailableView {
                     Label("有内容段无法读取", systemImage: "exclamationmark.triangle")
@@ -2911,68 +3116,62 @@ private struct SessionContinuousPreview: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background(MathNotesTheme.canvas)
-        .task(id: preloadIdentity) {
-            for block in blocks {
-                guard !Task.isCancelled else { return }
-                await workspace.load(
-                    session: session,
-                    block: block,
-                    supervisor: supervisor,
-                    force: false
-                )
-            }
+    }
+
+    private func preload() async {
+        for block in markdownBlocks {
+            guard !Task.isCancelled else { return }
+            await workspace.load(session: session, block: block, supervisor: supervisor, force: false)
         }
-        .task(id: livePreviewIdentity) {
-            await refreshLiveRenders()
-        }
-        .onChange(of: blocks.map(\.id)) { _, validIDs in
-            let valid = Set(validIDs)
-            liveRenders = liveRenders.filter { valid.contains($0.key) }
-        }
-        .accessibilityIdentifier("session-continuous-preview")
     }
 
     private var preloadIdentity: String {
-        "\(session.id):\(sessionRevision):\(blocks.map(\.previewIdentity).joined(separator: "|"))"
+        "\(session.id):\(sessionRevision):\(markdownBlocks.map(\.previewIdentity).joined(separator: "|"))"
     }
 
     private var livePreviewIdentity: String {
-        blocks.map { block in
-            let live = liveMarkdown(for: block.id) ?? ""
-            return "\(block.id):\(live.utf8.count):\(live.hashValue)"
+        renderGroups.map { group in
+            let text = renderInput(for: group) ?? ""
+            return "\(group.map(\.id).joined(separator: ":")):\(text.utf8.count):\(text.hashValue)"
         }.joined(separator: "|")
     }
 
+    private func renderInput(for group: [SessionBlockManifest]) -> String? {
+        guard let first = group.first else { return nil }
+        if group.count == 1 { return liveMarkdown(for: first.id) }
+        var pieces: [String] = []
+        for block in group {
+            if let live = liveMarkdown(for: block.id) { pieces.append(live) }
+            else if let payload = workspace.payloads[block.id], case let .markdown(content) = payload.content {
+                pieces.append(content.markdown)
+            } else { return nil }
+        }
+        return pieces.joined()
+    }
+
     private var loadedSnapshots: [ContinuousMarkdownBlock] {
-        blocks.compactMap { block in
-            guard let payload = workspace.payloads[block.id],
+        renderGroups.compactMap { group in
+            guard let block = group.first,
+                  let payload = workspace.payloads[block.id],
                   case let .markdown(markdown) = payload.content else { return nil }
-            let live = liveMarkdown(for: block.id)
             let document: String
-            if let live {
-                if let rendered = liveRenders[block.id], rendered.markdown == live {
-                    document = rendered.document
-                } else if let previous = liveRenders[block.id] {
-                    // Keep the last valid live projection mounted while the next delta renders.
-                    document = previous.document
-                } else {
-                    document = markdown.html
-                }
-            } else {
-                document = markdown.html
-            }
+            if group.count > 1 {
+                // Never mount individually parsed fragments of a split formula/table.
+                guard renderInput(for: group) != nil, let rendered = liveRenders[block.id] else { return nil }
+                document = rendered.document
+            } else if liveMarkdown(for: block.id) != nil, let rendered = liveRenders[block.id] {
+                document = rendered.document
+            } else { document = markdown.html }
             return ContinuousMarkdownBlock(
-                id: block.id,
-                order: block.order,
-                html: markdownBodyFragment(document),
-                version: "\(block.updatedAt):\(document.utf8.count):\(document.hashValue)"
+                id: block.id, order: block.order, html: markdownBodyFragment(document),
+                version: "\(block.updatedAt):\(document.utf8.count):\(document.hashValue)",
+                memberIDs: group.map(\.id)
             )
         }
     }
 
     private var firstFailedBlock: SessionBlockManifest? {
-        blocks.first { workspace.errors[$0.id] != nil }
+        markdownBlocks.first { workspace.errors[$0.id] != nil }
     }
 
     private func liveMarkdown(for blockID: String) -> String? {
@@ -2985,14 +3184,13 @@ private struct SessionContinuousPreview: View {
 
     @MainActor
     private func refreshLiveRenders() async {
-        let inputs = blocks.compactMap { block -> (SessionBlockManifest, String)? in
-            guard let markdown = liveMarkdown(for: block.id) else { return nil }
-            guard liveRenders[block.id]?.markdown != markdown else { return nil }
-            return (block, markdown)
+        let candidates = renderGroups.compactMap { group -> (SessionBlockManifest, String)? in
+            guard let first = group.first, let markdown = renderInput(for: group) else { return nil }
+            return (first, markdown)
         }
-        let liveIDs = Set(inputs.map { $0.0.id })
-            .union(blocks.compactMap { liveMarkdown(for: $0.id) == nil ? nil : $0.id })
+        let liveIDs = Set(candidates.map { $0.0.id })
         liveRenders = liveRenders.filter { liveIDs.contains($0.key) }
+        let inputs = candidates.filter { liveRenders[$0.0.id]?.markdown != $0.1 }
         for (block, markdown) in inputs {
             guard !Task.isCancelled else { return }
             do {
@@ -3001,7 +3199,8 @@ private struct SessionContinuousPreview: View {
                     blockId: block.id,
                     markdown: markdown
                 )
-                guard !Task.isCancelled, liveMarkdown(for: block.id) == markdown else { continue }
+                guard !Task.isCancelled, let group = renderGroups.first(where: { $0.first?.id == block.id }),
+                      renderInput(for: group) == markdown else { continue }
                 liveRenders[block.id] = LivePreviewRender(markdown: markdown, document: document)
             } catch is CancellationError {
                 return
@@ -3017,14 +3216,26 @@ private struct LivePreviewRender: Equatable {
     let document: String
 }
 
-private struct ContinuousMarkdownBlock: Equatable {
+struct ContinuousMarkdownBlock: Equatable {
     let id: String
     let order: Int
     let html: String
     let version: String
+    var memberIDs: [String] = []
 }
 
-private func markdownBodyFragment(_ document: String) -> String {
+func sessionMarkdownGroups(_ blocks: [SessionBlockManifest]) -> [[SessionBlockManifest]] {
+    var groups: [[SessionBlockManifest]] = []
+    for block in blocks {
+        if let previous = groups.last?.last, let group = block.continuationGroup,
+           previous.continuationGroup == group, previous.order + 1 == block.order {
+            groups[groups.count - 1].append(block)
+        } else { groups.append([block]) }
+    }
+    return groups
+}
+
+func markdownBodyFragment(_ document: String) -> String {
     guard let bodyStart = document.range(of: "<body>", options: .caseInsensitive),
           let bodyEnd = document.range(of: "</body>", options: [.caseInsensitive, .backwards]),
           bodyStart.upperBound <= bodyEnd.lowerBound else {
@@ -3040,49 +3251,69 @@ private func markdownBodyFragment(_ document: String) -> String {
     return fragment
 }
 
-private struct StableSessionMarkdownWebView: NSViewRepresentable {
+struct StableSessionMarkdownWebView: NSViewRepresentable {
     let blocks: [ContinuousMarkdownBlock]
     @Binding var activeBlockID: String?
+    var compact = false
+    var readingLocationKey: String? = nil
+    var revealRequest: BlockNavigationRequest? = nil
+    var onRevealSource: (String) -> Void = { _ in }
+    var positionDefaults: UserDefaults = .standard
+    var readingPositionReady = true
     @AppStorage(MacPreferenceKeys.previewFont) private var previewFontRawValue = MacPreviewFontPreset.system.rawValue
     @AppStorage(MacPreferenceKeys.previewFontSize) private var previewFontSize = MacTypographyPreferences.defaultPreviewSize
     @Environment(\.colorScheme) private var colorScheme
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(activeBlockID: $activeBlockID)
+        Coordinator(activeBlockID: $activeBlockID, readingLocationKey: compact ? nil : readingLocationKey, positionDefaults: positionDefaults)
     }
 
     func makeNSView(context: Context) -> WKWebView {
         let controller = WKUserContentController()
         controller.add(context.coordinator, name: "blockActivated")
+        controller.add(context.coordinator, name: "readingPosition")
+        controller.add(context.coordinator, name: "revealSource")
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = controller
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.setValue(false, forKey: "drawsBackground")
         view.navigationDelegate = context.coordinator
         context.coordinator.webView = view
+        context.coordinator.revealRequest = revealRequest
+        context.coordinator.onRevealSource = onRevealSource
+        context.coordinator.readingPositionReady = readingPositionReady
         context.coordinator.setDesiredState(
             blocks: blocks,
             activeBlockID: activeBlockID,
             fontFamily: previewFont.cssFamily,
-            fontSize: previewFontSize,
+            fontSize: compact ? min(previewFontSize, 14) : previewFontSize,
             isDark: colorScheme == .dark
         )
-        view.loadHTMLString(Self.shellDocument, baseURL: Self.katexBaseURL)
+        let document = compact ? Self.shellDocument.replacingOccurrences(
+            of: "</head>",
+            with: "<style>#article { padding: 0 0 16px; } .mn-block { padding: 2px; border: none; } h1,h2 { font-size: 1.2em; }</style></head>"
+        ) : Self.shellDocument
+        view.loadHTMLString(document, baseURL: Self.katexBaseURL)
         return view
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {
+        context.coordinator.revealRequest = revealRequest
+        context.coordinator.onRevealSource = onRevealSource
+        context.coordinator.readingPositionReady = readingPositionReady
         context.coordinator.setDesiredState(
             blocks: blocks,
             activeBlockID: activeBlockID,
             fontFamily: previewFont.cssFamily,
-            fontSize: previewFontSize,
+            fontSize: compact ? min(previewFontSize, 14) : previewFontSize,
             isDark: colorScheme == .dark
         )
     }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
         view.configuration.userContentController.removeScriptMessageHandler(forName: "blockActivated")
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "readingPosition")
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "revealSource")
         view.navigationDelegate = nil
         coordinator.webView = nil
     }
@@ -3094,6 +3325,14 @@ private struct StableSessionMarkdownWebView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         private var activeBlockID: Binding<String?>
+        private let readingLocationKey: String?
+        private let positionDefaults: UserDefaults
+        private var restoredPosition = false
+        private var savedPosition: MacReadingPosition?
+        var revealRequest: BlockNavigationRequest?
+        var onRevealSource: (String) -> Void = { _ in }
+        var readingPositionReady = true
+        private var appliedRevealID: UUID?
         weak var webView: WKWebView?
         private var isReady = false
         private var desiredBlocks: [ContinuousMarkdownBlock] = []
@@ -3107,8 +3346,11 @@ private struct StableSessionMarkdownWebView: NSViewRepresentable {
         private var appliedFontSize = 0.0
         private var appliedIsDark: Bool?
 
-        init(activeBlockID: Binding<String?>) {
+        init(activeBlockID: Binding<String?>, readingLocationKey: String? = nil, positionDefaults: UserDefaults = .standard) {
             self.activeBlockID = activeBlockID
+            self.readingLocationKey = readingLocationKey
+            self.positionDefaults = positionDefaults
+            self.savedPosition = readingLocationKey.flatMap { MacReadingPositionStore.load($0, defaults: positionDefaults) }
         }
 
         func setDesiredState(
@@ -3140,6 +3382,19 @@ private struct StableSessionMarkdownWebView: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
+            if message.name == "readingPosition", let key = readingLocationKey,
+               let value = message.body as? [String: Any], let blockID = value["id"] as? String,
+               let fraction = value["fraction"] as? Double, fraction.isFinite, (0...1).contains(fraction),
+               desiredBlocks.contains(where: { $0.id == blockID }) {
+                restoredPosition = true // A user's scroll takes precedence over a pending restore.
+                MacReadingPositionStore.save(MacReadingPosition(blockID: blockID, fraction: fraction), key: key, defaults: positionDefaults)
+                return
+            }
+            if message.name == "revealSource", let blockID = message.body as? String,
+               desiredBlocks.contains(where: { $0.id == blockID }) {
+                onRevealSource(blockID)
+                return
+            }
             guard message.name == "blockActivated",
                   let blockID = message.body as? String,
                   desiredBlocks.contains(where: { $0.id == blockID }) else { return }
@@ -3159,7 +3414,7 @@ private struct StableSessionMarkdownWebView: NSViewRepresentable {
             guard isReady, let webView else { return }
             if desiredBlocks != appliedBlocks {
                 let payload = desiredBlocks.map {
-                    ["id": $0.id, "html": $0.html, "version": $0.version]
+                    ["id": $0.id, "html": $0.html, "version": $0.version, "members": $0.memberIDs] as [String: Any]
                 }
                 guard let json = Self.jsonString(payload) else { return }
                 webView.evaluateJavaScript("window.MathNotes.updateBlocks(\(json));")
@@ -3183,6 +3438,19 @@ private struct StableSessionMarkdownWebView: NSViewRepresentable {
                 webView.evaluateJavaScript("window.MathNotes.setTheme(\(themeJSON));")
                 appliedIsDark = desiredIsDark
             }
+            if readingPositionReady, !restoredPosition, let position = savedPosition,
+               desiredBlocks.contains(where: { $0.id == position.blockID || $0.memberIDs.contains(position.blockID) }) {
+                restoredPosition = true
+                let id = Self.jsonString(position.blockID) ?? "null"
+                webView.evaluateJavaScript("window.MathNotes.restoreReadingPosition(\(id), \(position.fraction));")
+            }
+            if let request = revealRequest, request.id != appliedRevealID,
+               desiredBlocks.contains(where: { $0.id == request.blockID || $0.memberIDs.contains(request.blockID) }) {
+                restoredPosition = true
+                appliedRevealID = request.id
+                let id = Self.jsonString(request.blockID) ?? "null"
+                webView.evaluateJavaScript("window.MathNotes.revealBlock(\(id));")
+            }
         }
 
         private static func jsonString(_ value: Any?) -> String? {
@@ -3204,6 +3472,7 @@ private struct StableSessionMarkdownWebView: NSViewRepresentable {
            FileManager.default.fileExists(atPath: packaged.path) {
             return packaged
         }
+        guard Bundle.main.bundleURL.pathExtension != "app" else { return nil }
         return Bundle.module.url(
             forResource: "katex.min",
             withExtension: "css",
@@ -3291,6 +3560,26 @@ private struct StableSessionMarkdownWebView: NSViewRepresentable {
         (() => {
           const root = document.getElementById("scroll-root");
           const article = document.getElementById("article");
+          let userReading = false;
+          let reportTimer;
+          let lastReport = 0;
+          const findBlock = (id) => Array.from(article.children).find(block => block.dataset.blockId === id || block.mnMembers?.includes(id));
+          const reportPosition = () => {
+            if (!userReading) return;
+            const top = root.getBoundingClientRect().top;
+            const block = Array.from(article.children).find(block => block.getBoundingClientRect().bottom > top + 1);
+            if (!block) return;
+            const rect = block.getBoundingClientRect();
+            const fraction = Math.max(0, Math.min(1, (top - rect.top) / Math.max(1, rect.height)));
+            window.webkit?.messageHandlers?.readingPosition?.postMessage({id: block.dataset.blockId, fraction});
+            lastReport = Date.now();
+          };
+          for (const type of ["wheel", "pointerdown", "touchstart", "keydown"]) root.addEventListener(type, () => { userReading = true; }, {passive:true});
+          root.addEventListener("scroll", () => {
+            clearTimeout(reportTimer);
+            if (Date.now() - lastReport >= 120) reportPosition();
+            reportTimer = setTimeout(reportPosition, 120);
+          }, {passive:true});
           const firstVisibleAnchor = () => {
             const rootTop = root.getBoundingClientRect().top;
             for (const block of article.children) {
@@ -3313,7 +3602,29 @@ private struct StableSessionMarkdownWebView: NSViewRepresentable {
           };
           article.addEventListener("mousedown", activateFromEvent);
           article.addEventListener("focusin", activateFromEvent);
+          article.addEventListener("dblclick", event => {
+            const block = event.target.closest(".mn-block");
+            if (block) window.webkit?.messageHandlers?.revealSource?.postMessage(block.dataset.blockId);
+          });
           window.MathNotes = {
+            revealBlock(id) {
+              const block = findBlock(id);
+              if (!block) return;
+              userReading = true;
+              root.scrollTop += block.getBoundingClientRect().top - root.getBoundingClientRect().top;
+              reportPosition();
+            },
+            restoreReadingPosition(id, fraction) {
+              const restore = () => {
+                if (userReading) return;
+                const block = findBlock(id);
+                if (!block) return;
+                const rect = block.getBoundingClientRect();
+                root.scrollTop += rect.top - root.getBoundingClientRect().top + rect.height * fraction;
+              };
+              restore();
+              Promise.all([document.fonts.ready, ...Array.from(article.querySelectorAll("img")).map(img => img.decode().catch(() => {}))]).then(restore);
+            },
             updateBlocks(blocks) {
               const anchor = firstVisibleAnchor();
               const existing = new Map(Array.from(article.children).map((node) => [node.dataset.blockId, node]));
@@ -3331,13 +3642,14 @@ private struct StableSessionMarkdownWebView: NSViewRepresentable {
                   node.innerHTML = block.html;
                   node.dataset.version = block.version;
                 }
+                node.mnMembers = block.members || [block.id];
                 article.appendChild(node);
               }
               restoreAnchor(anchor);
             },
             setActive(id) {
               for (const block of article.children) {
-                block.classList.toggle("is-active", block.dataset.blockId === id);
+                block.classList.toggle("is-active", block.dataset.blockId === id || block.mnMembers?.includes(id));
               }
             },
             setTypography(family, size) {
@@ -4203,10 +4515,14 @@ struct SessionAssistantPanel: View {
     let onOpenRelatedSource: (SessionAssistantRelatedSource) -> Void
     let onSessionChanged: () async -> Void
     let onClose: () -> Void
+    let onPrepareRewrite: (() async throws -> Void)?
 
     @State private var scope: SessionAssistantScope
     @State private var mode = SessionAssistantMode.explain
     @State private var question = ""
+    @State private var showSessionRewrite = false
+    @State private var selectedRewrite: SessionRewriteProposal?
+    @State private var rewriteHistory: [SessionRewriteProposal] = []
     @State private var preview: SessionAssistantPreview?
     @State private var remarks: [SessionAssistantRemark] = []
     @State private var selectedRemarkID: String?
@@ -4237,7 +4553,8 @@ struct SessionAssistantPanel: View {
         selectionEditContext: SessionAssistantSelectionEditContext?,
         onOpenRelatedSource: @escaping (SessionAssistantRelatedSource) -> Void,
         onSessionChanged: @escaping () async -> Void,
-        onClose: @escaping () -> Void
+        onClose: @escaping () -> Void,
+        onPrepareRewrite: (() async throws -> Void)? = nil
     ) {
         self.session = session
         self.manifest = manifest
@@ -4249,6 +4566,7 @@ struct SessionAssistantPanel: View {
         self.onOpenRelatedSource = onOpenRelatedSource
         self.onSessionChanged = onSessionChanged
         self.onClose = onClose
+        self.onPrepareRewrite = onPrepareRewrite
         _scope = State(initialValue: selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .block : .selection)
     }
 
@@ -4271,6 +4589,13 @@ struct SessionAssistantPanel: View {
                 composer
             }
         }
+        .sheet(isPresented: $showSessionRewrite) {
+            SessionRewriteWorkspace(session: session, supervisor: supervisor,
+                initialInstruction: question, initialProposal: selectedRewrite,
+                onPrepare: { try await onPrepareRewrite?() },
+                onApplied: { await onSessionChanged(); await loadRewriteHistory() },
+                onClose: { showSessionRewrite = false; Task { await loadRewriteHistory() } })
+        }
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: MathNotesTheme.Radius.panel))
         .overlay {
@@ -4280,6 +4605,7 @@ struct SessionAssistantPanel: View {
         .shadow(color: .black.opacity(0.12), radius: 22, y: 8)
         .task {
             await loadRemarks()
+            await loadRewriteHistory()
         }
         .task(id: previewKey) {
             do {
@@ -4347,7 +4673,7 @@ struct SessionAssistantPanel: View {
     private var conversationPane: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: MathNotesTheme.Spacing.section) {
-                if remarks.isEmpty && !isLoadingRemarks {
+                if remarks.isEmpty && rewriteHistory.isEmpty && !isLoadingRemarks {
                     VStack(spacing: MathNotesTheme.Spacing.standard) {
                         Image(systemName: "bubble.left.and.bubble.right")
                             .font(.title2)
@@ -4361,6 +4687,17 @@ struct SessionAssistantPanel: View {
                 }
                 ForEach(remarks) { remark in
                     assistantMessage(remark)
+                }
+                ForEach(rewriteHistory) { rewrite in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(rewrite.instruction).font(.callout.weight(.medium))
+                        SessionRewriteSummary(proposal: rewrite)
+                        Button(rewrite.status == "applied" ? "查看修改详情" : "审阅待应用提案") {
+                            selectedRewrite = rewrite
+                            showSessionRewrite = true
+                        }.buttonStyle(.borderless)
+                    }
+                    .padding(14).background(MathNotesTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
                 }
                 if isRunning, let submittedQuestion {
                     Text(submittedQuestion)
@@ -4463,6 +4800,13 @@ struct SessionAssistantPanel: View {
                     Text(mode.label)
                 }
                 .menuStyle(.borderlessButton)
+
+                Button("修改全文", systemImage: "wand.and.sparkles") {
+                    selectedRewrite = nil
+                    showSessionRewrite = true
+                }
+                .disabled(isRunning)
+                .help("把输入的要求用于整个 Session，先审阅修改提案")
 
                 if scope == .selection {
                     Button {
@@ -4727,6 +5071,11 @@ struct SessionAssistantPanel: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func loadRewriteHistory() async {
+        do { rewriteHistory = try await supervisor.sessionRewrites(session).filter { $0.status != "cancelled" } }
+        catch { /* Existing conversation remains usable if an older host lacks rewrite history. */ }
     }
 
     private func runAssistant() async {

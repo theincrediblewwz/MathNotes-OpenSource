@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var pendingSession: SessionCatalogItem?
     @State private var recentReading = MacRecentReadingStore.load()
     @State private var showNotebookBrowser = false
+    @State private var showRemoteSync = false
     @State private var showPhoneConnection = ProcessInfo.processInfo.arguments.contains(
         "-mathnotes.open-phone-connection"
     )
@@ -34,8 +35,6 @@ struct ContentView: View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 sidebarHeader
-                sidebarPhoneConnectionAction
-                sidebarSettingsAction
                 recentReadingSidebar
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 notebookBrowserAction
@@ -56,7 +55,17 @@ struct ContentView: View {
             if sourceMode == .companion { companionReader.reloadCatalog() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .mathNotesReloadCatalog)) { _ in
-            reloadActiveCatalog()
+            guard !editingState.hasUnsavedSourceDrafts else { return }
+            if sourceMode == .companion { companionReader.reloadSavedConnection() }
+            else { reloadActiveCatalog() }
+        }
+        .onChange(of: companionReader.activeHostID) { _, _ in
+            guard sourceMode == .companion, !editingState.hasUnsavedSourceDrafts else { return }
+            selectedSession = nil
+            selectedNotebookId = nil
+        }
+        .sheet(isPresented: $showRemoteSync) {
+            RemoteSyncStatusSheet(store: companionReader, editingState: editingState)
         }
         .onChange(of: sourceModeRawValue) { _, _ in
             selectedSession = nil
@@ -76,6 +85,13 @@ struct ContentView: View {
                 self.selectedSession = nil
             }
         }
+        .onChange(of: loadedNotebooks) { _, notebooks in
+            if let selectedSession,
+               let updated = notebooks.flatMap(\.sessions).first(where: { $0.id == selectedSession.id }),
+               updated != selectedSession {
+                self.selectedSession = updated
+            }
+        }
         .sheet(item: $creationTarget) { target in
             creationSheet(target)
         }
@@ -89,9 +105,10 @@ struct ContentView: View {
             MacNotebookBrowser(
                 notebooks: loadedNotebooks,
                 sourceMode: sourceMode,
-                supervisor: supervisor,
+                supervisor: workspaceSupervisor ?? supervisor,
                 companionReader: companionReader,
                 initialNotebookID: selectedSession?.notebookId ?? selectedNotebookId,
+                hasUnsavedDrafts: editingState.hasUnsavedSourceDrafts,
                 onCreateNotebook: { beginCreationAfterBrowserDismiss(.notebook) },
                 onCreateSession: { notebook in
                     beginCreationAfterBrowserDismiss(
@@ -177,43 +194,53 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Menu {
-                    Button {
-                        beginCreation(.notebook)
-                    } label: {
-                        Label("新建 Notebook", systemImage: "folder.badge.plus")
+                sidebarPhoneConnectionAction
+            }
+            HStack(spacing: 6) {
+                Picker("笔记来源", selection: $sourceModeRawValue) {
+                    ForEach(WorkspaceSourceMode.allCases) { source in
+                        Text(source.title).tag(source.rawValue)
                     }
-                    Button {
-                        if let notebook = preferredNotebook {
-                            beginCreation(.session(notebookId: notebook.notebookId, notebookTitle: notebook.title))
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(editingState.hasUnsavedSourceDrafts)
+                .help(
+                    editingState.hasUnsavedSourceDrafts
+                        ? "请先保存当前修改，再切换笔记来源"
+                        : "切换本机笔记与远程主机的独立副本"
+                )
+                .frame(width: sourceMode == .companion ? 108 : nil)
+                if sourceMode == .companion {
+                    Menu {
+                        ForEach(companionReader.hostProfiles) { host in
+                            Button(host.name) { companionReader.selectHost(host) }
+                        }
+                        Divider()
+                        Button("添加 / 管理主机…") {
+                            ProviderSettingsSection.select(.companion)
+                            openSettings()
                         }
                     } label: {
-                        Label("新建 Session", systemImage: "doc.badge.plus")
+                        Text(companionReader.activeHost?.name ?? "选择主机").lineLimit(1)
                     }
-                    .disabled(preferredNotebook == nil)
-                } label: {
-                    Label("新建笔记", systemImage: "plus.circle.fill")
-                        .labelStyle(.iconOnly)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .disabled(sourceMode != .local || !isCoreReady)
-                .help(sourceMode == .local ? "新建 Notebook 或 Session" : "远程笔记在当前版本中保持只读")
-                .accessibilityLabel("新建 Notebook 或 Session")
-            }
-            Picker("笔记来源", selection: $sourceModeRawValue) {
-                ForEach(WorkspaceSourceMode.allCases) { source in
-                    Text(source.title).tag(source.rawValue)
+                    .menuStyle(.borderlessButton)
+                    .disabled(editingState.hasUnsavedSourceDrafts)
+                    Button { showRemoteSync = true } label: {
+                        Image(systemName: (companionReader.syncResult?.conflictCount ?? 0) > 0
+                            ? "exclamationmark.arrow.triangle.2.circlepath" : "arrow.triangle.2.circlepath")
+                            .frame(width: 24, height: 26)
+                    }
+                    .buttonStyle(.plain)
+                    .help(companionReader.isSynchronizing ? "正在同步" : companionReader.syncMessage ?? "同步与本地副本")
+                    .accessibilityLabel("远程同步状态")
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .disabled(editingState.hasUnsavedSourceDrafts)
-            .help(
-                editingState.hasUnsavedSourceDrafts
-                    ? "请先保存当前修改，再切换笔记来源"
-                    : "在这台 Mac 的本机笔记与已配对电脑的只读笔记之间切换"
-            )
+            if editingState.hasUnsavedSourceDrafts {
+                Text("保存当前修改后，即可切换本机与远程。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, MathNotesTheme.Spacing.section)
         .padding(.top, MathNotesTheme.Spacing.section)
@@ -221,65 +248,28 @@ struct ContentView: View {
     }
 
     private var sidebarPhoneConnectionAction: some View {
-        Button {
-            showPhoneConnection = true
-        } label: {
-            HStack(spacing: MathNotesTheme.Spacing.standard) {
-                Image(systemName: "qrcode")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(MathNotesTheme.accent)
-                    .frame(width: 34, height: 34)
-                    .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("连接手机")
-                        .font(.body.weight(.semibold))
-                    Text("显示二维码，让 Android 扫码")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(MathNotesTheme.accentSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(MathNotesTheme.accent.opacity(0.22))
-            }
+        Button { showPhoneConnection = true } label: {
+            Image(systemName: "qrcode")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(MathNotesTheme.accent)
+                .frame(width: 34, height: 34)
+                .background(MathNotesTheme.accentSoft, in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, MathNotesTheme.Spacing.section)
-        .padding(.bottom, 8)
-        .help("显示一次性二维码，让 Android 手机连接这台 Mac")
+        .help("连接手机：显示二维码")
         .accessibilityLabel("连接手机，显示二维码")
         .accessibilityIdentifier("sidebar-phone-connection")
     }
 
     private var sidebarSettingsAction: some View {
-        Button {
-            openSettings()
-        } label: {
-            Label("设置", systemImage: "gearshape")
-                .font(.body.weight(.medium))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(MathNotesTheme.sidebar, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(MathNotesTheme.separator.opacity(0.62))
-                }
+        Button { openSettings() } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, MathNotesTheme.Spacing.section)
-        .padding(.bottom, MathNotesTheme.Spacing.standard)
+        .foregroundStyle(.secondary)
         .help("设置外观、连接与 AI 服务")
         .accessibilityLabel("打开设置")
     }
@@ -296,6 +286,12 @@ struct ContentView: View {
                 Text(message)
             } actions: {
                 Button("重新读取") { reloadActiveCatalog() }
+                if sourceMode == .companion {
+                    Button("连接设置") {
+                        ProviderSettingsSection.select(.companion)
+                        openSettings()
+                    }
+                }
             }
         case let .loaded(notebooks):
             recentReadingList(notebooks)
@@ -305,18 +301,19 @@ struct ContentView: View {
     private var notebookBrowserAction: some View {
         VStack(spacing: 0) {
             Divider()
-            Button {
-                showNotebookBrowser = true
-            } label: {
-                Label("打开 Notebooks", systemImage: "folder")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
+            HStack(spacing: 8) {
+                Button { showNotebookBrowser = true } label: {
+                    Label("打开 Notebooks", systemImage: "folder")
+                        .font(.callout.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .accessibilityLabel("打开 Notebooks")
+                sidebarSettingsAction
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
             .padding(MathNotesTheme.Spacing.section)
-            .accessibilityLabel("打开 Notebooks")
         }
     }
 
@@ -495,16 +492,21 @@ struct ContentView: View {
                 onSave: { showMarkdownArchive = true }
             )
         } else if let selectedSession {
-            if sourceMode == .local {
+            if let workspaceSupervisor {
                 ReadonlySessionView(
                     session: selectedSession,
-                    supervisor: supervisor,
+                    supervisor: workspaceSupervisor,
                     assistantWindow: assistantWindow,
                     onOpenRelatedSource: openRelatedSource,
                     onOpenSession: requestSessionSelection,
-                    onDirtyStateChanged: { editingState.hasUnsavedSourceDrafts = $0 }
+                    onDirtyStateChanged: { editingState.hasUnsavedSourceDrafts = $0 },
+                    readingLocationKey: MacReadingPositionStore.key(
+                        source: sourceMode.rawValue,
+                        hostID: workspaceSupervisor === supervisor ? nil : companionReader.activeHostID,
+                        notebookID: selectedSession.notebookId, sessionID: selectedSession.sessionId
+                    )
                 )
-                .id("\(selectedSession.id):\(sessionRefreshNonce)")
+                .id("\(companionReader.activeHostID ?? "local"):\(sourceMode.rawValue):\(selectedSession.id):\(sessionRefreshNonce)")
             } else {
                 CompanionSessionView(session: selectedSession, store: companionReader)
             }
@@ -561,7 +563,7 @@ struct ContentView: View {
     private func recentReadingItems(in notebooks: [NotebookCatalogItem]) -> [MacRecentSessionItem] {
         let notebookByID = Dictionary(uniqueKeysWithValues: notebooks.map { ($0.notebookId, $0) })
         return recentReading
-            .filter { $0.sourceRawValue == sourceMode.rawValue }
+            .filter { $0.sourceRawValue == sourceMode.rawValue && (sourceMode == .local || $0.hostId == companionReader.activeHostID) }
             .compactMap { entry in
                 guard let notebook = notebookByID[entry.notebookId],
                       let session = notebook.sessions.first(where: { $0.sessionId == entry.sessionId }) else {
@@ -645,7 +647,7 @@ struct ContentView: View {
     }
 
     private func openRelatedSource(_ source: SessionAssistantRelatedSource) {
-        guard sourceMode == .local,
+        guard workspaceSupervisor != nil,
               let notebook = loadedNotebooks.first(where: { $0.notebookId == source.notebookId }),
               let session = notebook.sessions.first(where: { $0.sessionId == source.sessionId }) else { return }
         requestSessionSelection(session)
@@ -664,6 +666,7 @@ struct ContentView: View {
             session: session,
             notebookTitle: notebookTitle,
             source: sourceMode,
+            hostId: sourceMode == .companion ? companionReader.activeHostID : nil,
             in: recentReading
         )
         MacRecentReadingStore.save(recentReading)
@@ -685,9 +688,9 @@ struct ContentView: View {
             if !temporaryMarkdownDocuments.isEmpty {
                 temporaryMarkdownDocuments.append(contentsOf: documents)
                 editingState.hasUnsavedSourceDrafts = true
-            } else if sourceMode == .local, let selectedSession {
+            } else if let workspaceSupervisor, let selectedSession {
                 for document in documents {
-                    _ = try await supervisor.appendMarkdown(
+                    _ = try await workspaceSupervisor.appendMarkdown(
                         selectedSession, markdown: document.markdown, sourceName: document.name
                     )
                 }
@@ -761,6 +764,10 @@ struct ContentView: View {
 
     private var sourceMode: WorkspaceSourceMode {
         WorkspaceSourceMode(rawValue: sourceModeRawValue) ?? .local
+    }
+
+    private var workspaceSupervisor: SidecarSupervisor? {
+        sourceMode == .local ? supervisor : companionReader.replicaSupervisor
     }
 
     private var activeCatalogState: CatalogState {
@@ -840,17 +847,17 @@ struct ContentView: View {
 
     @MainActor
     private func performCreation(_ target: WorkspaceCreationTarget) async {
-        guard !isCreating else { return }
+        guard !isCreating, let workspaceSupervisor else { return }
         isCreating = true
         creationError = nil
         defer { isCreating = false }
         do {
             switch target {
             case .notebook:
-                let notebook = try await supervisor.createNotebook(title: creationTitle)
+                let notebook = try await workspaceSupervisor.createNotebook(title: creationTitle)
                 selectedNotebookId = notebook.notebookId
             case let .session(notebookId, _):
-                let session = try await supervisor.createSession(notebookId: notebookId, title: creationTitle)
+                let session = try await workspaceSupervisor.createSession(notebookId: notebookId, title: creationTitle)
                 openSession(session)
                 editingState.hasUnsavedSourceDrafts = false
             }

@@ -25,6 +25,7 @@ export type BlockRef = {
   sourcePageNumber?: number;
   sourcePageImagePath?: string;
   renderInNote?: boolean;
+  /** Adjacent pieces of one Markdown source are rendered without inserted separators. */
   continuationGroup?: string;
   createdAt: string;
   updatedAt: string;
@@ -118,7 +119,7 @@ export type RecognitionProvider = {
 export type AssistantMode = "explain" | "teach" | "summarize";
 
 export type AssistantInput = {
-  intent?: "remark" | "selection_edit" | "session_edit";
+  intent?: "remark" | "selection_edit" | "session_edit" | "session_rewrite";
   mode: AssistantMode;
   markdownContext: string;
   imagePaths: string[];

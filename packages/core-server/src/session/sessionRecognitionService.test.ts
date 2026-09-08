@@ -26,6 +26,32 @@ describe("SessionRecognitionService", () => {
 
   afterEach(async () => rm(root, { recursive: true, force: true }));
 
+  it("does not restore an older transcript from a stale running observation after success", async () => {
+    const service = new SessionRecognitionService(root, async () => streamingProvider());
+    const started = await service.start({ notebookId: "analysis", sessionId: "lecture", imageBlockId: "0002" });
+    expect((await waitForTerminal(service, started.id)).status).toBe("succeeded");
+    const observer = service as unknown as { recoverOrphan(task: SessionRecognitionTask & { previousTranscriptMarkdown: string }): Promise<SessionRecognitionTask> };
+    const checked = await observer.recoverOrphan({ ...started, status: "running", previousTranscriptMarkdown: "Stale earlier transcript" });
+    expect(checked.status).toBe("succeeded");
+    expect(await readFile(join(sessionDir, "blocks", `${started.transcriptBlockId}_ai_transcript.md`), "utf8")).toBe("## 忠实转写\n\n$$x+y=z$$\n");
+  });
+
+  it("binds a diagram marker to the real processed input and retains its explanation", async () => {
+    const service = new SessionRecognitionService(root, async () => ({
+      name: "fixture-source-image",
+      async transcribe() { return { markdown: "[图片：单位圆与坐标轴]\n\n[[mathnotes:source-image]]\n\n$x^2+y^2=1$" }; }
+    }));
+    const started = await service.start({ notebookId: "analysis", sessionId: "lecture", imageBlockId: "0002" });
+    expect((await waitForTerminal(service, started.id)).status).toBe("succeeded");
+    const transcript = (await readSession()).blocks.find(block => block.id === started.transcriptBlockId)!;
+    const text = await readFile(join(sessionDir, transcript.path), "utf8");
+    expect(text).toContain("[图片：单位圆与坐标轴]");
+    expect(text).toContain("![识别照片（已处理）](../assets/photos/board.png)");
+    expect(text.match(/!\[/g)).toHaveLength(1);
+    expect(text).not.toContain("[[mathnotes:source-image]]");
+    expect(text).toContain("$x^2+y^2=1$");
+  });
+
   it("streams one draft immediately after the image and keeps existing Markdown unchanged", async () => {
     const service = new SessionRecognitionService(root, async () => streamingProvider());
     const started = await service.start({ notebookId: "analysis", sessionId: "lecture", imageBlockId: "0002" });

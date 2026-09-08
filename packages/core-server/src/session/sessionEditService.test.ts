@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LockMeta, SessionRecord } from "@mathnotes/shared";
+import { exportSessionMarkdown } from "./sessionExportService";
+import { readReadonlySessionPreview } from "./sessionReadService";
 import { readReadonlySessionBlock } from "./sessionReadService";
 import { SessionEditError, SessionEditService } from "./sessionEditService";
 import { sha256Text } from "./sessionRevision";
@@ -20,6 +22,48 @@ describe("SessionEditService", () => {
   });
 
   afterEach(async () => rm(root, { recursive: true, force: true }));
+
+  it.each([
+    ["😀前文 **加粗内容** 后文", "粗内"],
+    ["前文\n\n$$\\frac{a+b}{c} = d$$\n\n后文", "a+b"],
+    ["| 项目 | 数值 |\n| --- | --- |\n| 第一行 | $x^2$ |\n| 第二行 | 2 |", "一行 | $x"],
+    ["正文\n\n段落\n\n末尾", "\n\n段落\n"],
+    ["从头到尾", "从头到尾"], ["开头后文", "开头"], ["前文末尾", "末尾"]
+  ])("splits exact selection without changing rendering or export: %s", async (original, selectedText) => {
+    await writeFile(join(sessionDir, "blocks/0001.md"), original);
+    const input = { rootDir: root, notebookId: "analysis", sessionId: "lecture" };
+    const beforePreview = await readReadonlySessionPreview(input);
+    const before = await readBlock();
+    if (before.content.kind !== "markdown") throw new Error("fixture");
+    const from = original.indexOf(selectedText);
+    const result = await new SessionEditService(root).splitLockedSelection({ ...input, blockId: "0001",
+      baseRevision: before.content.baseRevision, selection: { from, to: from + selectedText.length, selectedText } });
+    const expected = [original.slice(0, from), selectedText, original.slice(from + selectedText.length)].filter(value => value.length > 0);
+    expect(result.blocks.map(block => block.content.kind === "markdown" ? block.content.markdown : "wrong kind")).toEqual(expected);
+    expect(result.blocks.filter(block => block.block.status === "locked")).toHaveLength(1);
+    const locked = result.blocks.find(block => block.block.id === result.lockedBlockId)!;
+    expect(locked.content).toMatchObject({ markdown: selectedText, blockLocked: true });
+    expect(new Set(result.blocks.map(block => block.block.continuationGroup)).size).toBe(1);
+    expect((await readReadonlySessionPreview(input)).html).toBe(beforePreview.html);
+    const exported = await exportSessionMarkdown({ ...input, includeMetadataComments: false, mathCompatibility: "internal" });
+    expect(await readFile(exported.outPath, "utf8")).toBe(original.trimEnd() + "\n");
+    expect(await readFile(join(sessionDir, "blocks/0001.md"), "utf8")).toBe(original);
+    if (locked.content.kind !== "markdown") throw new Error("fixture");
+    await expect(new SessionEditService(root).saveMarkdownBlock({ ...input, blockId: locked.block.id,
+      baseRevision: locked.content.baseRevision, markdown: "overwrite" })).rejects.toMatchObject({ code: "block_locked" });
+    await expect(new SessionEditService(root).splitLockedSelection({ ...input, blockId: "0001",
+      baseRevision: before.content.baseRevision, selection: { from, to: from + selectedText.length, selectedText } })).rejects.toThrow();
+  });
+
+  it("rejects a split in a UTF-16 surrogate pair without changing files", async () => {
+    await writeFile(join(sessionDir, "blocks/0001.md"), "😀正文");
+    const before = await readBlock();
+    if (before.content.kind !== "markdown") throw new Error("fixture");
+    await expect(new SessionEditService(root).splitLockedSelection({ notebookId: "analysis", sessionId: "lecture", blockId: "0001",
+      baseRevision: before.content.baseRevision, selection: { from: 0, to: 1, selectedText: "😀".slice(0, 1) }
+    })).rejects.toMatchObject({ code: "invalid_selection" });
+    expect(await readFile(join(sessionDir, "blocks/0001.md"), "utf8")).toBe("😀正文");
+  });
 
   it("saves an editable user block and rotates its revision", async () => {
     const before = await readBlock();

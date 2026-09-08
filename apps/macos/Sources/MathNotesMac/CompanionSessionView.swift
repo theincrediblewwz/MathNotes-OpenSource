@@ -35,6 +35,8 @@ struct CompanionSessionView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
                     .mathNotesControlSurface()
+                    .fixedSize()
+                    .allowsHitTesting(false)
                     .padding(MathNotesTheme.Spacing.standard)
                 }
             } else if let error {
