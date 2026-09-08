@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-08T07:44:31.427Z",
-  "fileCount": 854,
-  "snapshotSha256": "3b337cd6caaaa80e088e5ca7a99d38cc4ee15d472409b92c8bb98abc5d8716c7",
+  "generatedAt": "2026-09-08T07:56:11.242Z",
+  "fileCount": 855,
+  "snapshotSha256": "28c1189d0c39af171c978bcd33176db50d0e840dbf941ae36c7d66f1bafbb976",
   "files": [
     {
       "path": ".gitattributes",
@@ -68,8 +68,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 10178,
-      "sha256": "058696062c3aadf1215031cb435990a23968cdd15c043fac8eda7618f113854b"
+      "bytes": 10268,
+      "sha256": "0dc4b46e22c834dbb0e892e1d01935465f152f5da32c80dfa02047f405d7b369"
     },
     {
       "path": "SECURITY.md",
@@ -1058,8 +1058,8 @@
     },
     {
       "path": "apps/macos/DEVELOPMENT.md",
-      "bytes": 9644,
-      "sha256": "0fab6c51b6d65976fb11e430cec9678ea2022da315b495312a8e197c313c768d"
+      "bytes": 9712,
+      "sha256": "2ba3d430d93d03e837014b2eb7c2d7a2bceaff4aa4ad9bd7aaeae1ad6ff9a36c"
     },
     {
       "path": "apps/macos/Package.swift",
@@ -1068,8 +1068,8 @@
     },
     {
       "path": "apps/macos/RELEASE_STATUS.md",
-      "bytes": 3327,
-      "sha256": "09e7599079987dcd948e4e9f8cf5d40ebf38c587c800b43e6904b68c9929aefe"
+      "bytes": 3735,
+      "sha256": "8a04ff7a4ba6ec910d108f249f223601fe487c99465a480cf6aef1a00e049fd5"
     },
     {
       "path": "apps/macos/REMOTE_CATALOG_SYNC_V1.md",
@@ -2903,13 +2903,18 @@
     },
     {
       "path": "deploy/releases/macos-release.json",
-      "bytes": 118,
-      "sha256": "3ad91c70695d8c1c50576592b58fa052c7685cfb6ad83bbe9e6a398da130fa0e"
+      "bytes": 140,
+      "sha256": "eaf56de90ccecf04d268922f8d2db98c9b163634196ea7cbcbc4335ea937c851"
     },
     {
       "path": "deploy/releases/macos-v0.3.4.md",
       "bytes": 3132,
       "sha256": "1d2c4bb15211c85a885b55eade2051dae8c6a010b23497f391ed7dc77d3dddf2"
+    },
+    {
+      "path": "deploy/releases/macos-v0.3.5.md",
+      "bytes": 3694,
+      "sha256": "8d0f5c9c8d06168e2abb71ffcc1a52c67526b1aa9c05a612b9c7007b06b1b5e1"
     },
     {
       "path": "deploy/releases/v0.3.4-acceptance.md",
@@ -4058,8 +4063,8 @@
     },
     {
       "path": "test_tool/package_macos_native.mjs",
-      "bytes": 9781,
-      "sha256": "d81b417ed6727835748dc2ff5eebba945202e0b6c97b6ef3179ab2143d32fcb5"
+      "bytes": 9950,
+      "sha256": "48c3ae280d8c74de0b435e3e93828bc8a2ca38b397ebc225cf2871780bfe63aa"
     },
     {
       "path": "test_tool/package_mobile_standalone.mjs",
