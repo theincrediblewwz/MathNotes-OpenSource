@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, posix, resolve } from "node:path";
 import { markdownContinuationGroups, normalizeMathForPortableMarkdown, type SessionRecord } from "@mathnotes/shared";
 import { sessionManifestRevision } from "./sessionRevision";
+import { encodeMarkdownAssetPath, sessionAssetPathFromMarkdown } from "../domain/sessionAssetPath";
 
 export type ExportSessionMarkdownArgs = {
   rootDir: string;
@@ -281,19 +282,12 @@ function assistantModeLabel(mode: string | undefined): string {
 function rewriteAssetReferencesForSharePackage(markdown: string) {
   const assetPaths = new Set<string>();
   const rewritten = markdown.replace(/(!?\[[^\]]*]\()([^) \t\n]+)(\))/g, (match, prefix: string, rawTarget: string, suffix: string) => {
-    const assetPath = normalizeSessionAssetPath(rawTarget);
+    const assetPath = sessionAssetPathFromMarkdown(rawTarget);
     if (!assetPath) return match;
     assetPaths.add(assetPath);
-    return `${prefix}${assetPath}${suffix}`;
+    return `${prefix}${encodeMarkdownAssetPath(assetPath)}${suffix}`;
   });
   return { markdown: rewritten, assetPaths };
-}
-
-function normalizeSessionAssetPath(target: string): string | undefined {
-  const withoutAnchor = target.split("#", 1)[0]?.split("?", 1)[0] ?? target;
-  const normalized = posix.normalize(withoutAnchor.replace(/\\/g, "/")).replace(/^\.\//, "");
-  const assetPath = normalized.startsWith("../assets/") ? normalized.slice(3) : normalized;
-  return assetPath.startsWith("assets/") && !assetPath.includes("../") ? assetPath : undefined;
 }
 
 async function copyReferencedAssets(args: { sessionDir: string; packageDir: string; assetPaths: Set<string> }) {
@@ -307,6 +301,13 @@ async function copyReferencedAssets(args: { sessionDir: string; packageDir: stri
     assertInside(args.packageDir, targetPath);
     await mkdir(dirname(targetPath), { recursive: true });
     try {
+      let checked = args.sessionDir;
+      let unsafe = (await lstat(checked)).isSymbolicLink();
+      for (const part of assetPath.split("/")) {
+        checked = resolve(checked, part);
+        if ((await lstat(checked)).isSymbolicLink()) { unsafe = true; break; }
+      }
+      if (unsafe) { missingAssets.push(assetPath); continue; }
       await copyFile(sourcePath, targetPath);
       copiedAssets.push(assetPath);
     } catch (error) {

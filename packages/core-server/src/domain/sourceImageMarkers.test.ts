@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { bindSourceImageMarkers, SOURCE_IMAGE_MARKER as marker } from "./sourceImageMarkers";
+import { encodeMarkdownAssetPath, sessionAssetPathFromMarkdown } from "./sessionAssetPath";
 
 describe("source image binding", () => {
   it("keeps the description and binds repeated diagram positions to the actual processed asset", () => {
@@ -15,9 +16,15 @@ describe("source image binding", () => {
   });
 
   it("never guesses another photo when the task has no trusted image asset", () => {
-    for (const path of [undefined, "assets/photos/../../private.png", "https://host/secret.png", "file:///private.png", "assets/photos/%2e%2e/private.png", "assets/document.pdf", "assets/photos/quote).png"]) {
+    for (const path of [undefined, "assets/photos/../../private.png", "https://host/secret.png", "file:///private.png", "assets/document.pdf", "assets/photos/NUL.png", "assets/photos/ads:stream.png"]) {
       expect(bindSourceImageMarkers(`说明\n\n${marker}`, path)).toBe("说明\n\n[识别照片暂不可用]");
     }
+  });
+
+  it.each(["assets/照片 (1)#50%.png", "assets/photos/quote).png", "assets/photos/%2e%2e/literal.png"])("binds a literal safe filesystem path %s without changing its identity", path => {
+    const encoded = encodeMarkdownAssetPath(path);
+    expect(bindSourceImageMarkers(marker, path)).toBe(`![识别照片（已处理）](../${encoded})`);
+    expect(sessionAssetPathFromMarkdown(`../${encoded}`)).toBe(path);
   });
 
   it("leaves markers inside display and inline math literal, while binding the following real image", () => {

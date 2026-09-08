@@ -658,7 +658,7 @@ export type MathNotesApi = {
   stopIngestServer(): Promise<IngestServerState>;
   onCompanionUploadActivity(callback: (event: CompanionUploadActivityEvent) => void): () => void;
   onUploadCompleted(callback: (event: UploadCompletedEvent) => void): () => void;
-  onWorkspaceChanged(callback: (event: { notebookId: string; sessionId: string }) => void): () => void;
+  onWorkspaceChanged(callback: (event: { notebookId: string; sessionId?: string; catalogChanged?: boolean }) => void): () => void;
   onRecognitionJobChanged(callback: (event: RecognitionJobChangedEvent) => void): () => void;
   onRecognitionRuntimeEvent(callback: (event: RecognitionRuntimeEvent) => void): () => void;
   onCodexRuntimeStateChanged(callback: (event: CodexRuntimeState) => void): () => void;

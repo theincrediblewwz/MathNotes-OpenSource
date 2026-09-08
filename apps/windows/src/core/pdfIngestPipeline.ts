@@ -18,8 +18,6 @@ type StoredPdfUpload = IngestPdfResult & {
   sha256: string;
 };
 
-const locks = new Map<string, Promise<void>>();
-
 export class PdfIngestPipeline implements PdfIngestPort {
   constructor(
     private readonly deps: {
@@ -37,9 +35,14 @@ export class PdfIngestPipeline implements PdfIngestPort {
       throw new UploadError("sha256 does not match uploaded bytes", 400);
     }
     const info = await readPdfDocumentInfo(args.bytes);
-    const key = `${args.notebookId}/${args.sessionId}`;
-
-    return withLock(key, async () => {
+    const result = await this.deps.store.getWriteCoordinator().run(args.notebookId, args.sessionId, async () => {
+      // The upload and its log must use the same barrier as remote trash. A PDF
+      // received for a removed note must never recreate its inbox or log folder.
+      try { await this.deps.store.readSession(args.notebookId, args.sessionId); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new UploadError("session_not_found", 404);
+        throw error;
+      }
       const records = await this.readLog(args.notebookId, args.sessionId);
       const identity = records.find(
         (record) => record.captureId === args.captureId && record.deviceId === args.deviceId && Boolean(args.captureId && args.deviceId)
@@ -48,11 +51,7 @@ export class PdfIngestPipeline implements PdfIngestPort {
         throw new UploadError("capture identity already exists with different bytes", 409);
       }
       const duplicate = identity ?? records.find((record) => record.sha256 === digest);
-      if (duplicate) {
-        const result = publicResult(duplicate, true);
-        await this.deps.onIngested?.(result);
-        return result;
-      }
+      if (duplicate) return publicResult(duplicate, true);
 
       const sessionDir = this.deps.store.getSessionDir(args.notebookId, args.sessionId);
       const safeName = sanitizePdfName(args.originalName);
@@ -79,10 +78,10 @@ export class PdfIngestPipeline implements PdfIngestPort {
       };
       records.push(record);
       await this.writeLog(args.notebookId, args.sessionId, records);
-      const result = publicResult(record, false);
-      await this.deps.onIngested?.(result);
-      return result;
+      return publicResult(record, false);
     });
+    await this.deps.onIngested?.(result);
+    return result;
   }
 
   private logPath(notebookId: string, sessionId: string): string {
@@ -121,19 +120,3 @@ function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function withLock<T>(key: string, action: () => Promise<T>): Promise<T> {
-  const previous = locks.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const tail = previous.then(() => current);
-  locks.set(key, tail);
-  await previous;
-  try {
-    return await action();
-  } finally {
-    release();
-    if (locks.get(key) === tail) locks.delete(key);
-  }
-}

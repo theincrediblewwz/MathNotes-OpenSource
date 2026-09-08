@@ -5,6 +5,7 @@ import MarkdownIt from "markdown-it";
 import type { SessionRecord } from "@mathnotes/shared";
 import { readNotesCatalog } from "../catalog/sessionCatalog";
 import { isSafeWorkspaceIdentifier } from "../session/workspaceIdentifier";
+import { sessionAssetPathFromMarkdown } from "../domain/sessionAssetPath";
 
 export type ReplicaAsset = { path: string; sha256: string; byteLength: number };
 export type ReplicaSnapshot = {
@@ -12,7 +13,7 @@ export type ReplicaSnapshot = {
   markdown: Record<string, string>; assets: ReplicaAsset[]; revision: string;
 };
 export type ReplicaPush = { operationId: string; baseRevision: string; snapshot: ReplicaSnapshot };
-type SyncSession = SessionRecord & { remoteSyncOperations?: Record<string, string> };
+type SyncSession = SessionRecord & { remoteSyncOperations?: Record<string, string>; remoteCatalogOperations?: Record<string, string> };
 export type SessionSyncCoordinator = <T>(notebookId: string, sessionId: string, operation: () => Promise<T>) => Promise<T>;
 export type WorkspaceSyncOptions = { beforeCommit?: () => Promise<void> };
 export class WorkspaceSyncError extends Error {
@@ -114,6 +115,11 @@ export class WorkspaceSyncService {
       next.createdAt = current.session.createdAt;
       next.updatedAt = new Date().toISOString();
       next.remoteSyncOperations = Object.fromEntries([...Object.entries(operations).slice(-1023), [request.operationId, requestHash]]);
+      // Catalog retries share this manifest. Body pushes cannot erase or forge the
+      // host's catalog ledger, even when the client edits an older local copy.
+      const catalogOperations = (current.session as SyncSession).remoteCatalogOperations;
+      if (catalogOperations) next.remoteCatalogOperations = { ...catalogOperations };
+      else delete next.remoteCatalogOperations;
       // Verify every asset before publishing even unreferenced content. In particular,
       // embedded Markdown destinations cannot first fail after session.json commits.
       const staged: Array<{ asset: ReplicaAsset; source: string }> = [];
@@ -176,30 +182,36 @@ export class WorkspaceSyncService {
   }
   private async readSnapshot(notebookId: string, sessionId: string): Promise<ReplicaSnapshot> {
     const directory = await this.sessionDir(notebookId, sessionId);
-    let session: SessionRecord;
-    try { session = JSON.parse(await readFile(await safeReplicaPath(directory, "session.json"), "utf8")); }
-    catch (error) { if (error instanceof SyntaxError) fail("invalid_session", 422); throw error; }
-    if (!isRecord(session) || session.id !== sessionId || !Array.isArray(session.blocks)) fail("invalid_session", 422);
-    const markdown: Record<string, string> = Object.create(null);
-    for (const block of session.blocks) {
-      if (!isRecord(block)) fail("invalid_block", 422);
-      validateReplicaPath(block.path);
-      if (block.type === "markdown") {
-        if (!/^blocks\/[^/]+\.md$/.test(block.path)) fail("invalid_markdown", 422);
-        markdown[block.path] = await readFile(await safeReplicaPath(directory, block.path), "utf8");
-      }
-    }
-    const paths = collectReplicaAssets(session, markdown);
-    const assets: ReplicaAsset[] = [];
-    for (const path of [...paths].sort()) {
-      const bytes = await this.readAsset(directory, path);
-      assets.push({ path, sha256: hash(bytes), byteLength: bytes.length });
-    }
-    const snapshot: ReplicaSnapshot = { version: 1, notebookId, session, markdown, assets, revision: "" };
-    validateReplicaSnapshot(snapshot);
-    snapshot.revision = replicaRevision(snapshot);
-    return snapshot;
+    return readReplicaSnapshotDirectory(directory, notebookId, sessionId);
   }
+}
+
+/** Read a staged, live, or trashed Session without deriving its ID from the directory name. */
+export async function readReplicaSnapshotDirectory(directory: string, notebookId: string, expectedSessionId?: string): Promise<ReplicaSnapshot> {
+  validateReplicaId(notebookId);
+  let session: SessionRecord;
+  try { session = JSON.parse(await readFile(await safeReplicaPath(directory, "session.json"), "utf8")); }
+  catch (error) { if (error instanceof SyntaxError) fail("invalid_session", 422); throw error; }
+  if (!isRecord(session) || expectedSessionId !== undefined && session.id !== expectedSessionId || !Array.isArray(session.blocks)) fail("invalid_session", 422);
+  const markdown: Record<string, string> = Object.create(null);
+  for (const block of session.blocks) {
+    if (!isRecord(block)) fail("invalid_block", 422);
+    validateReplicaPath(block.path);
+    if (block.type === "markdown") {
+      if (!/^blocks\/[^/]+\.md$/.test(block.path)) fail("invalid_markdown", 422);
+      markdown[block.path] = await readFile(await safeReplicaPath(directory, block.path), "utf8");
+    }
+  }
+  const paths = collectReplicaAssets(session, markdown);
+  const assets: ReplicaAsset[] = [];
+  for (const path of [...paths].sort()) {
+    const bytes = await boundedRead(await safeReplicaPath(directory, path));
+    assets.push({ path, sha256: hash(bytes), byteLength: bytes.length });
+  }
+  const snapshot: ReplicaSnapshot = { version: 1, notebookId, session, markdown, assets, revision: "" };
+  validateReplicaSnapshot(snapshot);
+  snapshot.revision = replicaRevision(snapshot);
+  return snapshot;
 }
 
 export function replicaRevision(snapshot: ReplicaSnapshot): string {
@@ -292,13 +304,8 @@ export function collectReplicaAssets(session: SessionRecord, markdown: Record<st
         if (token.type === "image") {
           const source = token.attrGet("src") ?? "";
           if (/^https?:\/\//i.test(source)) continue;
-          let decoded: string;
-          try { decoded = decodeURIComponent(source); } catch { fail("unsafe_path", 400); }
-          if (/^[a-z][a-z0-9+.-]*:|^\/|\\|[\0?#]/i.test(decoded!)) fail("unsafe_path", 400);
-          // The regular block-relative form is ../assets/. Historical export
-          // content also uses Session-relative assets/; preserve both verbatim.
-          const assetPath = decoded!.startsWith("../assets/") ? decoded!.slice(3) : decoded!;
-          if (!assetPath.startsWith("assets/")) fail("unsafe_path", 400);
+          const assetPath = sessionAssetPathFromMarkdown(source);
+          if (!assetPath) fail("unsafe_path", 400);
           add(assetPath);
         }
         if (token.children) visit(token.children);
@@ -404,7 +411,7 @@ async function publishImmutable(root: string, path: string, bytes: Buffer): Prom
   } catch (error) { if (errno(error) !== "ENOENT") throw error; }
   await atomicWrite(target, bytes);
 }
-async function atomicWrite(target: string, bytes: Buffer): Promise<void> {
+export async function atomicWrite(target: string, bytes: Buffer): Promise<void> {
   const temporary = `${target}.${randomUUID()}.tmp`;
   let handle;
   try {
@@ -419,7 +426,7 @@ async function atomicWrite(target: string, bytes: Buffer): Promise<void> {
     }
   } finally { await handle?.close(); await rm(temporary, { force: true }); }
 }
-async function boundedRead(path: string): Promise<Buffer> {
+export async function boundedRead(path: string): Promise<Buffer> {
   const info = await stat(path);
   if (!info.isFile()) fail("unsafe_path", 400);
   if (info.size > MAX_ASSET_BYTES) fail("asset_too_large", 413);

@@ -1,15 +1,17 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RecognitionJob } from "./recognitionQueue";
 import { recognitionJobToTaskSummary, readRecognitionJobs, upsertRecognitionJob } from "./recognitionJobLog";
+import { BlockStore } from "./blockStore";
 
 describe("RecognitionJobLog", () => {
   let rootDir: string;
 
   beforeEach(async () => {
     rootDir = await mkdtemp(join(tmpdir(), "mathnotes-recognition-jobs-"));
+    await new BlockStore(rootDir).createSession({ notebookId: "functional_analysis", sessionId: "lecture", title: "Fixture", now: "2026-09-08T00:00:00Z" });
   });
 
   afterEach(async () => {
@@ -26,6 +28,24 @@ describe("RecognitionJobLog", () => {
     ).resolves.toEqual([]);
   });
 
+  it("waits for the shared catalog barrier and never recreates a trashed Session", async () => {
+    const store = new BlockStore(rootDir);
+    const live = store.getSessionDir("functional_analysis", "lecture");
+    const trash = join(rootDir, "trash-payload");
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const barrier = store.getWriteCoordinator().runWorkspace(async () => {
+      entered(); await new Promise<void>(resolve => { release = resolve; });
+      await rename(live, trash);
+    });
+    await started;
+    const outcome = upsertRecognitionJob({ rootDir, job: failedJob() }).then(() => "written", error => (error as NodeJS.ErrnoException).code);
+    release(); await barrier;
+    expect(await outcome).toBe("ENOENT");
+    await expect(stat(live)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(trash, "logs/recognition_jobs.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
   it("upserts failed jobs into recognition_jobs.json", async () => {
     await upsertRecognitionJob({
       rootDir,

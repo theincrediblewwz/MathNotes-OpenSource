@@ -231,13 +231,18 @@ export class PhotoIngestPipeline implements PhotoIngestPort {
   }
 
   private async writeUploadLog(notebookId: string, sessionId: string, records: UploadRecord[]): Promise<void> {
-    const target = this.uploadLogPath(notebookId, sessionId);
-    const tmp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(tmp, `${JSON.stringify(records, null, 2)}\n`, "utf8");
-    await rm(target, { force: true });
-    await rename(tmp, target);
+    await this.deps.store.getWriteCoordinator().run(notebookId, sessionId, async () => {
+      // A catalog operation may have trashed this Session while recognition ran.
+      // Check inside the shared queue before mkdir can recreate its old location.
+      await this.deps.store.readSession(notebookId, sessionId);
+      const target = this.uploadLogPath(notebookId, sessionId);
+      const tmp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+      try {
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(tmp, `${JSON.stringify(records, null, 2)}\n`, "utf8");
+        await rename(tmp, target);
+      } finally { await rm(tmp, { force: true }); }
+    });
   }
 
   private uploadLogPath(notebookId: string, sessionId: string): string {

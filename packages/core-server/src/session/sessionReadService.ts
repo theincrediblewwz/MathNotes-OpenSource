@@ -1,8 +1,9 @@
-import { readFile, stat } from "node:fs/promises";
-import { basename, dirname, extname, isAbsolute, resolve, sep } from "node:path";
+import { lstat, readFile, stat } from "node:fs/promises";
+import { basename, extname, isAbsolute, resolve, sep } from "node:path";
 import { markdownContinuationGroups, type BlockRef, type SessionRecord } from "@mathnotes/shared";
 import { renderPortableMarkdown } from "../render/portableMarkdown";
 import { markdownBlockRevision, markdownLockSummary, sessionManifestRevision } from "./sessionRevision";
+import { sessionAssetPathFromMarkdown } from "../domain/sessionAssetPath";
 
 export type SessionBlockManifest = Readonly<{
   id: string;
@@ -274,11 +275,19 @@ async function inlineLocalImage(args: { source: string; markdownPath: string; se
   if (/^(?:data:|https?:|\/\/|#)/i.test(args.source) || isAbsolute(args.source)) {
     return { source: "", missing: true };
   }
-  const target = resolve(dirname(args.markdownPath), args.source);
+  const assetPath = sessionAssetPathFromMarkdown(args.source);
+  if (!assetPath) return { source: "", missing: true };
+  const target = resolve(args.sessionDir, assetPath);
   try {
     assertInside(resolve(args.sessionDir, "assets"), target);
+    let checked = args.sessionDir;
+    if ((await lstat(checked)).isSymbolicLink()) return { source: "", missing: true };
+    for (const component of assetPath.split("/")) {
+      checked = resolve(checked, component);
+      if ((await lstat(checked)).isSymbolicLink()) return { source: "", missing: true };
+    }
     const info = await stat(target);
-    if (info.size > 12 * 1024 * 1024) return { source: "", missing: true };
+    if (!info.isFile() || info.size > 12 * 1024 * 1024) return { source: "", missing: true };
     const bytes = await readFile(target);
     return { source: `data:${assetMimeType(target)};base64,${bytes.toString("base64")}` };
   } catch (error) {

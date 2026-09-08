@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import { encodeMarkdownAssetPath, sessionAssetPathFromMarkdown } from "./sessionAssetPath";
 
 export const SOURCE_IMAGE_MARKER = "[[mathnotes:source-image]]";
 export const sourceImageMarkerInstruction =
@@ -67,9 +68,9 @@ parser.inline.ruler.before("link", "mathnotes_source_image", (state, silent) => 
 export function bindSourceImageMarkers(markdown: string, sourceAssetPath?: string): string {
   if (!markdown.includes(SOURCE_IMAGE_MARKER)) return markdown;
   const asset = sourceAssetPath?.replaceAll("\\", "/");
-  const safeAsset = asset?.startsWith("assets/") && /\.(?:png|jpe?g|webp)$/i.test(asset) &&
-    !asset.split("/").some(segment => !segment || segment === "." || segment === "..") &&
-    !/[\u0000-\u0020<>"'`()?#%]/.test(asset);
+  const encodedAsset = asset === undefined ? undefined : encodeMarkdownAssetPath(asset);
+  const safeAsset = asset !== undefined && /\.(?:png|jpe?g|webp)$/i.test(asset) &&
+    sessionAssetPathFromMarkdown(encodedAsset!) === asset;
   const lines = markdown.split(/\r?\n/);
   const endings = markdown.match(/\r?\n/g) ?? [];
   for (const token of parser.parse(markdown, {})) {
@@ -80,7 +81,7 @@ export function bindSourceImageMarkers(markdown: string, sourceAssetPath?: strin
       // Only the specified standalone marker syntax is active (not quoted examples).
       if (!/^ {0,3}\[\[mathnotes:source-image\]\][ \t]*$/.test(lines[index] ?? "")) continue;
       lines[index] = safeAsset
-        ? `![识别照片（已处理）](../${asset})`
+        ? `![识别照片（已处理）](../${encodedAsset})`
         : "[识别照片暂不可用]";
     }
   }

@@ -114,7 +114,7 @@ const api: MathNotesApi = {
     return () => ipcRenderer.off("mathnotes:upload-completed", listener);
   },
   onWorkspaceChanged: (callback) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: { notebookId: string; sessionId: string }) => callback(payload);
+    const listener = (_event: Electron.IpcRendererEvent, payload: { notebookId: string; sessionId?: string; catalogChanged?: boolean }) => callback(payload);
     ipcRenderer.on("mathnotes:workspace-changed", listener);
     return () => ipcRenderer.removeListener("mathnotes:workspace-changed", listener);
   },

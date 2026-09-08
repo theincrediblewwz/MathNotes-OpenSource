@@ -6,7 +6,8 @@ import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBlockRef, createSessionRecord } from "@mathnotes/shared";
 import { SessionWriteCoordinator } from "../session/sessionWriteCoordinator";
-import { WorkspaceSyncService, type ReplicaSnapshot, replicaRevision, validateReplicaPath } from "./workspaceSyncService";
+import { WorkspaceSyncService, type ReplicaSnapshot, readReplicaSnapshotDirectory, replicaRevision, validateReplicaPath } from "./workspaceSyncService";
+import { encodeMarkdownAssetPath } from "../domain/sessionAssetPath";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -96,6 +97,39 @@ describe("workspace v3 sync host", () => {
     (input.snapshot.session as any).remoteSyncOperations = {};
     const after = await f.sync.push(input); const ledger = (after.session as any).remoteSyncOperations;
     expect(Object.keys(ledger)).toHaveLength(1024); expect(ledger[input.operationId]).toBe(hash(JSON.stringify(input)));
+  });
+  it("preserves the host catalog retry ledger and discards forged client entries", async () => {
+    const f = await fixture(); const operationId = randomUUID();
+    const session = { ...f.base.session, remoteCatalogOperations: { [operationId]: hash("host catalog operation") } };
+    await writeFile(join(f.directory, "session.json"), JSON.stringify(session));
+    let base = await f.sync.snapshot(f.notebookId, f.sessionId);
+    const input = edit(base);
+    (input.snapshot.session as any).remoteCatalogOperations = { [randomUUID()]: hash("forged") };
+    base = await f.sync.push(input);
+    expect((base.session as any).remoteCatalogOperations).toEqual(session.remoteCatalogOperations);
+    const other = await fixture(); const forged = edit(other.base);
+    (forged.snapshot.session as any).remoteCatalogOperations = session.remoteCatalogOperations;
+    expect((await other.sync.push(forged)).session).not.toHaveProperty("remoteCatalogOperations");
+  });
+  it("reads staged directories without weakening the live Session ID check", async () => {
+    const f = await fixture();
+    expect(await readReplicaSnapshotDirectory(f.directory, f.notebookId)).toEqual(f.base);
+    await expect(readReplicaSnapshotDirectory(f.directory, f.notebookId, "wrong-id")).rejects.toMatchObject({ code: "invalid_session" });
+  });
+  it("roundtrips encoded hash, percent, Chinese, parentheses and spaces through snapshot, download and push", async () => {
+    const f = await fixture();
+    const paths = ["assets/photo#50%.png", "assets/中文 照片(1).png", "assets/percent%23%25.png"];
+    const markdown = paths.map(path => `![图](../${encodeMarkdownAssetPath(path)}?size=1#display)`).join("\n");
+    const input = edit(f.base, markdown);
+    for (const path of paths) await addAsset(f, input, path, Buffer.from(path));
+    const first = await f.sync.push(input);
+    const snapshot = await f.sync.snapshot(f.notebookId, f.sessionId);
+    expect(snapshot).toEqual(first);
+    expect(snapshot.assets.map(asset => asset.path)).toEqual([...paths].sort());
+    for (const asset of snapshot.assets) expect(await f.sync.asset(f.notebookId, f.sessionId, asset.path, asset.sha256)).toEqual(Buffer.from(asset.path));
+    const after = await f.sync.push(edit(snapshot, `${markdown}\n追加正文`));
+    expect(after.assets).toEqual(first.assets);
+    expect(after.markdown[after.session.blocks[0].path]).toBe(`${markdown}\n追加正文`);
   });
   it("keeps locked content during an explicit unlock and rejects unlock plus edit or deletion", async () => {
     const f = await fixture(); const locked = structuredClone(f.base.session);

@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AssistantMode } from "@mathnotes/shared";
+import { validateReplicaId } from "@mathnotes/core-server";
 import type { BlockStore } from "./blockStore";
 
 export type AssistantRemarkFocus = {
@@ -48,20 +49,25 @@ export class AssistantRemarkStore {
   constructor(private readonly blockStore: BlockStore) {}
 
   async list(notebookId: string, sessionId: string): Promise<AssistantRemark[]> {
-    const index = await this.ensureIndex(notebookId, sessionId);
-    const remarks = await Promise.all(index.remarks.map(async (entry): Promise<AssistantRemark | null> => {
-      try {
-        const { file: _file, ...metadata } = entry;
-        return {
-          ...metadata,
-          markdown: await readFile(this.resolveRemarkFile(notebookId, sessionId, entry.file), "utf8")
-        };
-      } catch (error) {
-        if (isMissingFile(error)) return null;
-        throw error;
-      }
-    }));
-    return remarks.filter((remark): remark is AssistantRemark => remark !== null);
+    try { validateReplicaId(notebookId); validateReplicaId(sessionId); } catch { return []; }
+    return this.blockStore.getWriteCoordinator().run(notebookId, sessionId, async () => {
+      try { await this.requireSession(notebookId, sessionId); }
+      catch (error) { if (isMissingFile(error)) return []; throw error; }
+      const index = await this.ensureIndex(notebookId, sessionId);
+      const remarks = await Promise.all(index.remarks.map(async (entry): Promise<AssistantRemark | null> => {
+        try {
+          const { file: _file, ...metadata } = entry;
+          return {
+            ...metadata,
+            markdown: await readFile(this.resolveRemarkFile(notebookId, sessionId, entry.file), "utf8")
+          };
+        } catch (error) {
+          if (isMissingFile(error)) return null;
+          throw error;
+        }
+      }));
+      return remarks.filter((remark): remark is AssistantRemark => remark !== null);
+    });
   }
 
   async append(args: {
@@ -69,30 +75,44 @@ export class AssistantRemarkStore {
     sessionId: string;
     remark: AssistantRemark;
   }): Promise<AssistantRemark> {
-    const index = await this.ensureIndex(args.notebookId, args.sessionId);
-    const entry = toIndexEntry(args.remark);
-    await this.writeRemarkMarkdown(args.notebookId, args.sessionId, entry.file, args.remark.markdown);
-    await this.writeIndex(args.notebookId, args.sessionId, {
-      version: 1,
-      remarks: [...index.remarks.filter((candidate) => candidate.id !== entry.id), entry]
+    validateReplicaId(args.notebookId); validateReplicaId(args.sessionId);
+    return this.blockStore.getWriteCoordinator().run(args.notebookId, args.sessionId, async () => {
+      await this.requireSession(args.notebookId, args.sessionId);
+      const index = await this.ensureIndex(args.notebookId, args.sessionId);
+      const entry = toIndexEntry(args.remark);
+      await this.writeRemarkMarkdown(args.notebookId, args.sessionId, entry.file, args.remark.markdown);
+      await this.writeIndex(args.notebookId, args.sessionId, {
+        version: 1,
+        remarks: [...index.remarks.filter((candidate) => candidate.id !== entry.id), entry]
+      });
+      return args.remark;
     });
-    return args.remark;
   }
 
   async remove(args: { notebookId: string; sessionId: string; remarkId: string }): Promise<boolean> {
-    const index = await this.ensureIndex(args.notebookId, args.sessionId);
-    const entry = index.remarks.find((candidate) => candidate.id === args.remarkId);
-    if (!entry) return false;
-    await this.writeIndex(args.notebookId, args.sessionId, {
-      version: 1,
-      remarks: index.remarks.filter((candidate) => candidate.id !== args.remarkId)
+    validateReplicaId(args.notebookId); validateReplicaId(args.sessionId);
+    return this.blockStore.getWriteCoordinator().run(args.notebookId, args.sessionId, async () => {
+      await this.requireSession(args.notebookId, args.sessionId);
+      const index = await this.ensureIndex(args.notebookId, args.sessionId);
+      const entry = index.remarks.find((candidate) => candidate.id === args.remarkId);
+      if (!entry) return false;
+      await this.writeIndex(args.notebookId, args.sessionId, {
+        version: 1,
+        remarks: index.remarks.filter((candidate) => candidate.id !== args.remarkId)
+      });
+      await this.archiveRemarkFile(args.notebookId, args.sessionId, entry);
+      return true;
     });
-    await this.archiveRemarkFile(args.notebookId, args.sessionId, entry);
-    return true;
   }
 
   async get(args: { notebookId: string; sessionId: string; remarkId: string }): Promise<AssistantRemark | undefined> {
     return (await this.list(args.notebookId, args.sessionId)).find((remark) => remark.id === args.remarkId);
+  }
+
+  /** Called only inside the shared Session queue, before any directory creation. */
+  private async requireSession(notebookId: string, sessionId: string): Promise<void> {
+    const session = await this.blockStore.readSession(notebookId, sessionId);
+    if (session.id !== sessionId) throw new Error("invalid_session");
   }
 
   private assistantDir(notebookId: string, sessionId: string): string {
@@ -127,6 +147,8 @@ export class AssistantRemarkStore {
 
     const legacy = await this.readLegacy(notebookId, sessionId);
     const migrated: AssistantRemarkIndex = { version: 1, remarks: legacy.map(toIndexEntry) };
+    // Reading a valid but empty Session must not create an assistant directory.
+    if (!legacy.length) return migrated;
     for (const remark of legacy) {
       const entry = toIndexEntry(remark);
       await this.writeRemarkMarkdown(notebookId, sessionId, entry.file, remark.markdown);

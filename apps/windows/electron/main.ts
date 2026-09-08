@@ -2,20 +2,21 @@ import { app, BrowserWindow, dialog, ipcMain as electronIpcMain, net, protocol, 
 import {
   createMathNotesCore,
   DeviceIdentityService,
-  readWorkspaceContext,
   RevisionEventLog,
   readReadonlySessionPreview,
   SessionBlockOrganizeService,
   SessionEditService,
   SessionSelectionEditService,
   WorkspaceSyncService,
+  WorkspaceCatalogSyncService,
+  validateReplicaId,
   writeWorkspaceContext,
   type CompanionUploadActivity,
   type MathNotesCore,
   type PairingChallenge
 } from "@mathnotes/core-server";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -64,6 +65,7 @@ import { PdfIngestPipeline, type IngestPdfResult } from "../src/core/pdfIngestPi
 import { createSessionId } from "../src/common/sessionNaming";
 import { parseSessionSourceText } from "../src/common/sessionSourceDocument";
 import { createDesktopCoreEnvironment, createResilientWindowsCoreService } from "./coreEnvironment";
+import { emptyDesktopSessionDocument, initializeDesktopWorkspace, selectDesktopWorkspace } from "../src/core/desktopWorkspaceStartup";
 import type {
   CreateNotebookInput,
   CreateSessionInput,
@@ -145,6 +147,14 @@ const ipcMain = {
   ): void {
     electronIpcMain.handle(channel, (event, ...args) => {
       assertTrustedRenderer(event);
+      const input = args[0];
+      if (input && typeof input === "object") {
+        for (const key of ["notebookId", "sessionId"] as const) {
+          if (Object.prototype.hasOwnProperty.call(input, key) && (input as Record<string, unknown>)[key] !== undefined) {
+            validateReplicaId((input as Record<string, unknown>)[key]);
+          }
+        }
+      }
       return listener(event, ...(args as TArgs));
     });
   }
@@ -466,14 +476,18 @@ function isPathInside(rootDir: string, filePath: string): boolean {
 }
 
 function isAllowedSessionAssetPath(filePath: string): boolean {
-  const parts = filePath.split(/[\\/]/);
-  const assetsIndex = parts.lastIndexOf("assets");
-  return assetsIndex >= 0 && ["embedded", "pdfs", "photos"].includes(parts[assetsIndex + 1] ?? "");
+  const relative = path.relative(notesRootDir(), filePath).split(/[\\/]/);
+  // Replica assets can live directly in assets/ or a nested folder. Their
+  // boundary is the owning Session, not a platform-specific camera subfolder.
+  return relative.length >= 6 && relative[0] === "notebooks" && Boolean(relative[1]) &&
+    relative[2] === "sessions" && Boolean(relative[3]) && relative[4] === "assets" &&
+    relative.every(part => part && part !== "." && part !== "..");
 }
 
 function registerIpcHandlers() {
   ipcMain.handle("mathnotes:load-current-session", async () => {
     const store = await ensureDefaultStore();
+    if (!currentSessionId) return emptyDesktopSessionDocument(currentNotebookId);
     const document = await loadSessionDocumentFromStore({
       store,
       notebookId: currentNotebookId,
@@ -530,6 +544,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle("mathnotes:rename-session", async (_event, input: RenameSessionInput) => {
     const store = await ensureDefaultStore();
+    return store.getWriteCoordinator().runWorkspace(async () => {
     await renameSessionTitle({
       rootDir: notesRootDir(),
       notebookId: input.notebookId,
@@ -544,10 +559,12 @@ function registerIpcHandlers() {
       notebookId: input.notebookId,
       sessionId: input.sessionId
     });
+    });
   });
 
   ipcMain.handle("mathnotes:delete-session", async (_event, input: DeleteSessionInput) => {
-    await ensureDefaultStore();
+    const store = await ensureDefaultStore();
+    return store.getWriteCoordinator().runWorkspace(async () => {
     const remainingSessions = await deleteNotebookSession({
       rootDir: notesRootDir(),
       notebookId: input.notebookId,
@@ -563,6 +580,7 @@ function registerIpcHandlers() {
       deletedSessionId: input.sessionId,
       remainingSessions
     };
+    });
   });
 
   ipcMain.handle("mathnotes:load-user-settings", async () => ensureUserSettings());
@@ -799,9 +817,11 @@ function registerIpcHandlers() {
 
   ipcMain.handle("mathnotes:create-session", async (_event, input: CreateSessionInput | undefined) => {
     const store = await ensureDefaultStore();
+    return store.getWriteCoordinator().runWorkspace(async () => {
     const nowDate = new Date();
     const now = nowDate.toISOString();
     const notebookId = input?.notebookId?.trim() || defaultNotebookId;
+    await access(path.join(store.getRootDir(), "notebooks", notebookId, "sessions"));
     const sessionId = await createUniqueSessionId(store, notebookId, nowDate);
     await store.createSession({
       notebookId,
@@ -831,6 +851,7 @@ function registerIpcHandlers() {
     });
     await rememberSessionRead(notebookId, sessionId);
     return document;
+    });
   });
 
   ipcMain.handle("mathnotes:run-assistant-task", async (_event, input: RunAssistantTaskInput) => {
@@ -894,6 +915,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle("mathnotes:create-notebook", async (_event, input: CreateNotebookInput) => {
     const store = await ensureDefaultStore();
+    return store.getWriteCoordinator().runWorkspace(async () => {
     const nowDate = new Date();
     const now = nowDate.toISOString();
     const notebookId = await createUniqueNotebookId(nowDate);
@@ -919,6 +941,7 @@ function registerIpcHandlers() {
     const document = await loadSessionDocumentFromStore({ store, notebookId, sessionId });
     await rememberSessionRead(notebookId, sessionId);
     return document;
+    });
   });
 
   ipcMain.handle("mathnotes:create-markdown-block", async (_event, input: CreateMarkdownBlockInput) => {
@@ -1387,10 +1410,12 @@ function registerIpcHandlers() {
 
   ipcMain.handle("mathnotes:import-local-pdf", async (_event, input: ImportLocalPdfInput): Promise<ImportLocalPdfResult> => {
     const store = await ensureDefaultStore();
+    return store.getWriteCoordinator().runWorkspace(async () => {
     const bytes = await readFile(input.sourcePath);
     const info = await readPdfDocumentInfo(bytes);
     const nowDate = new Date();
     const now = nowDate.toISOString();
+    await access(path.join(store.getRootDir(), "notebooks", input.notebookId, "sessions"));
     let sessionId = input.sessionId;
 
     if (input.destination === "new_session") {
@@ -1431,6 +1456,7 @@ function registerIpcHandlers() {
       pageCount: info.pageCount,
       recognitionQueued: false
     };
+    });
   });
 
   ipcMain.handle(
@@ -1852,6 +1878,7 @@ function createIngestServer(
     deviceIdentityService: deviceIdentities,
     workspaceSync: new WorkspaceSyncService(store.getRootDir(), app.getPath("userData"),
       (notebookId, sessionId, operation) => coordinator.run(notebookId, sessionId, operation)),
+    workspaceCatalog: new WorkspaceCatalogSyncService(store.getRootDir(), app.getPath("userData"), coordinator),
     onWorkspaceChanged: (target) => {
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) window.webContents.send("mathnotes:workspace-changed", target);
@@ -2102,15 +2129,8 @@ function ensureSessionRevisionService(): SessionAiRevisionService {
 
 async function initializeDefaultStore(rootDir: string): Promise<void> {
   const store = new BlockStore(rootDir);
-  await mkdir(rootDir, { recursive: true });
-
-  try {
-    await store.readSession(defaultNotebookId, defaultSessionId);
-  } catch (error) {
-    if (!isMissingFile(error)) {
-      throw error;
-    }
-
+  const catalog = new WorkspaceCatalogSyncService(rootDir, app.getPath("userData"), store.getWriteCoordinator());
+  await initializeDesktopWorkspace({ store, recoverCatalog: () => catalog.recover(), createWelcome: async () => {
     const now = new Date().toISOString();
     await store.createSession({
       notebookId: defaultNotebookId,
@@ -2130,9 +2150,8 @@ async function initializeDefaultStore(rootDir: string): Promise<void> {
       ].join("\n"),
       now
     });
-  }
-
-  await ensureDemoContent(store);
+    await ensureDemoContent(store);
+  } });
   await restoreWorkspaceContext(store, rootDir);
 }
 
@@ -2229,20 +2248,10 @@ async function listAllPairingTargets() {
 }
 
 async function restoreWorkspaceContext(store: BlockStore, rootDir: string): Promise<void> {
-  const saved = await readWorkspaceContext(rootDir);
-  if (saved) {
-    try {
-      await store.readSession(saved.notebookId, saved.sessionId);
-      currentNotebookId = saved.notebookId;
-      currentSessionId = saved.sessionId;
-      return;
-    } catch (error) {
-      if (!isMissingFile(error)) throw error;
-    }
-  }
-  currentNotebookId = defaultNotebookId;
-  currentSessionId = defaultSessionId;
-  await persistCurrentWorkspaceContext();
+  const target = await selectDesktopWorkspace(store);
+  currentNotebookId = target.notebookId;
+  currentSessionId = target.sessionId;
+  if (target.sessionId) await writeWorkspaceContext(rootDir, target);
 }
 
 async function persistCurrentWorkspaceContext(): Promise<void> {

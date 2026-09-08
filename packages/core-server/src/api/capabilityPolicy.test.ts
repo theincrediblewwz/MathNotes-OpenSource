@@ -28,6 +28,8 @@ describe("Core API capability policy", () => {
       "companion.catalog.events",
       "workspace.identity",
       "workspace.catalog",
+      "workspace.catalog.state",
+      "workspace.catalog.operation",
       "workspace.snapshot",
       "workspace.asset",
       "workspace.asset.stage",
@@ -43,7 +45,7 @@ describe("Core API capability policy", () => {
 
   it("requires the trusted host credential for every workspace route", () => {
     const routes = NETWORK_API_ROUTES.filter(route => route.id.startsWith("workspace."));
-    expect(routes).toHaveLength(6);
+    expect(routes).toHaveLength(8);
     for (const route of routes) {
       expect(route.capability).toBe("workspace.sync");
       expect(route.audience).toBe("trusted-host");

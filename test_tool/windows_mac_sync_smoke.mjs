@@ -110,7 +110,7 @@ try {
   await page.getByRole("button", { name: "笔记目录", exact: true }).click();
   await page.getByTestId("notebook-drawer").getByRole("button", { name: "设置", exact: true }).click();
   const displayedVersion = await page.getByTestId("app-version").innerText();
-  assert.match(displayedVersion, /0\.3\.4.*Mac 同步测试版.*[0-9a-f]{12}/);
+  assert.match(displayedVersion, /0\.3\.4.*Mac 目录同步测试版.*[0-9a-f]{12}/);
   if (process.env.MATHNOTES_EXPECT_BUILD) assert.ok(displayedVersion.includes(process.env.MATHNOTES_EXPECT_BUILD));
   await page.screenshot({ path: path.join(output, "windows-build-version.png"), animations: "disabled" });
   await page.getByRole("button", { name: "关闭设置", exact: true }).click();

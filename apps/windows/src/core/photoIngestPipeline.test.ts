@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +34,18 @@ describe("PhotoIngestPipeline", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("does not recreate a Session trashed between photo acceptance and upload receipt persistence", async () => {
+    const live = store.getSessionDir("functional_analysis", "lecture");
+    const trash = join(root, "trash-payload");
+    const accepting = new PhotoIngestPipeline({ store, provider: new MockRecognitionProvider(), onRecognitionJobChanged: async job => {
+      if (job.status === "pending") await store.getWriteCoordinator().runWorkspace(() => rename(live, trash));
+    } });
+    await expect(accepting.acceptPhoto({ notebookId: "functional_analysis", sessionId: "lecture", originalName: "p.png",
+      mimeType: "image/png", bytes: Buffer.from("synthetic"), receivedAt: "2026-09-08T00:00:00Z" })).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(live)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.parse(await readFile(join(trash, "session.json"), "utf8")).blocks).toHaveLength(1);
+    await expect(stat(join(trash, "logs/uploads.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
   it("returns the exact target and latest persisted retry status instead of stale upload or queue state", async () => {
     const args = { notebookId: "functional_analysis", sessionId: "lecture", originalName: "state.png", mimeType: "image/png",
       bytes: Buffer.from("synthetic photo"), receivedAt: "2026-09-07T01:00:00Z" };

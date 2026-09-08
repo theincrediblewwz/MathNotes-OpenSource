@@ -81,7 +81,14 @@ export function NotebookBrowserDialog({
     setPreview(null);
     setSessionMenu(null);
     searchRef.current?.focus();
-  }, [currentNotebookId, currentSessionId, notebooks, open]);
+  }, [currentNotebookId, currentSessionId, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedNotebookId(current => notebooks.some(item => item.notebookId === current) ? current : notebooks[0]?.notebookId ?? "");
+    setPreview(null);
+    setSessionMenu(null);
+  }, [notebooks, open]);
 
   useEffect(() => {
     if (!open) return;
