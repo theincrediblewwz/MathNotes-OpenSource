@@ -481,19 +481,33 @@ struct PreviewSmoke {
         print("MACOS_PREVIEW_PARTIAL_FAILURE_REMAINS_READABLE_OK")
         let shareFolder = URL(fileURLWithPath: root + "/share-fixture")
         try FileManager.default.createDirectory(at: shareFolder.appendingPathComponent("assets"), withIntermediateDirectories: true)
-        let shareMarkdown = "# Share import\n\nFormula $x^2$\n\n![image](assets/photo.png)"
+        let shareMarkdown = "<!-- block:id=0012 source=ai_transcription -->\n\n# Share import\n\nFormula $x^2$\n\n![image](assets/photo.png)\n\n<!-- block:id=0018 source=user_revision -->\n\nSecond restored block"
         let sharePhoto = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH3sAAAAASUVORK5CYII=")!
         try shareMarkdown.write(to: shareFolder.appendingPathComponent("Windows.md"), atomically: true, encoding: .utf8)
         try sharePhoto.write(to: shareFolder.appendingPathComponent("assets/photo.png"))
         let shared = try await supervisor.importSharePackage(packagePath: shareFolder.path, notebookId: nil)
         try expect(shared.assetCount == 1, "native import decodes resource count")
         let sharedManifest = try await supervisor.fetchSessionManifest(shared.session)
+        try expect(sharedManifest.blocks.map(\.id) == ["0012", "0018"], "native import restores Windows block boundaries")
         let shareBytes = try await supervisor.exportSharePackage(shared.session, baseRevision: sharedManifest.revision)
         try expect(shareBytes.prefix(2) == Data([0x50, 0x4b]), "native export returns a ZIP")
         let shareZip = URL(fileURLWithPath: root + "/round-trip.zip")
         try shareBytes.write(to: shareZip)
         let sharedAgain = try await supervisor.importSharePackage(packagePath: shareZip.path, notebookId: shared.session.notebookId)
         try expect(sharedAgain.assetCount == 1 && sharedAgain.session.sessionId != shared.session.sessionId, "native round trip creates independent Session")
+        let againManifest = try await supervisor.fetchSessionManifest(sharedAgain.session)
+        try expect(againManifest.blocks.map(\.id) == ["0012", "0018"], "ZIP reexport retains imported block boundaries")
+        let pickerHost = SharePackagePanelHost()
+        let pickerWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        let pickerAnchor = SharePackagePanelAnchor.AnchorView()
+        pickerAnchor.host = pickerHost
+        pickerWindow.contentView = pickerAnchor
+        try expect(pickerHost.window === pickerWindow, "picker retains its initiating window without querying application focus")
+        try expect(pickerAnchor.hitTest(.zero) == nil, "picker window anchor never intercepts content clicks")
+        pickerWindow.contentView = nil
+        try expect(pickerHost.window == nil, "picker clears detached workspace window")
+        try expect(SharePackagePicker.supports(shareZip) && SharePackagePicker.supports(shareFolder), "picker enables ZIP and folders without UTI metadata")
+        try expect(!SharePackagePicker.supports(shareFolder.appendingPathComponent("unsupported.exe")), "picker filters unrelated files")
         print("MACOS_SHARE_PACKAGE_NATIVE_CLIENT_ROUND_TRIP_OK")
         let importedWorkspace = SessionSourceWorkspace()
         importedWorkspace.prepare(sessionID: shared.session.id, revision: sharedManifest.revision, blocks: sharedManifest.blocks)

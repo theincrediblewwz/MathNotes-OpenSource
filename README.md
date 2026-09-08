@@ -6,7 +6,7 @@ MathNotes 是一个 GPLv3、本地优先的数学笔记项目，包含 Windows�
 
 Windows 最新测试构建为 **0.3.4「Mac 目录同步测试版」**：在正文、素材和草稿保护之外，增加远程新建笔记本/笔记、改名、移入废纸篓及恢复，并修复特殊文件名图片和删除后重启的问题。设置中显示构建编号，便于区分旧包。[下载 Windows 目录同步测试包](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/windows-catalog-sync-20260908) · [目录接口与逐项验收表](deploy/windows-mac-sync/CATALOG_SYNC_V1.md) · [原正文同步说明](deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md)。该 Windows 发行版没有重新发布 Android/PWA；真实 Mac 跨机验收仍待完成。
 
-**Mac 原生预览版 0.3.6** 已集成 PWA 0.3.4，面向 Apple silicon、macOS 14+，本机实际验收为 macOS 26。0.3.6 减少阅读滚动引起的源码重绘，并支持 Windows 分享目录/ZIP 导入和含图分享包导出；此前已修复手机后台启动、连续预览，并新增紧凑 UI、笔记管理、固定块、AI 修改、原图内嵌与阅读工具。**跨 Windows 同步尚待真实跨机验证**，本次以独立本机使用为主。[下载 Mac 预览版](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/macos-v0.3.6) · [Mac 发布说明](deploy/releases/macos-v0.3.6.md) · [接续开发与验收状态](apps/macos/RELEASE_STATUS.md)。
+**Mac 原生预览版 0.3.7** 已集成 PWA 0.3.4，面向 Apple silicon、macOS 14+，本机实际验收为 macOS 26。0.3.7 修复分享包文件框交互及 Mac ZIP 中文文件名兼容，并按 Windows 导出标记恢复内容块，支持含图分享包往返；此前已修复手机后台启动、连续预览，并新增紧凑 UI、笔记管理、固定块、AI 修改、原图内嵌与阅读工具。**跨 Windows 同步尚待真实跨机验证**，本次以独立本机使用为主。[下载 Mac 预览版](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/macos-v0.3.7) · [Mac 发布说明](deploy/releases/macos-v0.3.7.md) · [接续开发与验收状态](apps/macos/RELEASE_STATUS.md)。
 
 [下载最新发行版](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/latest) · [0.3.4 固定发行页](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/v0.3.4) · [逐项操作验收表](deploy/releases/v0.3.4-acceptance.md)
 
@@ -17,9 +17,9 @@ Windows 最新测试构建为 **0.3.4「Mac 目录同步测试版」**：在正�
 | Windows | 0.3.4 | 已内置新版 PWA 的便携 ZIP，解压后运行 MathNotes.exe |
 | Android | 0.3.4，versionCode 17 | APK，沿用既有测试签名 |
 | PWA | 0.3.4 | 独立网页/源码更新 ZIP，附公开集成说明 |
-| macOS | 0.3.6 原生预览版 | Apple silicon ZIP，内置 PWA；ad-hoc 签名，未公证 |
+| macOS | 0.3.7 原生预览版 | Apple silicon ZIP，内置 PWA；ad-hoc 签名，未公证 |
 
-本版提供 Windows 便携 ZIP、Android APK 和独立 PWA 更新包。Windows 为未签名测试包，Android 沿用既有测试签名；覆盖安装前请备份笔记。Mac 安装包在独立的 macos-v0.3.6 发行页提供，详见其安装说明。
+本版提供 Windows 便携 ZIP、Android APK 和独立 PWA 更新包。Windows 为未签名测试包，Android 沿用既有测试签名；覆盖安装前请备份笔记。Mac 安装包在独立的 macos-v0.3.7 发行页提供，详见其安装说明。
 
 0.3.4 修复了块拖动原地放下误报导入、重新识别未实际执行，并补齐已上传素材预览与正文定位、左上角可滚动气泡目录、阅读底栏显隐和画笔内矩形遮盖。各包的版本、SHA-256、验证范围与已知限制以该发行页为准。
 

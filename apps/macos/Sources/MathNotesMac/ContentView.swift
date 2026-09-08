@@ -33,6 +33,12 @@ struct ContentView: View {
     @State private var sessionRefreshNonce = 0
     @State private var isImportingSharePackage = false
     @State private var sharePackageError: String?
+    @State private var sharePackageNotice: String?
+    @State private var isChoosingSharePackage = false
+    @State private var pendingShareImport: ShareImportDestination?
+    @State private var sharePanelHost = SharePackagePanelHost()
+
+    private struct ShareImportDestination { let notebookID: String? }
 
     var body: some View {
         NavigationSplitView {
@@ -47,10 +53,15 @@ struct ContentView: View {
         } detail: {
             detailPane
         }
+        .background(SharePackagePanelAnchor(host: sharePanelHost).frame(width: 0, height: 0))
         .tint(MathNotesTheme.accent)
         .frame(minWidth: 780, minHeight: 500)
         .dropDestination(for: URL.self) { urls, _ in
-            Task { await handleMarkdownDrop(urls) }
+            if urls.count == 1, let url = urls.first, SharePackagePicker.isDroppedPackage(url) {
+                Task { await importSharePackage(url, notebookID: selectedSession?.notebookId ?? selectedNotebookId) }
+            } else {
+                Task { await handleMarkdownDrop(urls) }
+            }
             return !urls.isEmpty
         }
         .task {
@@ -104,7 +115,7 @@ struct ContentView: View {
                 onOpenSettings: { openSettings() }
             )
         }
-        .sheet(isPresented: $showNotebookBrowser) {
+        .sheet(isPresented: $showNotebookBrowser, onDismiss: presentPendingShareImport) {
             MacNotebookBrowser(
                 notebooks: loadedNotebooks,
                 sourceMode: sourceMode,
@@ -123,17 +134,8 @@ struct ContentView: View {
                 onClose: { showNotebookBrowser = false }
             )
         }
-        .sheet(isPresented: $isImportingSharePackage) {
-            VStack(spacing: 14) {
-                ProgressView()
-                Text("正在导入正文和资源…")
-            }
-            .frame(width: 320, height: 140)
-            .interactiveDismissDisabled()
-        }
-        .alert("无法导入分享包", isPresented: Binding(get: { sharePackageError != nil }, set: { if !$0 { sharePackageError = nil } })) {
-            Button("好", role: .cancel) { sharePackageError = nil }
-        } message: { Text(sharePackageError ?? "") }
+        .modifier(SharePackageImportStatus(isImporting: isImportingSharePackage,
+            error: $sharePackageError, notice: $sharePackageNotice))
         .sheet(isPresented: $showMarkdownArchive) {
             MarkdownArchiveSheet(
                 documents: temporaryMarkdownDocuments,
@@ -669,29 +671,44 @@ struct ContentView: View {
     }
 
     private func beginSharePackageImport(notebookID: String?) {
-        guard sourceMode == .local, !editingState.hasUnsavedSourceDrafts, !isImportingSharePackage else { return }
+        guard sourceMode == .local, !editingState.hasUnsavedSourceDrafts,
+              !isImportingSharePackage, !isChoosingSharePackage else { return }
+        pendingShareImport = ShareImportDestination(notebookID: notebookID)
         showNotebookBrowser = false
+    }
+
+    private func presentPendingShareImport() {
+        guard let destination = pendingShareImport else { return }
+        pendingShareImport = nil
+        isChoosingSharePackage = true
         Task { @MainActor in
-            await Task.yield()
-            let panel = NSOpenPanel()
-            panel.title = "导入分享包"
-            panel.message = "选择 Windows/Mac 分享包文件夹、ZIP，或与 assets 文件夹相邻的 Markdown。"
-            panel.canChooseFiles = true
-            panel.canChooseDirectories = true
-            panel.allowsMultipleSelection = false
-            panel.allowedContentTypes = [.zip, .folder, UTType(filenameExtension: "md") ?? .plainText, UTType(filenameExtension: "markdown") ?? .plainText]
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            let access = url.startAccessingSecurityScopedResource()
-            defer { if access { url.stopAccessingSecurityScopedResource() } }
-            isImportingSharePackage = true
-            defer { isImportingSharePackage = false }
-            do {
-                let result = try await supervisor.importSharePackage(packagePath: url.path, notebookId: notebookID)
-                selectedNotebookId = result.session.notebookId
-                openSession(result.session)
-                sessionRefreshNonce += 1
-            } catch { sharePackageError = error.localizedDescription }
+            defer { isChoosingSharePackage = false }
+            guard let parent = sharePanelHost.window else {
+                sharePackageError = "当前笔记窗口不可用，请重新打开导入。"
+                return
+            }
+            guard let url = await SharePackagePicker.choose(parent: parent) else { return }
+            await importSharePackage(url, notebookID: destination.notebookID)
         }
+    }
+
+    private func importSharePackage(_ url: URL, notebookID: String?) async {
+        guard !isImportingSharePackage else { return }
+        guard sourceMode == .local else { sharePackageError = "请切换到本机后导入分享包。"; return }
+        guard !editingState.hasUnsavedSourceDrafts else { sharePackageError = "请先保存当前修改，再导入分享包。"; return }
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        isImportingSharePackage = true
+        defer { isImportingSharePackage = false }
+        do {
+            let result = try await supervisor.importSharePackage(packagePath: url.path, notebookId: notebookID)
+            selectedNotebookId = result.session.notebookId
+            openSession(result.session)
+            sessionRefreshNonce += 1
+            if (result.mergedContinuationGroups ?? 0) > 0 {
+                sharePackageNotice = "已恢复 \(result.blockCount ?? 1) 个内容块。原包中有续接块已被导出器合并，缺少内部切分位置；这部分保留完整正文，没有强行拆分公式或表格。"
+            }
+        } catch { sharePackageError = error.localizedDescription }
     }
 
     private func openSession(_ session: SessionCatalogItem) {

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { crc32 } from "node:zlib";
-import { openPromise } from "yauzl";
+import { openPromise, type Entry } from "yauzl";
 import { ZipFile } from "yazl";
 
 export const SHARE_LIMITS = { files: 4096, fileBytes: 64 * 1024 * 1024, totalBytes: 256 * 1024 * 1024, markdownBytes: 8 * 1024 * 1024 };
@@ -22,6 +22,19 @@ export function safeSharePath(value: string): string {
 }
 const ignoredMetadata = (value: string) => value.split("/").some(part => part === "__MACOSX" || part === ".DS_Store" || part.startsWith("._"));
 
+// macOS ditto/Archive Utility can store UTF-8 names without setting bit 11.
+// Honor valid Unicode-path metadata first; otherwise prefer strictly valid
+// UTF-8 bytes and retain yauzl's CP437 fallback for older non-UTF-8 archives.
+function shareEntryName(entry: Entry): string {
+  const unicodePath = entry.extraFields.some(field => field.id === 0x7075 && field.data.length >= 6 &&
+    field.data[0] === 1 && field.data.readUInt32LE(1) === crc32(entry.fileNameRaw));
+  if (!(entry.generalPurposeBitFlag & 0x800) && !unicodePath) {
+    try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(entry.fileNameRaw); }
+    catch { /* Legacy CP437 name, already decoded and checked by yauzl. */ }
+  }
+  return entry.fileName;
+}
+
 export async function extractShareZip(source: string, destination: string): Promise<void> {
   if ((await lstat(source)).size > SHARE_LIMITS.totalBytes) throw new SharePackageError("package_too_large", "分享包超过 256 MB。");
   const zip = await openPromise(source, { lazyEntries: true, validateEntrySizes: true });
@@ -31,8 +44,9 @@ export async function extractShareZip(source: string, destination: string): Prom
   try {
     for await (const entry of zip.eachEntry()) {
       if (++count > SHARE_LIMITS.files) throw new SharePackageError("too_many_files", "分享包文件数量过多。");
-      const directory = entry.fileName.endsWith("/");
-      const name = safeSharePath(directory ? entry.fileName.slice(0, -1) : entry.fileName);
+      const entryName = shareEntryName(entry);
+      const directory = entryName.endsWith("/");
+      const name = safeSharePath(directory ? entryName.slice(0, -1) : entryName);
       const mode = (entry.externalFileAttributes >>> 16) & 0xf000;
       if ((mode !== 0 && mode !== (directory ? 0x4000 : 0x8000)) || (entry.generalPurposeBitFlag & 1)) {
         throw new SharePackageError("unsupported_zip_entry", "不支持加密文件、符号链接或特殊文件。");
