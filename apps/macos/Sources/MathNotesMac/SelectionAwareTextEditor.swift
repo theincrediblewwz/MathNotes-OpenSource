@@ -60,21 +60,35 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
         context.coordinator.onActivate = onActivate
         let shouldRegisterExternalUndo = context.coordinator.externalEditEpoch != externalEditEpoch
         context.coordinator.externalEditEpoch = externalEditEpoch
-        if textView.string != text {
+        let textChanged = textView.string != text
+        let fontChanged = textView.font != editorFont
+        context.coordinator.isUpdatingView = true
+        defer { context.coordinator.isUpdatingView = false }
+        if textChanged {
             if shouldRegisterExternalUndo {
                 context.coordinator.applyUndoableExternalText(text, to: textView)
             } else {
                 context.coordinator.replaceTextWithoutUndo(text, in: textView)
             }
         }
-        textView.font = editorFont
+        // Setting the same NSTextView font still invalidates text layout.
+        // Unrelated SwiftUI updates (including reading position) must be inert.
+        if fontChanged { textView.font = editorFont }
+        var selectionChanged = false
         if let selection = findSelection, context.coordinator.appliedFindID != selection.id,
            NSMaxRange(selection.range) <= (textView.string as NSString).length {
             context.coordinator.appliedFindID = selection.id
             textView.setSelectedRange(selection.range)
             textView.scrollRangeToVisible(selection.range)
+            selectionChanged = true
         }
-        context.coordinator.scheduleHeightMeasurement()
+        if textChanged || fontChanged { context.coordinator.scheduleHeightMeasurement() }
+        if textChanged || selectionChanged {
+            let coordinator = context.coordinator
+            DispatchQueue.main.async { [weak coordinator, weak textView] in
+                if let textView { coordinator?.publishSelection(from: textView) }
+            }
+        }
     }
 
     private var editorFont: NSFont {
@@ -97,6 +111,7 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
         private var contentHeight: Binding<CGFloat>
         var externalEditEpoch: Int
         var appliedFindID: UUID?
+        var isUpdatingView = false
         var onActivate: () -> Void
         weak var textView: NSTextView?
         private var pendingHeightMeasurement: DispatchWorkItem?
@@ -130,7 +145,7 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView else { return }
+            guard !isUpdatingView, let textView else { return }
             onActivate()
             publishSelection(from: textView)
         }
@@ -160,7 +175,7 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
             }
         }
 
-        private func publishSelection(from textView: NSTextView) {
+        func publishSelection(from textView: NSTextView) {
             let range = textView.selectedRange()
             let string = textView.string as NSString
             let value = range.length > 0 && NSMaxRange(range) <= string.length

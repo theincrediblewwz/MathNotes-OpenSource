@@ -119,3 +119,9 @@ bash test_tool/diagnose_macos_connection.command
 ## 阅读定位
 
 点击左侧源码块会把右侧预览定位到对应内容段；双击预览正文会展开源码区并定位对应块。重新打开 Session 会恢复上次阅读的内容块和块内位置，记录按本机/远程主机分开，仅存于当前 App 偏好域。Notebooks 的悬停预览不会覆盖正文阅读位置。
+
+## 分享包与源码滚动回归（0.3.6）
+
+Core 测试 `sessionSharePackageService.test.ts` 使用 Windows 同一个 `exportSessionMarkdown(... packageMode: "share")` 准备包，验证目录/ZIP 往返、图片字节、编码文件名、无覆盖导入与损坏包拒绝。`npm run test:macos:preview` 同时检查真实 Swift 客户端导入导出、导入图像渲染，以及源码编辑器无变化更新不触发 NSTextStorage 重排或焦点激活。
+
+导入上限：总 256 MB、4096 个文件/目录、单文件 64 MB、Markdown 8 MB、路径深度 32。资源使用相对 assets 路径；拒绝符号链接、路径穿越、大小写/Unicode 冲突、加密 ZIP 和 CRC 不一致。分享的是合并正文与资源，不迁移原始块 ID、编辑锁、AI 历史或密钥。Windows 源码无需本轮修改；其现有分享导出为目录，Mac ZIP 解压后采用同一目录格式。

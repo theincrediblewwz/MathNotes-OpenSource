@@ -1319,6 +1319,27 @@ struct LocalShellClient {
         return try JSONDecoder().decode(SessionAssistantPromoteResponse.self, from: data)
     }
 
+    func importSharePackage(ready: SidecarReadyMessage, token: String, packagePath: String, notebookId: String?) async throws -> SharePackageImportResult {
+        let body = try JSONEncoder().encode(SharePackageImportRequest(packagePath: packagePath, notebookId: notebookId))
+        let (data, response) = try await request(path: "local/v1/workspace/share/import", queryItems: [], ready: ready, token: token, timeout: 300, method: "POST", body: body)
+        guard response.statusCode == 200 else { throw sharePackageError(data, status: response.statusCode) }
+        return try JSONDecoder().decode(SharePackageImportResult.self, from: data)
+    }
+
+    func exportSharePackage(ready: SidecarReadyMessage, token: String, session: SessionCatalogItem, baseRevision: String) async throws -> Data {
+        var query = sessionQuery(notebookId: session.notebookId, sessionId: session.sessionId)
+        query.append(URLQueryItem(name: "baseRevision", value: baseRevision))
+        let (data, response) = try await request(path: "local/v1/session/share/export", queryItems: query, ready: ready, token: token, timeout: 300, method: "POST")
+        guard response.statusCode == 200 else { throw sharePackageError(data, status: response.statusCode) }
+        return data
+    }
+
+    private func sharePackageError(_ data: Data, status: Int) -> Error {
+        struct Failure: Decodable { let message: String? }
+        let message = (try? JSONDecoder().decode(Failure.self, from: data))?.message
+        return NSError(domain: "MathNotes.SharePackage", code: status, userInfo: [NSLocalizedDescriptionKey: message ?? (status == 409 ? "笔记已发生变化，请刷新后重新导出。" : "分享包操作失败（\(status)）。")])
+    }
+
     func createSessionExport(
         ready: SidecarReadyMessage,
         token: String,

@@ -1036,3 +1036,13 @@ struct SessionRewriteRequest: Codable, Sendable {
     var blockId: String? = nil
     var proposalId: String? = nil
 }
+
+struct SharePackageImportRequest: Encodable {
+    let packagePath: String
+    let notebookId: String?
+}
+struct SharePackageImportResult: Decodable {
+    let session: SessionCatalogItem
+    let assetCount: Int
+    let byteLength: Int
+}

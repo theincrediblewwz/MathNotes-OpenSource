@@ -17,6 +17,7 @@ struct MacNotebookBrowser: View {
     let onCreateNotebook: () -> Void
     let onCreateSession: (NotebookCatalogItem) -> Void
     let onOpenSession: (SessionCatalogItem) -> Void
+    let onImportSharePackage: (String?) -> Void
     let onClose: () -> Void
 
     @State private var managementTarget: BrowserManagementTarget?
@@ -44,6 +45,7 @@ struct MacNotebookBrowser: View {
         onCreateNotebook: @escaping () -> Void,
         onCreateSession: @escaping (NotebookCatalogItem) -> Void,
         onOpenSession: @escaping (SessionCatalogItem) -> Void,
+        onImportSharePackage: @escaping (String?) -> Void = { _ in },
         onClose: @escaping () -> Void
     ) {
         self.notebooks = notebooks
@@ -55,6 +57,7 @@ struct MacNotebookBrowser: View {
         self.onCreateNotebook = onCreateNotebook
         self.onCreateSession = onCreateSession
         self.onOpenSession = onOpenSession
+        self.onImportSharePackage = onImportSharePackage
         self.onClose = onClose
         _openedNotebookID = State(initialValue: initialNotebookID)
     }
@@ -145,6 +148,13 @@ struct MacNotebookBrowser: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 250)
                 .accessibilityLabel("搜索 Notebook 或 Session")
+            if sourceMode == .local {
+                Button { onImportSharePackage(openedNotebook?.notebookId) } label: {
+                    Label("导入", systemImage: "square.and.arrow.down")
+                }
+                .disabled(hasUnsavedDrafts)
+                .help("导入分享包 ZIP、文件夹或 Markdown（含 assets 资源）")
+            }
             if canManageWorkspace {
                 if let notebook = openedNotebook {
                     Button {

@@ -110,6 +110,8 @@ export type LocalShellApiRouteId =
   | "local.session.selection-edit.propose"
   | "local.session.selection-edit.apply"
   | "local.session.selection-edit.cancel"
+  | "local.workspace.share.import"
+  | "local.session.share.export"
   | "local.session.export.create"
   | "local.session.export.download"
   | "local.session.asset"
@@ -224,6 +226,8 @@ export const LOCAL_SHELL_API_ROUTES: readonly LocalShellApiRoute[] = [
   { id: "local.session.selection-edit.propose", method: "POST", path: "/local/v1/session/selection-edit", capability: "local.provider.manage" },
   { id: "local.session.selection-edit.apply", method: "POST", path: "/local/v1/session/selection-edit/apply", capability: "local.provider.manage" },
   { id: "local.session.selection-edit.cancel", method: "POST", path: "/local/v1/session/selection-edit/cancel", capability: "local.provider.manage" },
+  { id: "local.workspace.share.import", method: "POST", path: "/local/v1/workspace/share/import", capability: "local.workspace.manage" },
+  { id: "local.session.share.export", method: "POST", path: "/local/v1/session/share/export", capability: "local.workspace.manage" },
   { id: "local.session.export.create", method: "POST", path: "/local/v1/session/export", capability: "local.workspace.manage" },
   { id: "local.session.export.download", method: "GET", path: "/local/v1/session/export", capability: "local.workspace.manage" },
   { id: "local.session.asset", method: "GET", path: "/local/v1/session/asset", capability: "local.workspace.manage" },

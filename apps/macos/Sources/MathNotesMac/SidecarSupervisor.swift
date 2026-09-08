@@ -221,6 +221,18 @@ final class SidecarSupervisor: ObservableObject {
         return session
     }
 
+    func importSharePackage(packagePath: String, notebookId: String?) async throws -> SharePackageImportResult {
+        let connection = try activeConnection()
+        let result = try await client.importSharePackage(ready: connection.ready, token: connection.token, packagePath: packagePath, notebookId: notebookId)
+        await loadCatalog(ready: connection.ready, token: connection.token)
+        return result
+    }
+
+    func exportSharePackage(_ session: SessionCatalogItem, baseRevision: String) async throws -> Data {
+        let connection = try activeConnection()
+        return try await client.exportSharePackage(ready: connection.ready, token: connection.token, session: session, baseRevision: baseRevision)
+    }
+
     func createNotesBackup(destinationParentDir: String) async throws -> NotesBackupResult {
         let connection = try activeConnection()
         return try await client.createNotesBackup(

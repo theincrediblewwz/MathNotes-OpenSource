@@ -1,3 +1,4 @@
+import { SessionSharePackageService } from "../session/sessionSharePackageService";
 import { SessionRewriteService } from "../session/sessionRewriteService";
 import { ReplicaWorkspaceService } from "../sync/replicaWorkspaceService";
 import { WorkspaceCatalogSyncService } from "../sync/workspaceCatalogSyncService";
@@ -261,6 +262,7 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
     readNotationProfiles: () => guidanceSettings.readNotationProfiles(),
     saveNotationProfiles: (input) => guidanceSettings.saveNotationProfiles(input),
     previewNotation: (input) => guidanceSettings.previewNotation(input),
+    sharePackages: new SessionSharePackageService(options.notesRootDir, sessionWrites),
     exportSessionMarkdown: (input) => sessionExporter.exportMarkdown({
       ...input,
       includeMetadataComments: false,
