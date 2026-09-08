@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { RecognitionTaskSummary } from "./uploadTaskLog";
 import type { RecognitionJob } from "./recognitionQueue";
+import { BlockStore } from "./blockStore";
 
 export type RecognitionJobLogArgs = {
   rootDir: string;
@@ -13,8 +14,6 @@ export type UpsertRecognitionJobArgs = {
   rootDir: string;
   job: RecognitionJob;
 };
-
-const writeLocks = new Map<string, Promise<void>>();
 
 export async function readRecognitionJobs(args: RecognitionJobLogArgs & { recoverRunning?: boolean }): Promise<RecognitionJob[]> {
   try {
@@ -35,7 +34,11 @@ export async function upsertRecognitionJob(args: UpsertRecognitionJobArgs): Prom
     notebookId: args.job.notebookId,
     sessionId: args.job.sessionId
   };
-  await withWriteLock(recognitionJobLogPath(logArgs), async () => {
+  // BlockStore instances share the root coordinator. This also covers callbacks
+  // from retries, PDF batches and Electron, without holding a lock across AI work.
+  const store = new BlockStore(args.rootDir);
+  await store.getWriteCoordinator().run(logArgs.notebookId, logArgs.sessionId, async () => {
+    await store.readSession(logArgs.notebookId, logArgs.sessionId);
     const jobs = await readRecognitionJobs({ ...logArgs, recoverRunning: false });
     const nextJobs = jobs.filter((job) => job.id !== args.job.id);
     nextJobs.push(normalizeRecognitionJob(args.job, false));
@@ -103,33 +106,15 @@ function normalizeRecognitionJob(job: RecognitionJob, recoverRunning: boolean): 
 async function writeRecognitionJobs(args: RecognitionJobLogArgs, jobs: RecognitionJob[]): Promise<void> {
   const target = recognitionJobLogPath(args);
   const tmp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(tmp, `${JSON.stringify(jobs, null, 2)}\n`, "utf8");
-  await rm(target, { force: true });
-  await rename(tmp, target);
+  try {
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(tmp, `${JSON.stringify(jobs, null, 2)}\n`, "utf8");
+    await rename(tmp, target);
+  } finally { await rm(tmp, { force: true }); }
 }
 
 function recognitionJobLogPath(args: RecognitionJobLogArgs): string {
   return join(args.rootDir, "notebooks", args.notebookId, "sessions", args.sessionId, "logs", "recognition_jobs.json");
-}
-
-async function withWriteLock(path: string, write: () => Promise<void>): Promise<void> {
-  const previous = writeLocks.get(path) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  writeLocks.set(path, previous.then(() => current, () => current));
-
-  try {
-    await previous.catch(() => undefined);
-    await write();
-  } finally {
-    release();
-    if (writeLocks.get(path) === current) {
-      writeLocks.delete(path);
-    }
-  }
 }
 
 function isMissingFile(error: unknown): boolean {

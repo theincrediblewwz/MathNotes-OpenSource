@@ -4,7 +4,7 @@ MathNotes 是一个 GPLv3、本地优先的数学笔记项目，包含 Windows�
 
 **最新发行版：0.3.4 试用版。当前 Windows / Android / PWA 开发版本：0.3.4。**
 
-Windows 另提供 **0.3.4「Mac 同步测试版」**：支持 Mac 本地副本向 Windows 同步正文与素材、旧草稿冲突保护，以及固定片段的公式/表格连续渲染。设置中显示构建编号，便于区分原 0.3.4 包。[下载 Windows 同步测试包](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/windows-mac-sync-20260908) · [同步接口与验收说明](deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md)。这次没有重新发布 Android、PWA 或 Mac 安装包。
+Windows 最新测试构建为 **0.3.4「Mac 目录同步测试版」**：在正文、素材和草稿保护之外，增加远程新建笔记本/笔记、改名、移入废纸篓及恢复，并修复特殊文件名图片和删除后重启的问题。设置中显示构建编号，便于区分旧包。[下载 Windows 目录同步测试包](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/windows-catalog-sync-20260908) · [目录接口与逐项验收表](deploy/windows-mac-sync/CATALOG_SYNC_V1.md) · [原正文同步说明](deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md)。这次没有重新发布 Android、PWA 或 Mac 安装包；真实 Mac 跨机验收仍待完成。
 
 [下载最新发行版](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/latest) · [0.3.4 固定发行页](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/v0.3.4) · [逐项操作验收表](deploy/releases/v0.3.4-acceptance.md)
 

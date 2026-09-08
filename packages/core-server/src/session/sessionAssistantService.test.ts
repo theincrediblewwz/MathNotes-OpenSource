@@ -11,6 +11,7 @@ import {
   SessionAssistantService,
   type SessionAssistantTask
 } from "./sessionAssistantService";
+import { SessionWriteCoordinator } from "./sessionWriteCoordinator";
 
 describe("SessionAssistantService", () => {
   let root: string;
@@ -324,6 +325,36 @@ describe("SessionAssistantService", () => {
     });
     await service.cancel({ notebookId: "analysis", sessionId: "lecture", taskId: started.id }).catch(() => undefined);
   }, 15_000);
+
+  it("keeps a completed assistant result when an old running poll was waiting for the write barrier", async () => {
+    const initial = new SessionAssistantService(root, async () => provider());
+    const started = await initial.start({ notebookId: "analysis", sessionId: "lecture", scope: "block", activeBlockId: "0001", mode: "explain" });
+    await waitForAssistantTerminal(initial, started.id);
+    const logPath = join(sessionDir, "logs", "session_assistant_jobs.json");
+    const completed = JSON.parse(await readFile(logPath, "utf8"));
+    expect(completed[0].status).toBe("succeeded");
+    await writeFile(logPath, JSON.stringify([{ ...completed[0], status: "running" }]));
+    let signalQueued!: () => void;
+    const queued = new Promise<void>(resolve => { signalQueued = resolve; });
+    class ObservedCoordinator extends SessionWriteCoordinator {
+      onRun?: () => void;
+      override run<T>(notebookId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
+        this.onRun?.();
+        return super.run(notebookId, sessionId, operation);
+      }
+    }
+    const writes = new ObservedCoordinator();
+    const completion = writes.run("analysis", "lecture", async () => {
+      await queued;
+      await writeFile(logPath, JSON.stringify(completed));
+    });
+    writes.onRun = signalQueued;
+    const restarted = new SessionAssistantService(root, async () => provider(), writes);
+    const polled = await restarted.get({ notebookId: "analysis", sessionId: "lecture", taskId: started.id });
+    await completion;
+    expect(polled.status).toBe("succeeded");
+    expect(JSON.parse(await readFile(logPath, "utf8"))).toEqual(completed);
+  });
 
   function provider(): AssistantProvider {
     return {

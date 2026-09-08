@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AssistantProvider } from "@mathnotes/shared";
-import { SessionWriteCoordinator } from "@mathnotes/core-server";
+import { validateReplicaId } from "@mathnotes/core-server";
 import { sha256Text } from "../common/lockSpan";
 import { validateAiMarkdownUpdate } from "../common/lockValidation";
 import { BlockStore } from "./blockStore";
@@ -25,30 +25,32 @@ type StoredRevision = SessionAiRevision & { baseSessionHash: string; baseMarkdow
 type Target = { notebookId: string; sessionId: string };
 
 export class SessionAiRevisionService {
-  private readonly writes = new SessionWriteCoordinator();
   constructor(private readonly store: BlockStore, private readonly createProvider: () => Promise<AssistantProvider>) {}
 
   async propose(input: Target & { instruction: string; abortSignal?: AbortSignal }): Promise<SessionAiRevision> {
     this.path({ ...input, proposalId: `session_${randomUUID()}` });
     const instruction = input.instruction.trim();
     if (!instruction || instruction.length > 8_000) throw new Error("请输入不超过 8000 字的修改要求。");
-    const session = await this.store.readSession(input.notebookId, input.sessionId);
-    const baseSessionHash = await sha256Text(JSON.stringify(session));
-    const baseMarkdownHashes: Record<string, string> = {};
-    const blocks = await Promise.all(session.blocks.filter((block) => block.type === "markdown").map(async (block, index) => {
-      const markdown = await this.store.readMarkdownBlock(input.notebookId, input.sessionId, block.id);
-      baseMarkdownHashes[block.id] = await sha256Text(markdown);
-      const locks = session.locks.filter((lock) => lock.blockId === block.id);
-      return {
-        blockId: block.id,
-        continuationGroup: block.continuationGroup,
-        title: `块 ${index + 1} · ${/^#{1,6}\s+(.+)$/m.exec(markdown)?.[1] ?? block.sourceName ?? block.id}`,
-        markdown,
-        locked: block.status === "locked" || locks.some((lock) => lock.kind === "block") || block.readonly === true ||
-          !["user", "user_revision", "mixed", "ai_transcription"].includes(block.source),
-        protected: locks.some((lock) => lock.kind === "span")
-      };
-    }));
+    const { session, baseSessionHash, baseMarkdownHashes, blocks } = await this.store.getWriteCoordinator().run(input.notebookId, input.sessionId, async () => {
+      const session = await this.store.readSession(input.notebookId, input.sessionId);
+      const baseSessionHash = await sha256Text(JSON.stringify(session));
+      const baseMarkdownHashes: Record<string, string> = {};
+      const blocks = await Promise.all(session.blocks.filter((block) => block.type === "markdown").map(async (block, index) => {
+        const markdown = await this.store.readMarkdownBlock(input.notebookId, input.sessionId, block.id);
+        baseMarkdownHashes[block.id] = await sha256Text(markdown);
+        const locks = session.locks.filter((lock) => lock.blockId === block.id);
+        return {
+          blockId: block.id,
+          continuationGroup: block.continuationGroup,
+          title: `块 ${index + 1} · ${/^#{1,6}\s+(.+)$/m.exec(markdown)?.[1] ?? block.sourceName ?? block.id}`,
+          markdown,
+          locked: block.status === "locked" || locks.some((lock) => lock.kind === "block") || block.readonly === true ||
+            !["user", "user_revision", "mixed", "ai_transcription"].includes(block.source),
+          protected: locks.some((lock) => lock.kind === "span")
+        };
+      }));
+      return { session, baseSessionHash, baseMarkdownHashes, blocks };
+    });
     if (!blocks.length) throw new Error("当前笔记没有可修改的文本块。");
     const continuations = continuationContexts(session.blocks, new Map(blocks.map(block => [block.blockId, block.markdown])));
     const markdownContext = JSON.stringify({ title: session.title, blocks, ...(continuations.length ? { continuationInstructions, continuations } : {}) });
@@ -85,7 +87,11 @@ export class SessionAiRevisionService {
   }
 
   apply(input: Target & { proposalId: string }): Promise<SessionAiRevision> {
-    return this.writes.run(input.notebookId, input.sessionId, async () => {
+    // A short root transaction lets the existing block and remark writers reuse
+    // the barrier while keeping catalog moves out of the entire final commit.
+    return this.store.getWriteCoordinator().runWorkspace(async () => {
+      this.path(input);
+      await this.store.readSession(input.notebookId, input.sessionId);
       const proposal = await this.read(input);
       if (proposal.status !== "proposed") throw new Error("这份修改候选已经处理过。");
       await this.store.applySessionAiRevision({ ...input, baseSessionHash: proposal.baseSessionHash,
@@ -111,7 +117,9 @@ export class SessionAiRevisionService {
   }
 
   cancel(input: Target & { proposalId: string }): Promise<SessionAiRevision> {
-    return this.writes.run(input.notebookId, input.sessionId, async () => {
+    return this.store.getWriteCoordinator().runWorkspace(async () => {
+      this.path(input);
+      await this.store.readSession(input.notebookId, input.sessionId);
       const proposal = await this.read(input);
       if (proposal.status === "proposed") { proposal.status = "cancelled"; await this.write(proposal); }
       return publicProposal(proposal);
@@ -119,8 +127,8 @@ export class SessionAiRevisionService {
   }
 
   private path(input: Target & { proposalId: string }): string {
-    if (!/^session_[0-9a-f-]{36}$/.test(input.proposalId) ||
-      [input.notebookId, input.sessionId].some((id) => !id || /[\\/\0]/.test(id) || id === "." || id === "..")) throw new Error("invalid_proposal");
+    validateReplicaId(input.notebookId); validateReplicaId(input.sessionId);
+    if (!/^session_[0-9a-f-]{36}$/.test(input.proposalId)) throw new Error("invalid_proposal");
     return join(this.store.getSessionDir(input.notebookId, input.sessionId), ".mathnotes", "session-revisions", `${input.proposalId}.json`);
   }
   private async read(input: Target & { proposalId: string }): Promise<StoredRevision> {
@@ -130,10 +138,15 @@ export class SessionAiRevisionService {
   }
   private async write(proposal: StoredRevision): Promise<void> {
     const path = this.path({ ...proposal, proposalId: proposal.id });
-    await mkdir(join(this.store.getSessionDir(proposal.notebookId, proposal.sessionId), ".mathnotes", "session-revisions"), { recursive: true });
-    const temporary = `${path}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify(proposal, null, 2), "utf8");
-    await rename(temporary, path);
+    await this.store.getWriteCoordinator().run(proposal.notebookId, proposal.sessionId, async () => {
+      // The model can finish after this Session was moved to trash. Never let a
+      // late proposal, cancellation or summary recreate its former directory.
+      await this.store.readSession(proposal.notebookId, proposal.sessionId);
+      await mkdir(join(this.store.getSessionDir(proposal.notebookId, proposal.sessionId), ".mathnotes", "session-revisions"), { recursive: true });
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      await writeFile(temporary, JSON.stringify(proposal, null, 2), "utf8");
+      await rename(temporary, path);
+    });
   }
 }
 

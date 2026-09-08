@@ -682,23 +682,33 @@ export class SessionRecognitionService {
 
   private async recoverOrphan(task: StoredTask): Promise<StoredTask> {
     if (task.status !== "running" || this.abortControllers.has(task.id)) return task;
-    let restoredPrevious = false;
-    if (task.previousTranscriptMarkdown !== undefined) {
-      try {
-        await this.writeTranscript(task, task.previousTranscriptMarkdown);
-        restoredPrevious = true;
-      } catch (error) {
-        if (!(error instanceof SessionRecognitionError) || error.code !== "block_locked") throw error;
+    return this.coordinator.run(task.notebookId, task.sessionId, async () => {
+      // A stale poll must not restore an older transcript over a completed run.
+      task = await this.requireTask({ notebookId: task.notebookId, sessionId: task.sessionId, taskId: task.id });
+      if (task.status !== "running" || this.abortControllers.has(task.id) || this.activeRuns.has(task.id)) return task;
+      let restoredPrevious = false;
+      if (task.previousTranscriptMarkdown !== undefined) {
+        try {
+          await this.writeTranscriptWithinBarrier(task, task.previousTranscriptMarkdown);
+          restoredPrevious = true;
+        } catch (error) {
+          if (!(error instanceof SessionRecognitionError) || error.code !== "block_locked") throw error;
+        }
       }
-    }
-    return this.updateTask(task, {
-      status: "failed",
-      error: task.previousTranscriptMarkdown !== undefined
-        ? restoredPrevious
-          ? "上次重新识别被中断，已恢复原转写。"
-          : "上次重新识别被中断；内容已锁定，未改动当前笔记。"
-        : "上次识别运行被中断，请重试。",
-      previousTranscriptMarkdown: undefined
+      const updated: StoredTask = {
+        ...task,
+        updatedAt: this.now(),
+        status: "failed",
+        error: task.previousTranscriptMarkdown !== undefined
+          ? restoredPrevious
+            ? "上次重新识别被中断，已恢复原转写。"
+            : "上次重新识别被中断；内容已锁定，未改动当前笔记。"
+          : "上次识别运行被中断，请重试。",
+        previousTranscriptMarkdown: undefined
+      };
+      const context = await readSessionContext(this.rootDir, task.notebookId, task.sessionId);
+      await upsertTask(context.sessionDir, updated);
+      return updated;
     });
   }
 
@@ -776,29 +786,31 @@ export class SessionRecognitionService {
   }
 
   private writeTranscript(task: StoredTask, markdown: string): Promise<void> {
-    return this.coordinator.run(task.notebookId, task.sessionId, async () => {
-      const context = await readSessionContext(this.rootDir, task.notebookId, task.sessionId);
-      const block = context.session.blocks.find((candidate) => candidate.id === task.transcriptBlockId);
-      if (!block || block.type !== "markdown" || block.source !== "ai_transcription") {
-        throw new SessionRecognitionError("block_not_found", 404, task.id);
-      }
-      if (isBlockProtected(context.session, block.id)) {
-        throw new SessionRecognitionError("block_locked", 423, task.id);
-      }
-      const timestamp = this.now();
-      const blockPath = resolve(context.sessionDir, block.path);
-      const beforeMarkdown = await readFile(blockPath, "utf8");
-      await writeAtomically(blockPath, bindSourceImageMarkers(markdown, task.assetPath));
-      block.updatedAt = timestamp;
-      context.session.updatedAt = timestamp;
-      try {
-        await writeAtomically(context.sessionPath, `${JSON.stringify(context.session, null, 2)}\n`);
-      } catch (error) {
-        await writeAtomically(blockPath, beforeMarkdown);
-        throw error;
-      }
-      this.emit(task, "preview", "草稿已更新。");
-    });
+    return this.coordinator.run(task.notebookId, task.sessionId, () => this.writeTranscriptWithinBarrier(task, markdown));
+  }
+
+  private async writeTranscriptWithinBarrier(task: StoredTask, markdown: string): Promise<void> {
+    const context = await readSessionContext(this.rootDir, task.notebookId, task.sessionId);
+    const block = context.session.blocks.find((candidate) => candidate.id === task.transcriptBlockId);
+    if (!block || block.type !== "markdown" || block.source !== "ai_transcription") {
+      throw new SessionRecognitionError("block_not_found", 404, task.id);
+    }
+    if (isBlockProtected(context.session, block.id)) {
+      throw new SessionRecognitionError("block_locked", 423, task.id);
+    }
+    const timestamp = this.now();
+    const blockPath = resolve(context.sessionDir, block.path);
+    const beforeMarkdown = await readFile(blockPath, "utf8");
+    await writeAtomically(blockPath, bindSourceImageMarkers(markdown, task.assetPath));
+    block.updatedAt = timestamp;
+    context.session.updatedAt = timestamp;
+    try {
+      await writeAtomically(context.sessionPath, `${JSON.stringify(context.session, null, 2)}\n`);
+    } catch (error) {
+      await writeAtomically(blockPath, beforeMarkdown);
+      throw error;
+    }
+    this.emit(task, "preview", "草稿已更新。");
   }
 
   private emit(task: StoredTask, type: SessionRecognitionEvent["type"], message: string, delta?: string): void {

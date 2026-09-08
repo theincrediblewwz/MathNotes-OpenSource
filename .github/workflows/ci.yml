@@ -31,8 +31,10 @@ jobs:
       - run: npm run build:windows
       - run: npm run test:electron-smoke
       - run: node test_tool/windows_mac_sync_smoke.mjs
+      - run: node test_tool/windows_catalog_sync_smoke.mjs
       - run: npm run package:windows:portable
       - run: npm run test:windows:portable
+      - run: node test_tool/windows_catalog_sync_smoke.mjs output/windows-portable/bundle/MathNotes-win32-x64/MathNotes.exe
       - run: npm run release:metadata
       - run: npm run test:public-source-gate
 

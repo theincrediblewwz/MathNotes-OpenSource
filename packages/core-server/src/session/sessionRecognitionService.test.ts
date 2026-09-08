@@ -173,6 +173,56 @@ describe("SessionRecognitionService", () => {
     await service.cancel({ notebookId: "analysis", sessionId: "lecture", taskId: started.id }).catch(() => undefined);
   });
 
+  it("does not restore stale transcript or mark failure when a running poll waits behind completion", async () => {
+    const initial = new SessionRecognitionService(root, async () => streamingProvider());
+    const started = await initial.start({ notebookId: "analysis", sessionId: "lecture", imageBlockId: "0002" });
+    await waitForTerminal(initial, started.id);
+    const logPath = join(sessionDir, "logs", "session_recognition_jobs.json");
+    const transcriptPath = join(sessionDir, "blocks", `${started.transcriptBlockId}_ai_transcript.md`);
+    const completed = JSON.parse(await readFile(logPath, "utf8"));
+    expect(completed[0].status).toBe("succeeded");
+    await writeFile(logPath, JSON.stringify([{ ...completed[0], status: "running", previousTranscriptMarkdown: "OLD TRANSCRIPT" }]));
+    let signalQueued!: () => void;
+    const queued = new Promise<void>(resolve => { signalQueued = resolve; });
+    class ObservedCoordinator extends SessionWriteCoordinator {
+      onRun?: () => void;
+      override run<T>(notebookId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
+        this.onRun?.();
+        return super.run(notebookId, sessionId, operation);
+      }
+    }
+    const writes = new ObservedCoordinator();
+    const completion = writes.run("analysis", "lecture", async () => {
+      await queued;
+      await writeFile(transcriptPath, "NEW COMPLETED TRANSCRIPT");
+      await writeFile(logPath, JSON.stringify(completed));
+    });
+    writes.onRun = signalQueued;
+    const restarted = new SessionRecognitionService(root, async () => streamingProvider(), writes);
+    const polled = await restarted.get({ notebookId: "analysis", sessionId: "lecture", taskId: started.id });
+    await completion;
+    expect(polled.status).toBe("succeeded");
+    expect(await readFile(transcriptPath, "utf8")).toBe("NEW COMPLETED TRANSCRIPT");
+    expect(JSON.parse(await readFile(logPath, "utf8"))).toEqual(completed);
+  });
+
+  it("restores a genuinely orphaned rerun within one write barrier without recursively locking", async () => {
+    const initial = new SessionRecognitionService(root, async () => streamingProvider());
+    const started = await initial.start({ notebookId: "analysis", sessionId: "lecture", imageBlockId: "0002" });
+    await waitForTerminal(initial, started.id);
+    const logPath = join(sessionDir, "logs", "session_recognition_jobs.json");
+    const tasks = JSON.parse(await readFile(logPath, "utf8"));
+    tasks[0].status = "running";
+    tasks[0].previousTranscriptMarkdown = "人工校订原转写\n";
+    await writeFile(logPath, JSON.stringify(tasks));
+    const restarted = new SessionRecognitionService(root, async () => streamingProvider(), new SessionWriteCoordinator());
+    const recovered = await restarted.get({ notebookId: "analysis", sessionId: "lecture", taskId: started.id });
+    expect(recovered).toMatchObject({ status: "failed", error: "上次重新识别被中断，已恢复原转写。" });
+    expect(await readFile(join(sessionDir, "blocks", `${started.transcriptBlockId}_ai_transcript.md`), "utf8"))
+      .toBe("人工校订原转写\n");
+    expect(JSON.parse(await readFile(logPath, "utf8"))[0].previousTranscriptMarkdown).toBeUndefined();
+  });
+
   it("surfaces a safe actionable reason when the recognition provider is unavailable", async () => {
     const service = new SessionRecognitionService(root, async () => {
       throw new Error("credential-store-internal-detail");

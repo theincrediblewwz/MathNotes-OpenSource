@@ -33,6 +33,8 @@ export type NetworkApiRouteId =
   | "companion.catalog.events"
   | "workspace.identity"
   | "workspace.catalog"
+  | "workspace.catalog.state"
+  | "workspace.catalog.operation"
   | "workspace.snapshot"
   | "workspace.asset"
   | "workspace.asset.stage"
@@ -133,6 +135,8 @@ export const NETWORK_API_ROUTES: readonly NetworkApiRoute[] = [
   route("companion.catalog.events", "GET", "/api/v1/companion/catalog-events", "companion.events.read", "paired-device"),
   route("workspace.identity", "GET", "/api/v3/workspace/identity", "workspace.sync", "trusted-host"),
   route("workspace.catalog", "GET", "/api/v3/workspace/catalog", "workspace.sync", "trusted-host"),
+  route("workspace.catalog.state", "GET", "/api/v3/workspace/catalog-state", "workspace.sync", "trusted-host"),
+  route("workspace.catalog.operation", "POST", "/api/v3/workspace/catalog-operation", "workspace.sync", "trusted-host"),
   route("workspace.snapshot", "GET", "/api/v3/workspace/snapshot", "workspace.sync", "trusted-host"),
   route("workspace.asset", "GET", "/api/v3/workspace/asset", "workspace.sync", "trusted-host"),
   route("workspace.asset.stage", "POST", "/api/v3/workspace/asset", "workspace.sync", "trusted-host"),

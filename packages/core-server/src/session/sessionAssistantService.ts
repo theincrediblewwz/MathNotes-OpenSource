@@ -653,10 +653,21 @@ export class SessionAssistantService {
     if ((task.status !== "pending" && task.status !== "running") || this.abortControllers.has(task.id)) {
       return task;
     }
-    return this.updateTask(task, {
-      status: "failed",
-      error: "上次学习助手任务被中断，请重试。",
-      failureKind: "provider_failed"
+    return this.coordinator.run(task.notebookId, task.sessionId, async () => {
+      // A poll can finish reading the old running record after its run completes.
+      // Recheck under the same barrier before changing any persisted task state.
+      const current = await this.requireTask({ notebookId: task.notebookId, sessionId: task.sessionId, taskId: task.id });
+      if (!["pending", "running"].includes(current.status) || this.abortControllers.has(task.id) || this.activeRuns.has(task.id)) return current;
+      const updated: StoredAssistantTask = {
+        ...current,
+        status: "failed",
+        updatedAt: this.now(),
+        error: "上次学习助手任务被中断，请重试。",
+        failureKind: "provider_failed"
+      };
+      const context = await readSessionContext(this.rootDir, task.notebookId, task.sessionId);
+      await upsertTask(context.sessionDir, updated);
+      return updated;
     });
   }
 

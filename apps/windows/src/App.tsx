@@ -323,6 +323,9 @@ export function App() {
   const [savingSource, setSavingSource] = useState(false);
   const [sourceSaveState, setSourceSaveState] = useState<SourceSaveState>("saved");
   const [workspaceConflict, setWorkspaceConflict] = useState(false);
+  const [workspaceDeleted, setWorkspaceDeleted] = useState(false);
+  const workspaceDeletedRef = useRef(false);
+  const workspaceRefreshEpochRef = useRef(0);
   const [hostVersion, setHostVersion] = useState<SessionDocument | null>(null);
   const revisionBaselineRef = useRef<string>("");
   const [backgroundRefreshPending, setBackgroundRefreshPending] = useState(false);
@@ -514,6 +517,9 @@ export function App() {
       previewApplyFrameRef.current = null;
     }
     revisionBaselineRef.current = document.revisionBaseline ?? "";
+    workspaceRefreshEpochRef.current += 1;
+    workspaceDeletedRef.current = false;
+    setWorkspaceDeleted(false);
     setWorkspaceConflict(false);
     setHostVersion(null);
     setSourceDocument(document.sourceDocument);
@@ -638,6 +644,7 @@ export function App() {
     if (!window.mathNotes) {
       return;
     }
+    if (workspaceDeletedRef.current) return;
     if (sourceSaveStateRef.current !== "saved") {
       pendingBackgroundRefreshRef.current = true;
       setBackgroundRefreshPending(true);
@@ -645,9 +652,21 @@ export function App() {
     }
 
     const sourceAtStart = sourceTextRef.current;
+    const epoch = workspaceRefreshEpochRef.current;
     recordRecognitionTimeline(recognitionTraceId, "session-load-start");
-    const document = await window.mathNotes.loadCurrentSession();
+    let document: SessionDocument;
+    try { document = await window.mathNotes.loadCurrentSession(); }
+    catch (error) {
+      if (epoch !== workspaceRefreshEpochRef.current) return;
+      if (/ENOENT|session_not_found|notebook_not_found/.test(String(error))) {
+        workspaceDeletedRef.current = true;
+        setWorkspaceDeleted(true);
+        setWorkspaceConflict(true);
+      }
+      return;
+    }
     recordRecognitionTimeline(recognitionTraceId, "session-load-end");
+    if (epoch !== workspaceRefreshEpochRef.current) return;
     if (sourceSaveStateRef.current !== "saved" || sourceTextRef.current !== sourceAtStart) {
       pendingBackgroundRefreshRef.current = true;
       setBackgroundRefreshPending(true);
@@ -703,6 +722,7 @@ export function App() {
   }, []);
 
   const loadAssistantRemarks = useCallback(async () => {
+    if (!currentSession.notebookId || !currentSession.sessionId) { setAssistantRemarks([]); return; }
     if (!window.mathNotes || !nativeSessionLoaded) {
       setAssistantRemarks([]);
       return;
@@ -817,6 +837,8 @@ export function App() {
 
   const saveCurrentSessionSource = useCallback(async (input: { notebookId: string; sessionId: string; sourceText: string }) => {
     if (!window.mathNotes) throw new Error("desktop_unavailable");
+    if (!input.notebookId || !input.sessionId) throw new Error("请先创建或打开笔记，再保存内容。");
+    if (workspaceDeletedRef.current) throw new Error("笔记已移入废纸篓；当前内容已保留，请先恢复笔记或复制草稿。");
     try {
       const saved = await window.mathNotes.saveSessionSource({ ...input, revisionBaseline: revisionBaselineRef.current });
       // Even a caller that continues into another operation must keep the successful save's baseline.
@@ -834,12 +856,37 @@ export function App() {
 
   useEffect(() => {
     if (!window.mathNotes?.onWorkspaceChanged) return;
-    return window.mathNotes.onWorkspaceChanged((event) => {
-      if (event.notebookId !== currentSession.notebookId || event.sessionId !== currentSession.sessionId) return;
-      if (sourceSaveStateRef.current !== "saved") setWorkspaceConflict(true);
-      void refreshCurrentSessionWhenSafe();
+    let disposed = false;
+    const unsubscribe = window.mathNotes.onWorkspaceChanged((event) => {
+      if (event.catalogChanged) void Promise.all([loadNotebooks(), loadRecentSessions()]).catch(() => {});
+      if (event.notebookId !== currentSession.notebookId || event.sessionId && event.sessionId !== currentSession.sessionId) return;
+      const epoch = ++workspaceRefreshEpochRef.current;
+      if (!event.catalogChanged) {
+        if (sourceSaveStateRef.current !== "saved") setWorkspaceConflict(true);
+        void refreshCurrentSessionWhenSafe();
+        return;
+      }
+      const identity = appliedSessionIdentityRef.current;
+      const sourceAtStart = sourceTextRef.current;
+      // Check existence even with a dirty draft, but never install into that draft.
+      void window.mathNotes!.loadCurrentSession().then(document => {
+        if (disposed || epoch !== workspaceRefreshEpochRef.current || identity !== appliedSessionIdentityRef.current) return;
+        const wasDeleted = workspaceDeletedRef.current;
+        workspaceDeletedRef.current = false;
+        setWorkspaceDeleted(false);
+        if (sourceSaveStateRef.current !== "saved" || sourceTextRef.current !== sourceAtStart || wasDeleted) setWorkspaceConflict(true);
+        else applySessionDocument(document, { preserveViewport: true });
+      }).catch(error => {
+        if (disposed || epoch !== workspaceRefreshEpochRef.current || identity !== appliedSessionIdentityRef.current) return;
+        setWorkspaceConflict(true);
+        if (/ENOENT|session_not_found|notebook_not_found/.test(String(error))) {
+          workspaceDeletedRef.current = true;
+          setWorkspaceDeleted(true);
+        }
+      });
     });
-  }, [currentSession.notebookId, currentSession.sessionId, refreshCurrentSessionWhenSafe]);
+    return () => { disposed = true; unsubscribe(); };
+  }, [currentSession.notebookId, currentSession.sessionId, refreshCurrentSessionWhenSafe, loadNotebooks, loadRecentSessions, applySessionDocument]);
 
   const saveSourceDocument = useCallback(async (options: { revealExport?: boolean } = {}) => {
     const revealExport = options.revealExport ?? true;
@@ -884,7 +931,7 @@ export function App() {
   }, [applySessionDocument, currentSession.notebookId, currentSession.sessionId, sourceText]);
 
   const loadRecognitionTasks = useCallback(async () => {
-    if (!window.mathNotes) {
+    if (!window.mathNotes || !nativeSessionLoaded || !currentSession.notebookId || !currentSession.sessionId) {
       setRecognitionTasks([]);
       return;
     }
@@ -901,7 +948,7 @@ export function App() {
     } finally {
       setLoadingTasks(false);
     }
-  }, [currentSession.notebookId, currentSession.sessionId]);
+  }, [currentSession.notebookId, currentSession.sessionId, nativeSessionLoaded]);
 
   const followPreviewToActiveSource = useCallback(() => {
     if (!activeSourceLocation) {
@@ -1663,6 +1710,7 @@ export function App() {
   }
 
   async function createSession(notebookId = currentSession.notebookId) {
+    if (!notebookId) { await createNotebookEntry(); return; }
     if (!window.mathNotes) {
       showToast("浏览器预览模式：新建 Session 需要 Electron");
       return;
@@ -3112,9 +3160,15 @@ export function App() {
         ) : null}
         {workspaceConflict ? (
           <div className="recognition-refresh-pending" role="alert" data-testid="workspace-conflict">
-            <span><strong>主机笔记已更新</strong> 当前草稿已保留，旧版本保存被阻止。请先查看主机版本再决定如何合并。</span>
-            <button type="button" onClick={() => void window.mathNotes?.loadCurrentSession().then(setHostVersion)}>查看主机版本</button>
-            <button type="button" onClick={() => void reloadSession()}>重新载入并替换草稿</button>
+            {workspaceDeleted ? <>
+              <span><strong>主机笔记已移入废纸篓</strong> 当前内容和草稿已保留。恢复笔记后可重新载入，或先复制草稿。</span>
+              <button type="button" onClick={() => void navigator.clipboard.writeText(sourceText).then(() => showToast("草稿已复制")).catch(() => showToast("复制失败，请在编辑区选择并复制内容"))}>复制草稿</button>
+              <button type="button" onClick={() => setNotebookBrowserOpen(true)}>打开笔记目录</button>
+            </> : <>
+              <span><strong>主机笔记已更新</strong> 当前草稿已保留，旧版本保存被阻止。请先查看主机版本再决定如何合并。</span>
+              <button type="button" onClick={() => void window.mathNotes?.loadCurrentSession().then(setHostVersion).catch(() => showToast("主机笔记暂时无法读取，请查看笔记目录"))}>查看主机版本</button>
+              <button type="button" onClick={() => void reloadSession()}>重新载入并替换草稿</button>
+            </>}
           </div>
         ) : null}
         {hostVersion ? (

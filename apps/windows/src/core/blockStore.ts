@@ -15,7 +15,15 @@ import { findProtectedSpanRanges, parseProtectedSpans, sha256Text, unwrapProtect
 import { validateAiMarkdownUpdate } from "../common/lockValidation";
 import { sessionRevisionBaseline } from "./sessionRevisionBaseline";
 
-const appendWrites = new SessionWriteCoordinator();
+const rootWrites = new Map<string, SessionWriteCoordinator>();
+
+function desktopRootWrites(rootDir: string): SessionWriteCoordinator {
+  const absolute = resolve(rootDir);
+  const key = process.platform === "win32" ? absolute.toLowerCase() : absolute;
+  let coordinator = rootWrites.get(key);
+  if (!coordinator) { coordinator = new SessionWriteCoordinator(); rootWrites.set(key, coordinator); }
+  return coordinator;
+}
 
 function desktopWriteScope(rootDir: string, notebookId: string): string {
   const root = resolve(rootDir);
@@ -27,10 +35,13 @@ function desktopIdKey(id: string): string { return process.platform === "win32" 
 class DesktopSessionWriteCoordinator extends SessionWriteCoordinator {
   constructor(private readonly rootDir: string) { super(); }
   override run<T>(notebookId: string, sessionId: string, operation: () => Promise<T>): Promise<T> {
-    return appendWrites.run(desktopWriteScope(this.rootDir, notebookId), desktopIdKey(sessionId), operation);
+    return desktopRootWrites(this.rootDir).run(desktopWriteScope(this.rootDir, notebookId), desktopIdKey(sessionId), operation);
   }
   override runMany<T>(sessions: readonly { notebookId: string; sessionId: string }[], operation: () => Promise<T>): Promise<T> {
-    return appendWrites.runMany(sessions.map((session) => ({ ...session, notebookId: desktopWriteScope(this.rootDir, session.notebookId), sessionId: desktopIdKey(session.sessionId) })), operation);
+    return desktopRootWrites(this.rootDir).runMany(sessions.map((session) => ({ ...session, notebookId: desktopWriteScope(this.rootDir, session.notebookId), sessionId: desktopIdKey(session.sessionId) })), operation);
+  }
+  override runWorkspace<T>(operation: () => Promise<T>): Promise<T> {
+    return desktopRootWrites(this.rootDir).runWorkspace(operation);
   }
 }
 
@@ -154,7 +165,7 @@ export class BlockStore {
   constructor(private readonly rootDir: string) {}
 
   async createSession(args: CreateSessionArgs): Promise<SessionRecord> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const sessionDir = this.sessionDir(args.notebookId, args.sessionId);
       await Promise.all([
         mkdir(join(sessionDir, "blocks"), { recursive: true }),
@@ -182,7 +193,7 @@ export class BlockStore {
   }
 
   async appendImageBlock(args: AppendImageBlockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const block = createBlockRef({
         id: nextBlockId(session),
@@ -200,7 +211,7 @@ export class BlockStore {
   }
 
   async appendPdfBlock(args: AppendPdfBlockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const block = createBlockRef({
         id: nextBlockId(session),
@@ -221,7 +232,7 @@ export class BlockStore {
   }
 
   async appendMarkdownBlock(args: AppendMarkdownBlockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       if (args.insertAfterBlockId !== undefined && !session.blocks.some((block) => block.id === args.insertAfterBlockId)) {
         throw new Error(`Insert anchor ${args.insertAfterBlockId} is stale`);
@@ -276,7 +287,7 @@ export class BlockStore {
   }
 
   async updateMarkdownBlockFromAi(args: UpdateMarkdownBlockFromAiArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const { block } = requireMarkdownBlock(session, args.blockId);
 
@@ -298,7 +309,7 @@ export class BlockStore {
   }
 
   async updateMarkdownBlocks(args: UpdateMarkdownBlocksArgs): Promise<BlockRef[]> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const sessionDir = this.sessionDir(args.notebookId, args.sessionId);
       const markdown = Object.fromEntries(await Promise.all(session.blocks.filter((block) => block.type === "markdown")
@@ -392,7 +403,7 @@ export class BlockStore {
     updates: Array<{ blockId: string; markdown: string }>;
     now: string;
   }): Promise<void> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       if (!/^session_[0-9a-f-]{36}$/.test(args.proposalId)) throw new Error("invalid_proposal");
       const session = await this.readSession(args.notebookId, args.sessionId);
       if (args.updates.length === 0) return;
@@ -452,7 +463,7 @@ export class BlockStore {
   }
 
   async setMarkdownBlockLock(args: SetMarkdownBlockLockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const { block } = requireMarkdownBlock(session, args.blockId);
 
@@ -491,7 +502,7 @@ export class BlockStore {
   }
 
   async deleteMarkdownBlock(args: DeleteMarkdownBlockArgs): Promise<DeletedMarkdownBlockSnapshot> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const { block, index } = requireMarkdownBlock(session, args.blockId);
       const markdown = await readFile(join(this.sessionDir(args.notebookId, args.sessionId), block.path), "utf8");
@@ -507,7 +518,7 @@ export class BlockStore {
   }
 
   async restoreDeletedMarkdownBlock(args: RestoreDeletedMarkdownBlockArgs): Promise<BlockRef> {
-    return appendWrites.run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
+    return desktopRootWrites(this.rootDir).run(this.writeScope(args.notebookId), desktopIdKey(args.sessionId), async () => {
       const session = await this.readSession(args.notebookId, args.sessionId);
       const block = { ...args.snapshot.block, updatedAt: args.now };
 
@@ -531,6 +542,8 @@ export class BlockStore {
   }
 
   async savePhotoAsset(args: SavePhotoAssetArgs): Promise<{ relativePath: string; absolutePath: string }> {
+    return this.getWriteCoordinator().run(args.notebookId, args.sessionId, async () => {
+      await this.readSession(args.notebookId, args.sessionId);
     const safeName = sanitizeAssetFileName(args.fileName);
     const relativePath = `assets/photos/${safeName}`;
     const absolutePath = join(this.getSessionDir(args.notebookId, args.sessionId), relativePath);
@@ -538,9 +551,12 @@ export class BlockStore {
     await writeFileAtomically(absolutePath, args.bytes);
 
     return { relativePath, absolutePath };
+    });
   }
 
   async saveEmbeddedAsset(args: SaveEmbeddedAssetArgs): Promise<{ relativePath: string; absolutePath: string }> {
+    return this.getWriteCoordinator().run(args.notebookId, args.sessionId, async () => {
+      await this.readSession(args.notebookId, args.sessionId);
     const safeName = sanitizeAssetFileName(args.fileName);
     const relativePath = `assets/embedded/${safeName}`;
     const absolutePath = join(this.getSessionDir(args.notebookId, args.sessionId), relativePath);
@@ -548,6 +564,7 @@ export class BlockStore {
     await writeFileAtomically(absolutePath, args.bytes);
 
     return { relativePath, absolutePath };
+    });
   }
 
   async readMarkdownBlock(notebookId: string, sessionId: string, blockId: string): Promise<string> {
@@ -557,6 +574,8 @@ export class BlockStore {
   }
 
   async savePdfAsset(args: SavePdfAssetArgs): Promise<{ relativePath: string; absolutePath: string }> {
+    return this.getWriteCoordinator().run(args.notebookId, args.sessionId, async () => {
+      await this.readSession(args.notebookId, args.sessionId);
     const safeName = sanitizeAssetFileName(args.fileName).replace(/\.pdf$/i, "") + ".pdf";
     const relativePath = `assets/pdfs/${safeName}`;
     const absolutePath = join(this.getSessionDir(args.notebookId, args.sessionId), relativePath);
@@ -564,6 +583,7 @@ export class BlockStore {
     await writeFileAtomically(absolutePath, args.bytes);
 
     return { relativePath, absolutePath };
+    });
   }
 
   async savePhotoAnnotation(
@@ -572,13 +592,18 @@ export class BlockStore {
     photoRelativePath: string,
     metadata: ImageTransformSidecar
   ): Promise<{ relativePath: string; absolutePath: string }> {
+    return this.getWriteCoordinator().run(notebookId, sessionId, async () => {
+      await this.readSession(notebookId, sessionId);
     const relativePath = photoRelativePath.replace(/\.[^.]+$/, ".annotation.json");
     const absolutePath = join(this.getSessionDir(notebookId, sessionId), relativePath);
     await writeFileAtomically(absolutePath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
     return { relativePath, absolutePath };
+    });
   }
 
   async savePdfPageAsset(args: SavePdfPageAssetArgs): Promise<{ relativePath: string; absolutePath: string }> {
+    return this.getWriteCoordinator().run(args.notebookId, args.sessionId, async () => {
+      await this.readSession(args.notebookId, args.sessionId);
     const blockDir = sanitizeAssetFileName(args.pdfBlockId).replace(/\.[^.]+$/, "");
     const pageName = `page-${String(args.pageNumber).padStart(4, "0")}.png`;
     const relativePath = `assets/pdf-pages/${blockDir}/${pageName}`;
@@ -586,6 +611,7 @@ export class BlockStore {
 
     await writeFileAtomically(absolutePath, args.bytes);
     return { relativePath, absolutePath };
+    });
   }
 
   async saveAnnotatedImageAsset(args: SaveAnnotatedImageAssetArgs): Promise<{

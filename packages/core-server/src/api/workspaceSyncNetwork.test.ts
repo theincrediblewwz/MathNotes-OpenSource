@@ -76,7 +76,7 @@ describe("trusted-host workspace synchronization over HTTP", () => {
 
   it("round-trips exact snapshots and staged assets, then handles lost-response retries after restart", async () => {
     const f = await fixture();
-    const changes: {notebookId: string; sessionId: string}[] = [];
+    const changes: {notebookId: string; sessionId?: string; catalogChanged?: boolean}[] = [];
     const { server, url } = await start({ workspaceSync: f.sync, onWorkspaceChanged: target => changes.push(target) });
     const get = async (route: string) => fetch(`${url}/api/v3/workspace/${route}`, { headers });
     const identity = await (await get("identity")).json();

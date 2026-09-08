@@ -19,8 +19,9 @@ describe("Windows workspace conflict lifecycle", () => {
     session.blocks = [createBlockRef({ id: "0001", type: "markdown", path: "blocks/1.md", source: "user", createdAt: session.createdAt })];
     const make = (text: string, baseline: string) => ({ ...createSessionDocument({ notebookId: "book", session, markdownByPath: { "blocks/1.md": text } }), revisionBaseline: baseline });
     let host = make("A 原文", "a");
-    let notify: (event: { notebookId: string; sessionId: string }) => void = () => {};
-    const load = vi.fn(async () => host);
+    let deleted = false;
+    let notify: (event: { notebookId: string; sessionId?: string; catalogChanged?: boolean }) => void = () => {};
+    const load = vi.fn(async () => { if (deleted) throw new Error("ENOENT session.json"); return host; });
     const save = vi.fn(async (input: { sourceText: string; revisionBaseline: string }) => {
       if (input.revisionBaseline !== host.revisionBaseline) throw new Error("revision_conflict");
       host = { ...host, revisionBaseline: "saved", sourceDocument: { ...host.sourceDocument, text: input.sourceText } };
@@ -39,8 +40,28 @@ describe("Windows workspace conflict lifecycle", () => {
     window.mathNotes = new Proxy(specific, { get(target, key: string) {
       return target[key] ?? (key.startsWith("on") ? () => () => {} : async () => []);
     } }) as unknown as MathNotesApi;
-    return { load, save, update() { host = make("B 主机新版", "b"); notify({ notebookId: "book", sessionId: "lesson" }); } };
+    return { load, save, update() { host = make("B 主机新版", "b"); notify({ notebookId: "book", sessionId: "lesson" }); },
+      trash() { deleted = true; notify({ notebookId: "book", catalogChanged: true }); },
+      restore() { deleted = false; host = make("恢复后的主机版本", "restored"); notify({ notebookId: "book", catalogChanged: true }); }
+    };
   }
+  it("keeps a draft through notebook trash and restore and cannot save into the deleted path", async () => {
+    const f = fixture(); render(<App />);
+    const editor = await screen.findByRole("textbox", { name: "合成源码编辑器" });
+    await waitFor(() => expect((editor as HTMLTextAreaElement).value).toContain("A 原文"));
+    fireEvent.change(editor, { target: { value: "保留这份草稿" } });
+    await act(async () => { f.trash(); });
+    await waitFor(() => expect(screen.getByTestId("workspace-conflict").textContent).toContain("废纸篓"));
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    expect(f.save).not.toHaveBeenCalled();
+    expect((editor as HTMLTextAreaElement).value).toBe("保留这份草稿");
+    await act(async () => { f.restore(); });
+    await screen.findByRole("button", { name: "查看主机版本" });
+    expect((editor as HTMLTextAreaElement).value).toBe("保留这份草稿");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "重新载入并替换草稿" }));
+    await waitFor(() => expect((editor as HTMLTextAreaElement).value).toContain("恢复后的主机版本"));
+  });
   it("refreshes an unedited open document when the host publishes a change", async () => {
     const f = fixture(); render(<App />);
     await waitFor(() => expect((screen.getByRole("textbox", { name: "合成源码编辑器" }) as HTMLTextAreaElement).value).toContain("A 原文"));

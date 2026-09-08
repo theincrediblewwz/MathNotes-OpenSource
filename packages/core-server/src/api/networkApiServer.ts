@@ -25,6 +25,7 @@ import {
 import { PwaStaticHost } from "./pwaStaticHost";
 import { isSafeWorkspaceIdentifier } from "../session/workspaceIdentifier";
 import { WorkspaceSyncError, type WorkspaceSyncService, type ReplicaPush } from "../sync/workspaceSyncService";
+import type { CatalogOperation, WorkspaceCatalogSyncService } from "../sync/workspaceCatalogSyncService";
 
 const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
@@ -34,7 +35,8 @@ export type NetworkApiServerOptions = {
   token: string;
   pipeline?: PhotoIngestPort;
   workspaceSync?: WorkspaceSyncService;
-  onWorkspaceChanged?: (target: { notebookId: string; sessionId: string }) => void;
+  workspaceCatalog?: WorkspaceCatalogSyncService;
+  onWorkspaceChanged?: (target: { notebookId: string; sessionId?: string; catalogChanged?: boolean }) => void;
   createPipeline?: () => PhotoIngestPort | Promise<PhotoIngestPort>;
   /** Read persisted upload state without initializing a recognition provider. */
   getUploadStatus?: NonNullable<PhotoIngestPort["getAcceptedUpload"]>;
@@ -101,6 +103,7 @@ export class NetworkApiServer {
       }
     }
 
+    await this.options.workspaceCatalog?.recover();
     await this.revisionEvents.start();
     this.unsubscribeRevisionEvents = this.revisionEvents.subscribe((event) => this.broadcastRevisionEvent(event));
     this.server = createServer((request, response) => {
@@ -237,9 +240,27 @@ export class NetworkApiServer {
     url: URL
   ): Promise<void> {
     if (isWorkspaceSyncRoute(routeId)) {
+      if (routeId === "workspace.catalog.state" || routeId === "workspace.catalog.operation") {
+        const catalog = this.options.workspaceCatalog;
+        if (!catalog) return writeJson(response, 503, { error: "workspace_catalog_unavailable" });
+        if (routeId === "workspace.catalog.state") return writeJson(response, 200, await catalog.catalogState());
+        const body = await readWorkspaceJsonBody(request, 32 * 1024 * 1024) as CatalogOperation;
+        const result = await catalog.execute(body);
+        // A retried operation returns its ORIGINAL result. Notify invalidation,
+        // never ask a UI to install that possibly historical result snapshot.
+        this.companionSnapshotCache.clear();
+        this.companionSnapshotFlights.clear();
+        this.publishCompanionCatalogChange("changed", result.target.notebookId, result.target.sessionId);
+        const sessions = result.target.sessionId ? [result.target.sessionId] : (result.target.sessions ?? []).map(s => s.sessionId);
+        for (const sessionId of sessions) this.publishCompanionChange(result.target.notebookId, sessionId);
+        this.options.onWorkspaceChanged?.({ notebookId: result.target.notebookId, sessionId: result.target.sessionId, catalogChanged: true });
+        return writeJson(response, 200, result);
+      }
       const sync = this.options.workspaceSync;
       if (!sync) return writeJson(response, 503, { error: "workspace_sync_unavailable" });
-      if (routeId === "workspace.identity") return writeJson(response, 200, await sync.identity());
+      if (routeId === "workspace.identity") return writeJson(response, 200, {
+        ...await sync.identity(), ...(this.options.workspaceCatalog ? { capabilities: ["catalog-operations-v1"] } : {})
+      });
       if (routeId === "workspace.catalog") return writeJson(response, 200, await sync.catalog());
       if (routeId === "workspace.asset.stage") {
         const body = await readWorkspaceJsonBody(request, 73 * 1024 * 1024);
@@ -557,7 +578,7 @@ export class NetworkApiServer {
 
     const flight = this.options.getCompanionSession(notebookId, sessionId)
       .then((snapshot) => {
-        this.companionSnapshotCache.set(key, {
+        if (this.companionSnapshotFlights.get(key) === flight) this.companionSnapshotCache.set(key, {
           expiresAt: Date.now() + NetworkApiServer.COMPANION_SNAPSHOT_REUSE_MS,
           snapshot
         });
@@ -672,6 +693,7 @@ export class NetworkApiServer {
 
   publishCompanionChange(notebookId: string, sessionId: string, revisionHint = new Date().toISOString()): void {
     this.companionSnapshotCache.delete(`${notebookId}\u0000${sessionId}`);
+    this.companionSnapshotFlights.delete(`${notebookId}\u0000${sessionId}`);
     this.queueRevisionEvent({
       scope: "session",
       kind: "changed",
@@ -733,6 +755,7 @@ export class NetworkApiServer {
 
   publishCompanionDeleted(notebookId: string, sessionId: string): void {
     this.companionSnapshotCache.delete(`${notebookId}\u0000${sessionId}`);
+    this.companionSnapshotFlights.delete(`${notebookId}\u0000${sessionId}`);
     this.queueRevisionEvent({
       scope: "session",
       kind: "deleted",

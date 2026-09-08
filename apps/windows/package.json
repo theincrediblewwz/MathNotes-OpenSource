@@ -1,7 +1,7 @@
 {
   "name": "@mathnotes/windows",
   "version": "0.3.4",
-  "buildLabel": "Mac 同步测试版",
+  "buildLabel": "Mac 目录同步测试版",
   "private": true,
   "license": "GPL-3.0-only",
   "type": "module",

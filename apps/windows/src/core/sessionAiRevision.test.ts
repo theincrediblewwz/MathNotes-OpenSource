@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,6 +46,59 @@ describe("whole Session AI revision", () => {
     expect(await store.readMarkdownBlock("book", "lesson", "0002")).toBe("# 第二块\n保留");
     expect(await readFile(join(store.getSessionDir("book", "lesson"), before.blocks[0].path), "utf8")).toContain("原句");
     await expect(runtime.apply({ ...target, proposalId: proposal.id })).rejects.toThrow("已经处理过");
+  });
+  it("does not hold the workspace during AI work or resurrect notes when the response arrives after trash", async () => {
+    let entered!: () => void; let release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const paused = new Promise<void>(resolve => { release = resolve; });
+    const runtime = new SessionAiRevisionService(store, async () => ({ name: "fixture", assist: async () => {
+      entered(); await paused;
+      return { markdown: JSON.stringify({ summary: "整理", changes: [{ blockId: "0001", markdown: "AI修改", summary: "改写" }], lockedSuggestions: [] }) };
+    } }));
+    const outcome = runtime.propose({ ...target, instruction: "改写" }).then(() => "written", error => error.code);
+    await started;
+    const live = store.getSessionDir("book", "lesson"); const trash = join(root, "trash-payload");
+    await store.getWriteCoordinator().runWorkspace(() => rename(live, trash));
+    release(); expect(await outcome).toBe("ENOENT");
+    await expect(stat(live)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(trash, ".mathnotes/session-revisions"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it.each(["apply", "cancel"] as const)("rejects %s queued after a catalog trash without recreating the Session", async action => {
+    const runtime = service([{ blockId: "0001", markdown: "修改", summary: "改写" }]);
+    const proposal = await runtime.propose({ ...target, instruction: "改写" });
+    let entered!: () => void; let release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const live = store.getSessionDir("book", "lesson"); const trash = join(root, "trash-payload");
+    const barrier = store.getWriteCoordinator().runWorkspace(async () => {
+      entered(); await new Promise<void>(resolve => { release = resolve; }); await rename(live, trash);
+    });
+    await started;
+    const outcome = runtime[action]({ ...target, proposalId: proposal.id }).then(() => "written", error => error.code);
+    release(); await barrier; expect(await outcome).toBe("ENOENT");
+    await expect(stat(live)).rejects.toMatchObject({ code: "ENOENT" });
+    const stored = JSON.parse(await readFile(join(trash, ".mathnotes/session-revisions", `${proposal.id}.json`), "utf8"));
+    expect(stored.status).toBe("proposed");
+  });
+  it("keeps a catalog move behind the complete body, proposal and remark commit", async () => {
+    const runtime = service([{ blockId: "0001", markdown: "已修改", summary: "改写" }]);
+    const proposal = await runtime.propose({ ...target, instruction: "改写" });
+    const privateRuntime = runtime as unknown as { write: (...args: unknown[]) => Promise<void> };
+    const originalWrite = privateRuntime.write.bind(runtime);
+    let entered!: () => void; let release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    vi.spyOn(privateRuntime, "write").mockImplementationOnce(async (...args) => {
+      entered(); await new Promise<void>(resolve => { release = resolve; }); return originalWrite(...args);
+    });
+    const applying = runtime.apply({ ...target, proposalId: proposal.id }); await started;
+    let moved = false; const trash = join(root, "trash-payload");
+    const moving = store.getWriteCoordinator().runWorkspace(async () => {
+      moved = true; await rename(store.getSessionDir("book", "lesson"), trash);
+    });
+    await new Promise(resolve => setTimeout(resolve, 10)); expect(moved).toBe(false);
+    release(); expect((await applying).status).toBe("applied"); await moving;
+    expect(JSON.parse(await readFile(join(trash, ".mathnotes/session-revisions", `${proposal.id}.json`), "utf8")).status).toBe("applied");
+    expect(JSON.parse(await readFile(join(trash, "assistant/index.json"), "utf8")).remarks).toHaveLength(1);
+    await expect(stat(store.getSessionDir("book", "lesson"))).rejects.toMatchObject({ code: "ENOENT" });
   });
   it.each(["edit", "lock", "append"])("rejects an intervening %s before writing any block", async (action) => {
     const runtime = service([{ blockId: "0001", markdown: "更改", summary: "改写" }, { blockId: "0003", markdown: "更改3", summary: "改写3" }]);

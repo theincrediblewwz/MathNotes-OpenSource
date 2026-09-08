@@ -4,12 +4,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { upsertRecognitionJob } from "./recognitionJobLog";
 import { readRecognitionTaskSummaries } from "./uploadTaskLog";
+import { BlockStore } from "./blockStore";
 
 describe("readRecognitionTaskSummaries", () => {
   let rootDir: string;
 
   beforeEach(async () => {
     rootDir = await mkdtemp(join(tmpdir(), "mathnotes-tasks-"));
+    await new BlockStore(rootDir).createSession({ notebookId: "functional_analysis", sessionId: "lecture", title: "Fixture", now: "2026-09-08T00:00:00Z" });
   });
 
   afterEach(async () => {
