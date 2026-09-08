@@ -26,6 +26,7 @@ struct MacNotebookBrowser: View {
     @State private var showTrash = false
     @State private var trashEntries: [WorkspaceTrashEntry] = []
     @State private var isManaging = false
+    @State private var isLoadingTrash = true
     @State private var managementError: String?
     @State private var openedNotebookID: String?
     @State private var searchText = ""
@@ -92,6 +93,8 @@ struct MacNotebookBrowser: View {
                         .task(id: session.id) { await loadPreview(session) }
                 }
             }
+            // Hover content must not intercept pointer events on another card.
+            .allowsHitTesting(false)
         }
         .frame(minWidth: 820, idealWidth: 940, minHeight: 560, idealHeight: 660)
         .background(MathNotesTheme.canvas)
@@ -296,8 +299,11 @@ struct MacNotebookBrowser: View {
                     previewSessionID = session.id
                     previewState = .loading
                 }
+            } else {
+                dismissPreview(for: session.id)
             }
         }
+        .onDisappear { dismissPreview(for: session.id) }
         .anchorPreference(key: SessionPreviewAnchorKey.self, value: .bounds) {
             [session.id: $0]
         }
@@ -344,58 +350,41 @@ struct MacNotebookBrowser: View {
     }
 
     private var trashView: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("笔记废纸篓").font(.title2.bold())
-                Spacer()
-                Button("完成") { showTrash = false }.keyboardShortcut(.cancelAction)
-            }
-            Text("删除的笔记和素材保留在这里。恢复 Notebook 后，再恢复其中单独删除的 Session。")
-                .font(.callout).foregroundStyle(.secondary)
-            if trashEntries.isEmpty {
-                ContentUnavailableView("废纸篓为空", systemImage: "trash")
-            } else {
-                List(trashEntries) { entry in
-                    HStack {
-                        Image(systemName: entry.sessionId == nil ? "folder" : "doc.text")
-                        VStack(alignment: .leading) {
-                            Text(entry.title)
-                            Text(entry.sessionId == nil ? "Notebook" : "Session").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("恢复") {
-                            runManagement(WorkspaceManageRequest(action: "restore", notebookId: entry.notebookId,
-                                sessionId: entry.sessionId, deletionId: entry.id))
-                        }
-                        .disabled(isManaging || hasUnsavedDrafts)
-                    }
-                }
-            }
-            if let managementError { Text(managementError).font(.callout).foregroundStyle(.red) }
-            if isManaging { ProgressView().controlSize(.small) }
-        }
-        .padding(24)
-        .frame(width: 560, height: 420)
+        MacWorkspaceTrashView(
+            entries: trashEntries,
+            isLoading: isLoadingTrash,
+            isRestoring: isManaging,
+            hasUnsavedDrafts: hasUnsavedDrafts,
+            error: managementError,
+            onRestore: { entry in
+                runManagement(WorkspaceManageRequest(action: "restore", notebookId: entry.notebookId,
+                    sessionId: entry.sessionId, deletionId: entry.id))
+            },
+            onClose: { showTrash = false }
+        )
         .task {
+            isLoadingTrash = true
+            managementError = nil
+            defer { isLoadingTrash = false }
             do { trashEntries = try await supervisor.workspaceTrash() }
             catch { managementError = error.localizedDescription }
         }
     }
 
+    private func dismissPreview(for sessionID: String) {
+        // A previous card's exit must not dismiss a newer card's preview.
+        guard hoveredSessionID == sessionID else { return }
+        hoveredSessionID = nil
+        previewSessionID = nil
+        previewState = .idle
+    }
+
     private func sessionPreview(_ session: SessionCatalogItem, notebook: NotebookCatalogItem) -> some View {
         VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.standard) {
             VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Text(session.title)
-                        .font(.headline)
-                        .lineLimit(2)
-                    Spacer()
-                    Button { hoveredSessionID = nil } label: {
-                        Image(systemName: "xmark").frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("关闭正文预览")
-                }
+                Text(session.title)
+                    .font(.headline)
+                    .lineLimit(2)
                 Text(notebook.title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -440,12 +429,12 @@ struct MacNotebookBrowser: View {
                 session, sourceMode: sourceMode, supervisor: supervisor, companionReader: companionReader
             )
             try Task.checkCancellation()
-            guard previewSessionID == session.id else { return }
+            guard !Task.isCancelled, hoveredSessionID == session.id, previewSessionID == session.id else { return }
             previewState = .loaded(blocks)
         } catch is CancellationError {
             return
         } catch {
-            guard previewSessionID == session.id else { return }
+            guard !Task.isCancelled, hoveredSessionID == session.id, previewSessionID == session.id else { return }
             previewState = .failed(error.localizedDescription)
         }
     }

@@ -833,6 +833,7 @@ struct ContentView: View {
             HStack {
                 Spacer()
                 Button("取消", role: .cancel) { creationTarget = nil }
+                    .keyboardShortcut(.cancelAction)
                     .disabled(isCreating)
                 Button(isCreating ? "正在创建" : "创建") {
                     Task { await performCreation(target) }
@@ -843,6 +844,8 @@ struct ContentView: View {
         }
         .padding(MathNotesTheme.Spacing.section)
         .frame(width: 420)
+        .background(MathNotesTheme.canvas)
+        .tint(MathNotesTheme.accent)
     }
 
     @MainActor
