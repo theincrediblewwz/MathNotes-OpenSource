@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-08T07:06:26.483Z",
-  "fileCount": 853,
-  "snapshotSha256": "0349958599af7a3be9d69e8ce63accab2424248a733e2b95bfd226db22cc34b6",
+  "generatedAt": "2026-09-08T07:44:31.427Z",
+  "fileCount": 854,
+  "snapshotSha256": "3b337cd6caaaa80e088e5ca7a99d38cc4ee15d472409b92c8bb98abc5d8716c7",
   "files": [
     {
       "path": ".gitattributes",
@@ -1118,8 +1118,8 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/ContentView.swift",
-      "bytes": 37507,
-      "sha256": "6acd35385370c1badfb5f2a015cb8b18e22ca017e0734a9f7947cd6d46480854"
+      "bytes": 37640,
+      "sha256": "f064cb27ad9fee249170456003cef7a555e2e2c119c9835b1e055e393cfb98cd"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/KeychainCredentialStore.swift",
@@ -1153,8 +1153,8 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/MacNotebookBrowser.swift",
-      "bytes": 23498,
-      "sha256": "1c04c9173fe921aaa12f93df815ef85b4b6655a9541924b3a554af660faa6417"
+      "bytes": 22787,
+      "sha256": "aab21d7a243bceb8b4b574992da7f1dd4ae70d52fa21a69a3fb02b81b13492ff"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/MacReadingPosition.swift",
@@ -1175,6 +1175,11 @@
       "path": "apps/macos/Sources/MathNotesMac/MacUserPreferences.swift",
       "bytes": 10030,
       "sha256": "b01ee31306b13bda87af86ac3c5810824ec24c71e6bc116ca13e0ed337555271"
+    },
+    {
+      "path": "apps/macos/Sources/MathNotesMac/MacWorkspaceTrashView.swift",
+      "bytes": 4926,
+      "sha256": "bcdf9736c8a7512cc751e31029b20dbdb5683d7c02127b59d781112cc593a815"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/MarkdownDropSession.swift",
