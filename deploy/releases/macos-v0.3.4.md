@@ -25,6 +25,6 @@
 
 按主机隔离的 Mac 本地副本、编辑队列、冲突保留、新建/改名/删除/恢复协议已实现。与 Windows PR #39 的实际 Core 代码完成了 23 项跨版本协议测试和 Mac 正式界面的隔离操作验收。
 
-**Mac ↔ Windows 的真实跨机写入、断网重连和双方同时编辑尚待验证，本次不作为已验收功能宣传。** 当前发布以各电脑独立使用为主。相关代码和复测步骤保留在仓库，今后有需要可以继续开发；详见 [Mac 开发与验收状态](../../apps/macos/RELEASE_STATUS.md) 和 [目录协议](../../apps/macos/REMOTE_CATALOG_SYNC_V1.md)。
+**Mac ↔ Windows 的真实跨机写入、断网重连和双方同时编辑尚待验证，本次不作为已验收功能宣传。** 当前发布以各电脑独立使用为主。相关代码和复测步骤保留在仓库，今后有需要可以继续开发；详见 [Mac 开发与验收状态](https://github.com/theincrediblewwz/MathNotes-OpenSource/blob/macos-v0.3.4/apps/macos/RELEASE_STATUS.md) 和 [目录协议](https://github.com/theincrediblewwz/MathNotes-OpenSource/blob/macos-v0.3.4/apps/macos/REMOTE_CATALOG_SYNC_V1.md)。
 
 代码、构建版本及发行资产校验和以本 Release 对应的提交和随附文件为准。
