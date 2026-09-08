@@ -1,5 +1,6 @@
 {
-  "tag": "macos-v0.3.4",
-  "title": "MathNotes macOS 0.3.4 Preview",
-  "notes": "deploy/releases/macos-v0.3.4.md"
+  "tag": "macos-v0.3.5",
+  "title": "MathNotes macOS 0.3.5 Preview",
+  "notes": "deploy/releases/macos-v0.3.5.md",
+  "version": "0.3.5"
 }
