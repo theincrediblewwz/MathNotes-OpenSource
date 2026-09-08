@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-08T06:54:20.760Z",
+  "generatedAt": "2026-09-08T07:06:26.483Z",
   "fileCount": 853,
-  "snapshotSha256": "64b86eb5c888f2b6ae6cf1777bfd2454a3e8a39d034d3996507e3ca3795c5a7a",
+  "snapshotSha256": "0349958599af7a3be9d69e8ce63accab2424248a733e2b95bfd226db22cc34b6",
   "files": [
     {
       "path": ".gitattributes",
@@ -2903,8 +2903,8 @@
     },
     {
       "path": "deploy/releases/macos-v0.3.4.md",
-      "bytes": 2994,
-      "sha256": "66dfdbdb56a73bb9590d65220de28b4b915a505c09b150a267c2bd39c5da7a85"
+      "bytes": 3132,
+      "sha256": "1d2c4bb15211c85a885b55eade2051dae8c6a010b23497f391ed7dc77d3dddf2"
     },
     {
       "path": "deploy/releases/v0.3.4-acceptance.md",
