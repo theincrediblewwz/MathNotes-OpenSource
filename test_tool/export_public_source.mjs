@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertPublicMaterial, isInternalPublicationPath } from "./public_material_policy.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputRoot = path.resolve(process.argv[2] ?? path.join(projectRoot, "output", "public-source", "MathNotes-OpenSource"));
@@ -52,6 +53,7 @@ if (status.trim()) throw new Error("Public source export requires a clean commit
 const commit = git(["rev-parse", "HEAD"]).trim();
 const tracked = git(["ls-files", "-z"]).split("\0").filter(Boolean).map(normalize);
 const selected = tracked.filter((relativePath) => {
+  if (isInternalPublicationPath(relativePath)) return false;
   if (excludedPrefixes.some((prefix) => relativePath === prefix || relativePath.startsWith(prefix))) return false;
   if (exactRootFiles.has(relativePath)) return true;
   if (allowedPrefixes.some((prefix) => relativePath.startsWith(prefix))) return true;
@@ -84,6 +86,7 @@ for (const relativePath of selected) {
     throw new Error(`Incomplete committed blob: ${relativePath}`);
   }
   const destination = path.join(outputRoot, relativePath);
+  assertPublicMaterial(relativePath, bytes);
   await mkdir(path.dirname(destination), { recursive: true });
   await writeFile(destination, bytes);
   manifestFiles.push({ path: relativePath, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") });

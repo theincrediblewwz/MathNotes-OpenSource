@@ -25,6 +25,7 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm run test:ci-config
+      - run: node --test test_tool/pwa_update_package.test.mjs
       - run: npm run build:headless-network
       - run: npm run test:unit
       - run: npm run build:windows

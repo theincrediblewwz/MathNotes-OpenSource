@@ -4,7 +4,7 @@
 - Windows 设置：`0.3.4 · Mac 同步测试版 · 6aa87aeb8beb`。
 - ZIP：`MathNotes-Windows-x64-0.3.4-mac-sync-6aa87aeb8beb.zip`。
 - SHA-256：`a6e03a324133645b4a830611962b5fdaaa28a1b2cebd1af7ed3dd908c183e99b`。
-- 独立测试发行：`windows-mac-sync-20260908`。此前正式 Latest `v0.3.4` 的9个附件及原标签保持不变。
+- 独立测试发行：`windows-mac-sync-20260908`。应用构建来源和校验和适用于上述 Windows ZIP。
 
 | 验证 | 结果 |
 | --- | --- |
@@ -24,4 +24,4 @@ Windows单元以一个fork worker运行，其他workspace以一个thread worker�
 
 便携包含许可证、依赖清单及构建清单。Windows包未提供代码签名。请完整解压目录再运行EXE，并先用测试笔记联调。
 
-尚未宣称完成：真实Mac跨机、Safari/手机厂商策略验收；远程Notebook/Session新建、改名、移动和废纸篓协议；Mac客户端outbox/UI适配。范围和逐项操作见[结果与接手说明](WINDOWS_MAC_SYNC_RESULT.md)。
+尚未宣称完成：真实Mac跨机、Safari/手机厂商策略验收；远程Notebook/Session新建、改名、移动和废纸篓协议；Mac客户端outbox/UI适配。范围和逐项操作见[接口与验收说明](WINDOWS_MAC_SYNC_RESULT.md)。

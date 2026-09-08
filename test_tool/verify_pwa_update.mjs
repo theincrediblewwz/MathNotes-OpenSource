@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertPublicMaterial } from "./public_material_policy.mjs";
 
 export async function verifyPwaUpdate(root) {
   const actual = (await listFiles(root)).sort();
@@ -14,6 +15,7 @@ export async function verifyPwaUpdate(root) {
     const actual = path.join(root, ...file.path.split("/"));
     if (!(await lstat(actual)).isFile()) throw new Error(`Not a regular file: ${file.path}`);
     const bytes = await readFile(actual);
+    assertPublicMaterial(file.path, bytes);
     if (bytes.length !== file.bytes || sha256(bytes) !== file.sha256) throw new Error(`Hash mismatch: ${file.path}`);
   }
   const expected = [...listed, "artifact-manifest.json", "SHA256SUMS"].sort();

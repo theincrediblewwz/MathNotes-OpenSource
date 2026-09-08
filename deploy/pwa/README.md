@@ -24,11 +24,11 @@
 - 拍后编辑支持旋转、自由矩形裁剪、套索、透视、画笔、箭头和马赛克；马赛克区域在上传前合成为不透明纯黑。
 - 正文阅读仍遵守电脑主机的权限和锁定规则；本包不会直接修改电脑笔记，也不包含 Mac 主程序、Core 服务或模型凭据。
 
-## 给 Mac Codex 的独立更新包
+## 独立 PWA 更新包
 
-`test_tool/package_pwa_update.mjs` 生成单独的 PWA 更新 ZIP，包含可直接集成的 `MathNotesPWA/` 静态目录、仅 `apps/pwa` 的源码快照与补丁、依赖锁定参考、逐文件 SHA-256 清单以及中文接手说明。
+`test_tool/package_pwa_update.mjs` 生成单独的 PWA 更新 ZIP，包含可直接集成的 `MathNotesPWA/` 静态目录、仅 `apps/pwa` 的源码快照与补丁、依赖锁定参考、逐文件 SHA-256 清单以及公开集成说明。
 
-Mac 原生打包程序每次会先构建 `apps/pwa`，再复制到 `.app/Contents/Resources/MathNotesPWA`。应先在 Mac 自己的开发分支整合源码，再执行原有打包流程；只替换已生成 `.app` 内的静态文件会在下次构建时被旧源码覆盖，也会使原有签名失效。详见随包的 `MAC_CODEX_HANDOFF.md`。
+Mac 原生打包程序每次会先构建 `apps/pwa`，再复制到 `.app/Contents/Resources/MathNotesPWA`。应先在 目标开发分支整合源码，再执行原有打包流程；只替换已生成 `.app` 内的静态文件会在下次构建时被旧源码覆盖，也会使原有签名失效。详见随包的 `INTEGRATION.md`。
 
 本包只负责显示／放大宿主已提供的标准 Markdown 图片，不包含自动生成 `source-image` 标记的 Core 识别服务改动。更新 PWA 不等同于更新 Mac 识别服务；需要该能力时另行合并宿主对应改动。
 

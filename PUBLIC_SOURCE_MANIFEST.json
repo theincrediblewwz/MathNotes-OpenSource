@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-07T19:39:10.026Z",
+  "generatedAt": "2026-09-08T04:58:18.096Z",
   "fileCount": 795,
-  "snapshotSha256": "0a297cd48f3179e46d92fc483e298163d6766a5014d006a432683a514734933d",
+  "snapshotSha256": "b9a6f47c76ec219ce9266113424b97a4bf26db9d40a362bebb3f98e775a7debe",
   "files": [
     {
       "path": ".gitattributes",
@@ -28,8 +28,8 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "bytes": 2039,
-      "sha256": "3c3a0d301a271b7f877a8ed12dedc3c37e5684c8505ffb05c0a2849b1c2e3eb5"
+      "bytes": 2102,
+      "sha256": "b3765b764ad99a02aed72b2e82044bb1245f38af4a885550ed9e8a974cdff78a"
     },
     {
       "path": ".github/workflows/dependency-review.yml",
@@ -63,8 +63,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 9534,
-      "sha256": "6f8d419d41e44e5dd49affe77ff6f702189a522f2c19397ec448a10aa24247e8"
+      "bytes": 9416,
+      "sha256": "7275e546d6da9542e8ebf5b28735335f918e0fc87afb6bac700755b6ada57aa4"
     },
     {
       "path": "SECURITY.md",
@@ -1045,11 +1045,6 @@
       "path": "apps/android/settings.gradle.kts",
       "bytes": 336,
       "sha256": "1d143a7f499cc9e78d916b612b66cb05578d0d7190e38e3c558607ddea5f89f4"
-    },
-    {
-      "path": "apps/macos/CODEX_HANDOFF.md",
-      "bytes": 5097,
-      "sha256": "37bcb137329b7629ad0e250a1added027c1b4c83a19e6f6b87304c7bb438113b"
     },
     {
       "path": "apps/macos/ContractTests/main.swift",
@@ -2797,14 +2792,14 @@
       "sha256": "44ee781eeda3a546f77f80ee28cfc962d1fd6c6b89d7df0589d8244cf1917f7b"
     },
     {
-      "path": "deploy/pwa/MAC_CODEX_UPDATE.md",
-      "bytes": 8091,
-      "sha256": "fe3f8fef2b4935175a7f48446ac7ee7816933863900bf80b1faf7740754cbc73"
+      "path": "deploy/pwa/INTEGRATION.md",
+      "bytes": 4263,
+      "sha256": "7dcfab1e2c3cbd228c601cdb2ead516cc106739f9e51ff22bf2a87634f596f35"
     },
     {
       "path": "deploy/pwa/README.md",
-      "bytes": 2840,
-      "sha256": "33b29ed275fc0d6a9c65d84f46ede42bc22f847e7e6de25f27bb4a0b217a11e0"
+      "bytes": 2815,
+      "sha256": "d567d806e48279f33a0a542d3e6d02498ba3d4fbd3853e28520fd514d601cd76"
     },
     {
       "path": "deploy/releases/v0.3.4-acceptance.md",
@@ -2813,18 +2808,18 @@
     },
     {
       "path": "deploy/releases/v0.3.4.md",
-      "bytes": 4289,
-      "sha256": "f707868eb0f8d0cc9e62085386ea50262b9aec713601e8e4ec8e037f925dbd03"
+      "bytes": 4181,
+      "sha256": "2c9fbdc33d0c29f87f55c9699c0ea551bbe46e319a35a43eb28afaffba422513"
     },
     {
       "path": "deploy/windows-mac-sync/BUILD_VALIDATION.md",
-      "bytes": 2656,
-      "sha256": "1db9436716a3d6876307296b16745f8868aa54eda41a3fd104269c9d2df1c5db"
+      "bytes": 2647,
+      "sha256": "1f8f6452710e2ed74e3fd01606b59c23df96a07a1d17370ba35904df2e4c0631"
     },
     {
       "path": "deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md",
-      "bytes": 8614,
-      "sha256": "76f5024f79ce864d1c64524a22e8bfe8489f26149c806527e1a43166234b23cb"
+      "bytes": 7302,
+      "sha256": "f7a1fccb1dc924d9ec5e0d6bd7b1f0740d2ef9da60a474668edfb2ff152a9d6b"
     },
     {
       "path": "package-lock.json",
@@ -3603,8 +3598,8 @@
     },
     {
       "path": "test_tool/export_public_source.mjs",
-      "bytes": 6121,
-      "sha256": "8fc066fba66062c19b28df943344c2699a2ba8af1e7b8d44803f105dd3bf0d11"
+      "bytes": 6323,
+      "sha256": "5ee82c058c69048a3822fbae703c13a61f176d70bad8d8a83e100feb71054707"
     },
     {
       "path": "test_tool/generate_brand_assets.mjs",
@@ -3793,8 +3788,8 @@
     },
     {
       "path": "test_tool/package_pwa_update.mjs",
-      "bytes": 10633,
-      "sha256": "316be911e2d7850fd77add52151a286db0091b5451544508728260cd771ff2d9"
+      "bytes": 10993,
+      "sha256": "f94cb3627375e35b1f31dec1a6fc1446aa33d5c8e1a779f7bf1239549068b59e"
     },
     {
       "path": "test_tool/package_standalone_worker.mjs",
@@ -3832,6 +3827,11 @@
       "sha256": "177f1398884e7f8e5d8509a34612ff5a2a73d65341ff5538587926211f1b5980"
     },
     {
+      "path": "test_tool/public_material_policy.mjs",
+      "bytes": 1081,
+      "sha256": "a95d9beedc979ebba1c535864909444ae5c13a1cac670e7a0c056dc394b92cf0"
+    },
+    {
       "path": "test_tool/pwa_capture_editor_smoke.mjs",
       "bytes": 13551,
       "sha256": "c5603b28073f1e8484717ff24e6b0ae096dc73eb0ec3d287ed8d3f10faef979c"
@@ -3858,8 +3858,8 @@
     },
     {
       "path": "test_tool/pwa_update_package.test.mjs",
-      "bytes": 4037,
-      "sha256": "ef0f4e8c3a72ecddc0263970ab275b175ba2717d1c90b47807230f8e82aca58d"
+      "bytes": 6282,
+      "sha256": "e7a96262090b8d899943ffa5b0b1f0c9bef3ade9accb906b453ff6bd371185a6"
     },
     {
       "path": "test_tool/quality_benchmark.ts",
@@ -3933,8 +3933,8 @@
     },
     {
       "path": "test_tool/verify_pwa_update.mjs",
-      "bytes": 2872,
-      "sha256": "9fe5d233b8ead1bb68fbdaa213506396735ec5ed94f01511bc5dfca7524aec99"
+      "bytes": 2985,
+      "sha256": "693fde4cf774672ed8752d05a64953d990caffc751f1cdd45acf8e6dd5ba1592"
     },
     {
       "path": "test_tool/windows_app_smoke.mjs",
