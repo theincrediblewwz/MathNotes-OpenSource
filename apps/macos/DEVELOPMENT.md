@@ -1,6 +1,6 @@
 # 在 Mac 本地开发 MathNotes
 
-当前发布：macOS 0.3.6；0.3.7 为待鼠标验收的候选版本。集成 PWA 0.3.4。[功能与延期验收状态](RELEASE_STATUS.md)；跨 Windows 真实互联暂缓，日常本机使用无需 Windows 在线。
+当前发布：macOS 0.3.7，集成 PWA 0.3.4。[功能与延期验收状态](RELEASE_STATUS.md)；跨 Windows 真实互联暂缓，日常本机使用无需 Windows 在线。
 
 从仓库根目录执行下面的命令。本仓库已经包含 Mac 原生界面、共享 Core/协议、PWA、打包脚本和测试，不需要私有仓库，也不需要 Windows 电脑在线。
 
