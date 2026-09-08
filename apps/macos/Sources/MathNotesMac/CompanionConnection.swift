@@ -57,6 +57,7 @@ enum CompanionHostAddressPreferences {
 }
 
 enum CompanionConnectionError: LocalizedError {
+    case notConfigured
     case invalidAddress
     case unsupportedScheme
     case addressContainsExtraParts
@@ -70,6 +71,8 @@ enum CompanionConnectionError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .notConfigured:
+            "请先在设置 → 设备连接中保存远程电脑地址和令牌。"
         case .invalidAddress:
             "电脑地址格式不正确，请填写 https://主机名 或 IP:端口。"
         case .unsupportedScheme:
@@ -170,6 +173,15 @@ struct CompanionConnectionClient: Sendable {
             throw CompanionConnectionError.invalidAddress
         }
         return origin.hasSuffix("/") ? String(origin.dropLast()) : origin
+    }
+
+    func workspaceIdentity(origin: String, token: String) async throws -> RemoteHostIdentity {
+        let request = try authenticatedRequest(origin: origin, token: token, path: "/api/v3/workspace/identity", accept: "application/json")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validate(response)
+        let identity = try JSONDecoder().decode(RemoteHostIdentity.self, from: data)
+        guard identity.version == 1, UUID(uuidString: identity.hostId) != nil else { throw CompanionConnectionError.invalidResponse }
+        return identity
     }
 
     func verify(origin: String, token: String) async throws -> CompanionConnectionCheck {

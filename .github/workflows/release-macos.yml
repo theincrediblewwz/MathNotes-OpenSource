@@ -1,0 +1,57 @@
+name: Release macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - deploy/releases/macos-release.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-public-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Select Apple silicon and Xcode 26
+        shell: bash
+        run: |
+          test "$(uname -m)" = "arm64"
+          XCODE_PATH="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort -V | tail -n 1)"
+          test -n "$XCODE_PATH"
+          echo "DEVELOPER_DIR=$XCODE_PATH/Contents/Developer" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run build:headless-network
+      - run: npm run test --workspace @mathnotes/core-server -- --maxWorkers=1 --minWorkers=1
+      - run: npm run test --workspace @mathnotes/pwa -- --maxWorkers=1 --minWorkers=1
+      - run: npm run test:macos:native
+      - run: npm run test:macos:ui
+      - run: npm run test:macos:preview
+      - run: npm run package:macos:native
+      - run: npm run test:macos:native-package
+      - name: Publish the Mac preview without changing the Windows latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          RELEASE_TAG="$(node -p "require('./deploy/releases/macos-release.json').tag")"
+          RELEASE_TITLE="$(node -p "require('./deploy/releases/macos-release.json').title")"
+          RELEASE_NOTES="$(node -p "require('./deploy/releases/macos-release.json').notes")"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to replace published assets."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" output/releases/MathNotes-macOS-native-arm64-*-unsigned.zip output/releases/MathNotes-macOS-native-arm64-*-unsigned.zip.sha256 --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes-file "$RELEASE_NOTES" --prerelease --latest=false

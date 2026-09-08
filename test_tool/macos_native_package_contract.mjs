@@ -18,7 +18,9 @@ assert.equal(
 assert.match(rootPackage.scripts["test:macos:app-launch"], /macos-native-app\.png local/);
 assert.match(rootPackage.scripts["test:macos:app-launch"], /macos-native-app-remote-error\.png companion/);
 assert.match(rootPackage.scripts["test:macos:app-launch"], /macos-native-phone-connection\.png phone/);
-assert.match(appLaunchSmoke, /launchArguments = \["-mathnotes\.workspace\.source\.v1", workspaceSource\]/);
+assert.match(appLaunchSmoke, /UserDefaults\(suiteName: testBundleID\)/);
+assert.match(appLaunchSmoke, /launchPreferences\.set\(workspaceSource, forKey: "mathnotes\.workspace\.source\.v1"\)/);
+assert.doesNotMatch(appLaunchSmoke, /launchArguments = \["-mathnotes\.workspace\.source\.v1"/);
 assert.match(appLaunchSmoke, /launchArguments\.append\("-mathnotes\.open-phone-connection"\)/);
 assert.match(appLaunchSmoke, /sourceMode == "phone" \? 18 : sourceMode == "companion" \? 3 : 0\.5/);
 assert.match(appLaunchSmoke, /production supervisor has a 15 second startup deadline/);
@@ -54,5 +56,15 @@ assert.match(packager, /MACOS_NATIVE_NODE_BYTES_AFTER_STRIP/);
 assert.match(packager, /Info\.plist/);
 assert.match(packager, /codesign/);
 assert.match(packager, /ditto/);
+assert.ok(packager.indexOf('"com.mathnotes.runtime.node", targetNode') > packager.indexOf('run("strip", ["-x", targetNode])'));
+assert.ok(packager.indexOf('"com.mathnotes.runtime.node", targetNode') < packager.indexOf('run(targetNode, ["--version"])'));
+assert.ok(packager.indexOf('await probeSidecar(') > packager.indexOf('["--verify", "--deep", "--strict", appPath]'));
+assert.match(packager, /MACOS_PACKAGED_RUNTIME_FAILED/);
+assert.match(packager, /100\.64\.0\.0\/10/);
+assert.doesNotMatch(packager, /<key>NSAllowsArbitraryLoads/);
+assert.match(appLaunchSmoke, /MATHNOTES_PHASE1A_ROOT/);
+assert.match(appLaunchSmoke, /MATHNOTES_COMPANION_TOKEN_FILE/);
+assert.match(appLaunchSmoke, /-mathnotes\.directory\.notesRoot\.bookmark/);
+assert.match(appLaunchSmoke, /plist\["CFBundleIdentifier"\] = testBundleID/);
 
 console.log("MACOS_NATIVE_PACKAGE_CONTRACT_OK");

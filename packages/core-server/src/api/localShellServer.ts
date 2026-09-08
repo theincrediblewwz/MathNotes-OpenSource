@@ -1,3 +1,7 @@
+import { SessionRewriteService, SessionRewriteError } from "../session/sessionRewriteService";
+import { WorkspaceSyncError } from "../sync/workspaceSyncService";
+import type { ReplicaWorkspaceService, ReplicaConnection } from "../sync/replicaWorkspaceService";
+import { WorkspaceManagementError, type WorkspaceManageInput, type WorkspaceTrashEntry } from "../catalog/workspaceManagementService";
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import Busboy from "busboy";
@@ -23,6 +27,7 @@ import type {
   SetMarkdownBlockLockResult,
   SessionMarkdownConflict,
   SessionMarkdownConflictSummary,
+  SplitLockedSelectionResult,
   UpdateMarkdownProtectedSpanInput,
   UpdateMarkdownProtectedSpanResult
 } from "../session/sessionEditService";
@@ -93,6 +98,10 @@ export type LocalShellServerOptions = {
   port: number;
   token: string;
   apiVersion?: number;
+  replicaWorkspace?: ReplicaWorkspaceService;
+  replicaHostId?: string;
+  manageWorkspace?: (input: WorkspaceManageInput) => Promise<void>;
+  listWorkspaceTrash?: () => Promise<WorkspaceTrashEntry[]>;
   readCatalog?: () => Promise<NotesCatalog>;
   createNotebook?: (input: { title: string }) => Promise<NotebookSummary>;
   createSession?: (input: { notebookId: string; title: string }) => Promise<NotebookSessionSummary>;
@@ -127,6 +136,7 @@ export type LocalShellServerOptions = {
     blockId: string;
     locked: boolean;
   }) => Promise<SetMarkdownBlockLockResult>;
+  splitLockedSelection?: (input: UpdateMarkdownProtectedSpanInput) => Promise<SplitLockedSelectionResult>;
   protectSessionBlockSpan?: (input: UpdateMarkdownProtectedSpanInput) => Promise<UpdateMarkdownProtectedSpanResult>;
   unlockSessionBlockSpan?: (input: UpdateMarkdownProtectedSpanInput) => Promise<UpdateMarkdownProtectedSpanResult>;
   reorderSessionBlocks?: (input: ReorderSessionBlocksInput) => Promise<ReadonlySessionManifest>;
@@ -171,6 +181,7 @@ export type LocalShellServerOptions = {
     sessionId: string;
   }) => CompanionUploadActivity | undefined | Promise<CompanionUploadActivity | undefined>;
   sessionAssistant?: SessionAssistantService;
+  sessionRewrite?: SessionRewriteService;
   sessionSelectionEdit?: SessionSelectionEditService;
   exportSessionMarkdown?: (input: {
     notebookId: string;
@@ -257,6 +268,43 @@ export class LocalShellServer {
         if (!this.options.readCatalog) return writeJson(response, 503, { error: "catalog_unavailable" });
         writeJson(response, 200, await this.options.readCatalog());
         return;
+      }
+      if (route.id.startsWith("local.replica.")) {
+        const replica = this.options.replicaWorkspace;
+        if (!replica) return writeJson(response, 503, { error: "replica_workspace_unavailable" });
+        if (route.id === "local.replica.status") return writeJson(response, 200, await replica.status());
+        if (route.id === "local.replica.conflicts") return writeJson(response, 200, {
+          conflicts: await replica.conflicts(), catalogConflicts: await replica.catalogConflicts()
+        });
+        const body = await readJsonBody(request, MAX_WORKSPACE_CREATE_BODY_BYTES);
+        if (route.id === "local.replica.sync") {
+          const connection = body as ReplicaConnection;
+          if (!connection || typeof connection.origin !== "string" || typeof connection.token !== "string" || !connection.token ||
+              connection.hostId !== this.options.replicaHostId) throw new BodyError("invalid_replica_connection", 400);
+          return writeJson(response, 200, await replica.sync(connection));
+        }
+        if (route.id === "local.replica.resolve") {
+          if (body && typeof body === "object" && "catalogOperationId" in body) {
+            if (typeof body.catalogOperationId !== "string" || !("choice" in body) || body.choice !== "remote") throw new BodyError("invalid_resolution", 400);
+            return writeJson(response, 200, await replica.resolveCatalog({ catalogOperationId: body.catalogOperationId, choice: "remote" }));
+          }
+          await replica.resolve(body as Parameters<ReplicaWorkspaceService["resolve"]>[0]);
+          return writeJson(response, 200, { ok: true });
+        }
+      }
+      if (route.id === "local.workspace.trash") {
+        if (!this.options.listWorkspaceTrash) return writeJson(response, 503, { error: "workspace_write_unavailable" });
+        return writeJson(response, 200, { entries: await this.options.listWorkspaceTrash() });
+      }
+      if (route.id === "local.workspace.manage") {
+        if (!this.options.manageWorkspace) return writeJson(response, 503, { error: "workspace_write_unavailable" });
+        const body = await readJsonBody(request, MAX_WORKSPACE_CREATE_BODY_BYTES);
+        if (!body || typeof body !== "object" || !("action" in body) ||
+            !["rename", "trash", "restore"].includes(String(body.action)) || !("notebookId" in body) ||
+            typeof body.notebookId !== "string" ||
+            ("title" in body && typeof body.title !== "string")) throw new BodyError("invalid_workspace_body", 400);
+        await this.options.manageWorkspace(body as WorkspaceManageInput);
+        return writeJson(response, 200, { ok: true });
       }
       if (route.id === "local.notes.backup") {
         if (!this.options.createNotesBackup) return writeJson(response, 503, { error: "backup_unavailable" });
@@ -490,8 +538,8 @@ export class LocalShellServer {
         }));
         return;
       }
-      if (route.id === "local.session.block.span.protect" || route.id === "local.session.block.span.unlock") {
-        const updateSpan = route.id === "local.session.block.span.protect"
+      if (route.id === "local.session.block.split-lock" || route.id === "local.session.block.span.protect" || route.id === "local.session.block.span.unlock") {
+        const updateSpan = route.id === "local.session.block.split-lock" ? this.options.splitLockedSelection : route.id === "local.session.block.span.protect"
           ? this.options.protectSessionBlockSpan
           : this.options.unlockSessionBlockSpan;
         if (!updateSpan) return writeJson(response, 503, { error: "session_write_unavailable" });
@@ -855,6 +903,33 @@ export class LocalShellServer {
         }
         return;
       }
+      if (route.id === "local.session.rewrite.list") {
+        if (!this.options.sessionRewrite) return writeJson(response, 503, { error: "assistant_unavailable" });
+        return writeJson(response, 200, { version: 1, proposals: await this.options.sessionRewrite.list({ notebookId, sessionId }) });
+      }
+      if (route.id === "local.session.rewrite.propose" || route.id === "local.session.rewrite.apply" || route.id === "local.session.rewrite.cancel") {
+        if (!this.options.sessionRewrite) return writeJson(response, 503, { error: "assistant_unavailable" });
+        const body = await readJsonBody(request, MAX_ASSISTANT_BODY_BYTES);
+        if (!body || typeof body !== "object") throw new BodyError("invalid_rewrite_body", 400);
+        const value = body as Record<string, unknown>;
+        if (route.id === "local.session.rewrite.propose") {
+          if (typeof value.instruction !== "string" || value.instruction.length > 16000 ||
+            (value.blockId !== undefined && (typeof value.blockId !== "string" || !isSafeLocalIdentifier(value.blockId)))) {
+            throw new BodyError("invalid_rewrite_body", 400);
+          }
+          const abort = new AbortController();
+          const disconnected = () => { if (!response.writableEnded) abort.abort(); };
+          response.once("close", disconnected);
+          try {
+            return writeJson(response, 200, await this.options.sessionRewrite.propose({ notebookId, sessionId,
+              instruction: value.instruction, blockId: value.blockId as string | undefined, abortSignal: abort.signal }));
+          } finally { response.off("close", disconnected); }
+        }
+        if (typeof value.proposalId !== "string" || !/^rewrite_[0-9a-f-]{36}$/.test(value.proposalId)) throw new BodyError("invalid_rewrite_body", 400);
+        const input = { notebookId, sessionId, proposalId: value.proposalId };
+        return writeJson(response, 200, route.id === "local.session.rewrite.apply"
+          ? await this.options.sessionRewrite.apply(input) : await this.options.sessionRewrite.cancel(input));
+      }
       if (route.id === "local.session.selection-edit.propose") {
         if (!this.options.sessionSelectionEdit) return writeJson(response, 503, { error: "assistant_unavailable" });
         const body = await readJsonBody(request, MAX_ASSISTANT_BODY_BYTES);
@@ -928,11 +1003,11 @@ export class LocalShellServer {
         ? workspaceCommandStatus(error)
         : error instanceof RuntimeProviderConfigurationError || error instanceof QueryError
         ? 400
-        : error instanceof SessionReadError || error instanceof SessionEditError || error instanceof SessionImageImportError ||
+        : error instanceof WorkspaceSyncError || error instanceof WorkspaceManagementError || error instanceof SessionReadError || error instanceof SessionEditError || error instanceof SessionImageImportError ||
           error instanceof SessionPdfImportError ||
           error instanceof SessionPdfRecognitionBatchError ||
           error instanceof SessionRecognitionError || error instanceof SessionAssistantError ||
-          error instanceof SessionSelectionEditError ||
+          error instanceof SessionSelectionEditError || error instanceof SessionRewriteError ||
           error instanceof SessionExportError ||
           error instanceof SessionBlockOrganizeError || error instanceof BodyError
           ? error.statusCode
@@ -942,8 +1017,8 @@ export class LocalShellServer {
           error instanceof SessionEditError || error instanceof SessionImageImportError || error instanceof SessionPdfImportError ||
           error instanceof SessionPdfRecognitionBatchError ||
           error instanceof SessionExportError || error instanceof RuntimeProviderConfigurationError ||
-          error instanceof SessionAssistantError || error instanceof SessionSelectionEditError || error instanceof SessionBlockOrganizeError ||
-          error instanceof WorkspaceCommandError ? error.code :
+          error instanceof SessionAssistantError || error instanceof SessionSelectionEditError || error instanceof SessionRewriteError || error instanceof SessionBlockOrganizeError ||
+          error instanceof WorkspaceCommandError || error instanceof WorkspaceManagementError || error instanceof WorkspaceSyncError ? error.code :
           error instanceof Error ? error.message : "invalid_request",
         ...(error instanceof SessionEditError && error.details?.conflictId
           ? { conflictId: error.details.conflictId }

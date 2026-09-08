@@ -39,6 +39,7 @@ struct MathNotesMacApp: App {
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
+            SessionFindCommands()
             CommandGroup(replacing: .newItem) { }
             CommandMenu("笔记") {
                 Button("刷新目录") {

@@ -1,3 +1,8 @@
+import { SessionRewriteService } from "../session/sessionRewriteService";
+import { ReplicaWorkspaceService } from "../sync/replicaWorkspaceService";
+import { WorkspaceCatalogSyncService } from "../sync/workspaceCatalogSyncService";
+import { WorkspaceSyncService } from "../sync/workspaceSyncService";
+import { WorkspaceManagementService } from "../catalog/workspaceManagementService";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -77,6 +82,7 @@ export type StartMacosSidecarOptions = Readonly<{
   providerFactory?: ProviderFactory;
   providerRegistry?: RuntimeProviderRegistry;
   companionHost?: MacosCompanionHostOptions;
+  replicaHostId?: string;
 }>;
 
 export type RunningMacosSidecar = Readonly<{
@@ -132,6 +138,8 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
     () => environment.providerFactory.createAssistantProvider(),
     sessionWrites
   );
+  const sessionRewrite = new SessionRewriteService(options.notesRootDir,
+    () => environment.providerFactory.createAssistantProvider(), sessionWrites);
   const sessionSelectionEdit = new SessionSelectionEditService(
     options.notesRootDir,
     () => environment.providerFactory.createAssistantProvider(),
@@ -154,28 +162,56 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
       })
     : undefined;
   await deviceIdentityService?.start();
+  // Preparing a QR is an authenticated, explicit action on the trusted Mac.
+  // Bootstrap the receiving location here, never in the public verify/exchange
+  // routes. Share concurrent preparation so QR refreshes cannot create duplicates.
+  let receivingSessionPreparation: Promise<void> | undefined;
+  const prepareReceivingSession = (): Promise<void> => {
+    receivingSessionPreparation ??= (async () => {
+      const catalog = await readNotesCatalog({ rootDir: options.notesRootDir });
+      if (catalog.notebooks.some((notebook) => notebook.sessions.length > 0)) return;
+      const notebook = catalog.notebooks[0] ?? await createWorkspaceNotebook({
+        rootDir: options.notesRootDir, title: "手机收件箱"
+      });
+      await createWorkspaceSession({
+        rootDir: options.notesRootDir, notebookId: notebook.notebookId, title: "手机照片"
+      });
+    })().finally(() => { receivingSessionPreparation = undefined; });
+    return receivingSessionPreparation;
+  };
+  const workspaceManager = new WorkspaceManagementService(options.notesRootDir, sessionWrites);
+  const replicaWorkspace = options.replicaHostId
+    ? new ReplicaWorkspaceService(options.notesRootDir, join(options.userDataDir, "replica-state"), sessionWrites) : undefined;
+  await replicaWorkspace?.recover();
   const localShell = new LocalShellServer({
+    replicaHostId: options.replicaHostId,
+    replicaWorkspace,
+    manageWorkspace: (input) => replicaWorkspace ? replicaWorkspace.manageWorkspace(input) : workspaceManager.manage(input),
+    listWorkspaceTrash: () => workspaceManager.listTrash(),
     host: "127.0.0.1",
     port: 0,
     token: options.token,
     apiVersion: MACOS_SIDECAR_API_VERSION,
     readCatalog: () => readNotesCatalog({ rootDir: options.notesRootDir }),
-    createNotebook: (input) => createWorkspaceNotebook({
+    createNotebook: (input) => replicaWorkspace ? replicaWorkspace.createNotebook(input.title) : sessionWrites.runWorkspace(() => createWorkspaceNotebook({
       rootDir: options.notesRootDir,
       title: input.title
-    }),
-    createSession: (input) => createWorkspaceSession({
+    })),
+    createSession: (input) => replicaWorkspace ? replicaWorkspace.createSession(input.notebookId, input.title) : sessionWrites.runWorkspace(() => createWorkspaceSession({
       rootDir: options.notesRootDir,
       notebookId: input.notebookId,
       title: input.title
-    }),
+    })),
     createNotesBackup: (input) => createNotesBackup({
       notesRootDir: options.notesRootDir,
       destinationParentDir: input.destinationParentDir,
       appVersion: options.appVersion
     }),
     createCompanionPairingChallenge: deviceIdentityService
-      ? () => deviceIdentityService.createExclusiveChallenge()
+      ? async () => {
+        await prepareReceivingSession();
+        return deviceIdentityService.createExclusiveChallenge();
+      }
       : undefined,
     readSessionManifest: (input) => readReadonlySessionManifest({ rootDir: options.notesRootDir, ...input }),
     readSessionBlock: (input) => readReadonlySessionBlock({ rootDir: options.notesRootDir, ...input }),
@@ -187,6 +223,7 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
     appendSessionMarkdown: (input) => sessionEditor.appendMarkdownBlock(input),
     saveSessionBlock: (input) => sessionEditor.saveMarkdownBlock(input),
     setSessionBlockLock: (input) => sessionEditor.setMarkdownBlockLock(input),
+    splitLockedSelection: (input) => sessionEditor.splitLockedSelection(input),
     protectSessionBlockSpan: (input) => sessionEditor.protectMarkdownSelection(input),
     unlockSessionBlockSpan: (input) => sessionEditor.unlockMarkdownProtectedSelection(input),
     reorderSessionBlocks: async (input) => {
@@ -217,6 +254,7 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
     readSessionCompanionActivity: (input) => companionActivityStore.read(input),
     sessionAssistant,
     sessionSelectionEdit,
+    sessionRewrite,
     providerRegistry,
     readPromptTemplates: () => guidanceSettings.readPromptTemplates(),
     savePromptTemplates: (input) => guidanceSettings.savePromptTemplates(input),
@@ -245,6 +283,7 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
   let companionHost = options.companionHost && deviceIdentityService
     ? createCompanionHost({
         options,
+        sessionWrites,
         sessionImageImporter,
         sessionPdfImporter,
         sessionRecognition,
@@ -270,7 +309,8 @@ export async function startMacosSidecar(options: StartMacosSidecarOptions): Prom
             ...options,
             companionHost: { ...options.companionHost!, port: 0 }
           },
-          sessionImageImporter,
+          sessionWrites,
+        sessionImageImporter,
           sessionPdfImporter,
           sessionRecognition,
           companionStore,
@@ -322,6 +362,7 @@ function isAddressInUse(error: unknown): boolean {
 
 function createCompanionHost(input: {
   options: StartMacosSidecarOptions;
+  sessionWrites: SessionWriteCoordinator;
   sessionImageImporter: SessionImageImportService;
   sessionPdfImporter: SessionPdfImportService;
   sessionRecognition: SessionRecognitionService;
@@ -355,6 +396,9 @@ function createCompanionHost(input: {
     importer: input.sessionPdfImporter
   });
   return new NetworkApiServer({
+    workspaceCatalog: new WorkspaceCatalogSyncService(input.options.notesRootDir, join(input.options.userDataDir, "workspace-sync"), input.sessionWrites),
+    workspaceSync: new WorkspaceSyncService(input.options.notesRootDir, join(input.options.userDataDir, "workspace-sync"),
+      (n, s, op) => input.sessionWrites.run(n, s, op)),
     host: "0.0.0.0",
     port: companionOptions.port ?? 1051,
     token: companionOptions.token,

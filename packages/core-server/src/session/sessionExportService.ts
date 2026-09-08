@@ -1,3 +1,4 @@
+import { materializeOriginalImageMarkers, originalImagePath } from "../render/portableMarkdown";
 import { createHash, randomUUID } from "node:crypto";
 import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, posix, resolve } from "node:path";
@@ -84,7 +85,7 @@ export async function exportSessionMarkdown(args: ExportSessionMarkdownArgs): Pr
       assertInside(sessionDir, markdownPath);
       return readFile(markdownPath, "utf8");
     }));
-    const joined = pieces.join("");
+    const joined = materializeOriginalImageMarkers(pieces.join(""), originalImagePath(group[0]));
     const markdown = group[0].continuationGroup ? joined : joined.trimEnd();
     chunks.push(args.mathCompatibility === "internal" ? markdown : normalizeMathForPortableMarkdown(markdown));
   }
@@ -307,7 +308,7 @@ async function copyReferencedAssets(args: { sessionDir: string; packageDir: stri
         checked = resolve(checked, part);
         if ((await lstat(checked)).isSymbolicLink()) { unsafe = true; break; }
       }
-      if (unsafe) { missingAssets.push(assetPath); continue; }
+      if (unsafe || !(await lstat(sourcePath)).isFile()) { missingAssets.push(assetPath); continue; }
       await copyFile(sourcePath, targetPath);
       copiedAssets.push(assetPath);
     } catch (error) {

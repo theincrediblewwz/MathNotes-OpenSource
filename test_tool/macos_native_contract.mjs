@@ -20,6 +20,7 @@ try {
     path.join(root, "apps", "macos", "Sources", "MathNotesMac", "AiGuidanceModels.swift"),
     path.join(root, "apps", "macos", "Sources", "MathNotesMac", "MacImageEditingModels.swift"),
     path.join(root, "apps", "macos", "Sources", "MathNotesMac", "LocalShellClient.swift"),
+    path.join(root, "apps", "macos", "Sources", "MathNotesMac", "RemoteHostProfile.swift"),
     path.join(root, "apps", "macos", "Sources", "MathNotesMac", "CompanionHostAutomation.swift"),
     path.join(root, "apps", "macos", "Sources", "MathNotesMac", "CompanionLanPairing.swift"),
     path.join(root, "apps", "macos", "ContractTests", "main.swift"),

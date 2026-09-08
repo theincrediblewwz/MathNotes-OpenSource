@@ -24,6 +24,14 @@ final class SidecarSupervisor: ObservableObject {
     private var activeReady: SidecarReadyMessage?
     private var activeToken: String?
     private var notesRootAccessURL: URL?
+    private var launchGeneration = UUID()
+    private let configurationOverride: SidecarConfiguration?
+
+    init(configuration: SidecarConfiguration? = nil) {
+        configurationOverride = configuration
+    }
+
+    var instanceID: String? { activeReady?.instanceId }
 
     func startIfNeeded() {
         guard state == .idle else { return }
@@ -32,17 +40,20 @@ final class SidecarSupervisor: ObservableObject {
 
     func start() {
         stop()
+        let generation = launchGeneration
         state = .starting
-        let notesRootURL = DirectoryBookmarkStore.resolvedURL(for: .notesRoot)
+        let notesRootURL = configurationOverride == nil ? DirectoryBookmarkStore.resolvedURL(for: .notesRoot) : nil
         if let notesRootURL, notesRootURL.startAccessingSecurityScopedResource() {
             notesRootAccessURL = notesRootURL
         }
         launchTask = Task { [weak self] in
-            guard let self else { return }
+            guard let self, self.launchGeneration == generation, !Task.isCancelled else { return }
             do {
-                let configuration = try SidecarConfiguration.development(notesRootURL: notesRootURL)
+                let configuration = try self.configurationOverride ?? SidecarConfiguration.development(notesRootURL: notesRootURL)
                 let ready = try await self.launch(configuration)
                 _ = try await self.client.health(ready: ready, token: configuration.token)
+                try Task.checkCancellation()
+                guard self.launchGeneration == generation else { return }
                 self.launchDeadlineTask?.cancel()
                 self.launchDeadlineTask = nil
                 self.activeReady = ready
@@ -55,13 +66,15 @@ final class SidecarSupervisor: ObservableObject {
                 )
                 await self.loadCatalog(ready: ready, token: configuration.token)
             } catch is CancellationError {
+                guard self.launchGeneration == generation else { return }
                 self.launchDeadlineTask?.cancel()
                 self.launchDeadlineTask = nil
                 if case .starting = self.state { self.state = .idle }
             } catch {
+                guard self.launchGeneration == generation else { return }
                 self.launchDeadlineTask?.cancel()
                 self.launchDeadlineTask = nil
-                self.process?.terminate()
+                if self.process?.isRunning == true { self.process?.terminate() }
                 self.process = nil
                 if case .starting = self.state {
                     self.state = .failed(error.localizedDescription)
@@ -74,7 +87,7 @@ final class SidecarSupervisor: ObservableObject {
             } catch {
                 return
             }
-            guard let self, case .starting = self.state else { return }
+            guard let self, self.launchGeneration == generation, case .starting = self.state else { return }
             self.launchTask?.cancel()
             let timedOutProcess = self.process
             self.process = nil
@@ -131,6 +144,58 @@ final class SidecarSupervisor: ObservableObject {
         launchTask = Task { [weak self] in
             await self?.loadCatalog(ready: ready, token: token)
         }
+    }
+
+    @Published private(set) var replicaRefreshGeneration = 0
+
+    func synchronizeReplica(origin: String, hostToken: String, hostId: String) async throws -> ReplicaSyncResult {
+        let connection = try activeConnection()
+        let result = try await client.synchronizeReplica(ready: connection.ready, token: connection.token,
+            input: ReplicaSyncRequest(origin: origin, token: hostToken, hostId: hostId))
+        await loadCatalog(ready: connection.ready, token: connection.token)
+        replicaRefreshGeneration &+= 1
+        return result
+    }
+
+    func replicaStatus() async throws -> ReplicaSyncResult {
+        let connection = try activeConnection()
+        return try await client.replicaStatus(ready: connection.ready, token: connection.token)
+    }
+
+    func replicaConflicts() async throws -> [ReplicaConflictEntry] {
+        let connection = try activeConnection()
+        return try await client.replicaConflicts(ready: connection.ready, token: connection.token)
+    }
+
+    func replicaCatalogConflicts() async throws -> [ReplicaCatalogConflict] {
+        let connection = try activeConnection()
+        return try await client.replicaCatalogConflicts(ready: connection.ready, token: connection.token)
+    }
+
+    func resolveReplicaCatalog(operationId: String) async throws -> ReplicaCatalogResolutionResult {
+        let connection = try activeConnection()
+        let result = try await client.resolveReplicaCatalog(ready: connection.ready, token: connection.token, operationId: operationId)
+        await loadCatalog(ready: connection.ready, token: connection.token)
+        replicaRefreshGeneration &+= 1
+        return result
+    }
+
+    func resolveReplica(_ input: ReplicaResolveRequest) async throws {
+        let connection = try activeConnection()
+        try await client.resolveReplica(ready: connection.ready, token: connection.token, input: input)
+        await loadCatalog(ready: connection.ready, token: connection.token)
+        replicaRefreshGeneration &+= 1
+    }
+
+    func manageWorkspace(_ input: WorkspaceManageRequest) async throws {
+        let connection = try activeConnection()
+        try await client.manageWorkspace(ready: connection.ready, token: connection.token, input: input)
+        await loadCatalog(ready: connection.ready, token: connection.token)
+    }
+
+    func workspaceTrash() async throws -> [WorkspaceTrashEntry] {
+        let connection = try activeConnection()
+        return try await client.workspaceTrash(ready: connection.ready, token: connection.token)
     }
 
     func createNotebook(title: String) async throws -> CreatedNotebook {
@@ -562,6 +627,26 @@ final class SidecarSupervisor: ObservableObject {
         )
     }
 
+    func sessionRewrites(_ session: SessionCatalogItem) async throws -> [SessionRewriteProposal] {
+        let connection = try activeConnection()
+        return try await client.sessionRewrites(ready: connection.ready, token: connection.token,
+            notebookId: session.notebookId, sessionId: session.sessionId)
+    }
+
+    func sessionRewrite(_ session: SessionCatalogItem, action: String, input: SessionRewriteRequest) async throws -> SessionRewriteProposal {
+        let connection = try activeConnection()
+        return try await client.sessionRewrite(ready: connection.ready, token: connection.token,
+            notebookId: session.notebookId, sessionId: session.sessionId, action: action, input: input)
+    }
+
+    func splitLockedSelection(_ session: SessionCatalogItem, blockId: String, baseRevision: String,
+                              selection: SelectionEditTextRange) async throws -> SplitLockedSelectionResponse {
+        let connection = try activeConnection()
+        return try await client.splitLockedSelection(ready: connection.ready, token: connection.token,
+            notebookId: session.notebookId, sessionId: session.sessionId, blockId: blockId,
+            baseRevision: baseRevision, selection: selection)
+    }
+
     func protectMarkdownSelection(
         _ session: SessionCatalogItem,
         blockId: String,
@@ -900,6 +985,7 @@ final class SidecarSupervisor: ObservableObject {
             token: connection.token
         )
         companionPairingChallenge = challenge
+        await loadCatalog(ready: connection.ready, token: connection.token)
         return challenge
     }
 
@@ -912,6 +998,7 @@ final class SidecarSupervisor: ObservableObject {
     }
 
     func stop() {
+        launchGeneration = UUID()
         launchTask?.cancel()
         launchTask = nil
         launchDeadlineTask?.cancel()
@@ -933,7 +1020,7 @@ final class SidecarSupervisor: ObservableObject {
             self.notesRootAccessURL = nil
         }
         guard let process else {
-            if state != .starting { state = .idle }
+            state = .idle
             return
         }
         state = .stopping
@@ -1127,14 +1214,22 @@ final class SidecarSupervisor: ObservableObject {
                 self.process = nil
                 if case .stopping = self.state {
                     self.state = .idle
-                } else if case .ready = self.state {
-                    self.state = .failed("本机连接服务已意外退出，请重试。")
+                } else if self.state == .starting || self.activeReady != nil {
+                    self.state = .failed(SidecarProcessExitError(process: terminated).localizedDescription)
                 }
             }
         }
         try process.run()
         self.process = process
-        return try await Self.readReady(from: stdout.fileHandleForReading)
+        do {
+            return try await Self.readReady(from: stdout.fileHandleForReading)
+        } catch {
+            // An empty ready pipe is often a process failure, not malformed JSON.
+            // Preserve the OS exit status even if the termination callback has
+            // already cleared the supervisor's reference to this process.
+            if !process.isRunning { throw SidecarProcessExitError(process: process) }
+            throw error
+        }
     }
 
     nonisolated static func readReady(from handle: FileHandle) async throws -> SidecarReadyMessage {

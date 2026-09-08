@@ -57,6 +57,8 @@ struct SessionAssistantWindowContext {
     let selectionEdit: SessionAssistantSelectionEditContext?
     let onOpenRelatedSource: (SessionAssistantRelatedSource) -> Void
     let onSessionChanged: () async -> Void
+    var workspaceSupervisor: SidecarSupervisor? = nil
+    var onPrepareRewrite: (() async throws -> Void)? = nil
 }
 
 @MainActor
@@ -86,11 +88,12 @@ struct SessionAssistantWindowRoot: View {
                     activeBlockID: context.activeBlockID,
                     selectedText: context.selectedText,
                     selectedTextBlockID: context.selectedTextBlockID,
-                    supervisor: supervisor,
+                    supervisor: context.workspaceSupervisor ?? supervisor,
                     selectionEditContext: context.selectionEdit,
                     onOpenRelatedSource: context.onOpenRelatedSource,
                     onSessionChanged: context.onSessionChanged,
-                    onClose: { dismissWindow(id: "session-assistant") }
+                    onClose: { dismissWindow(id: "session-assistant") },
+                    onPrepareRewrite: context.onPrepareRewrite
                 )
             } else {
                 ContentUnavailableView(

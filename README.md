@@ -4,7 +4,9 @@ MathNotes 是一个 GPLv3、本地优先的数学笔记项目，包含 Windows�
 
 **最新发行版：0.3.4 试用版。当前 Windows / Android / PWA 开发版本：0.3.4。**
 
-Windows 最新测试构建为 **0.3.4「Mac 目录同步测试版」**：在正文、素材和草稿保护之外，增加远程新建笔记本/笔记、改名、移入废纸篓及恢复，并修复特殊文件名图片和删除后重启的问题。设置中显示构建编号，便于区分旧包。[下载 Windows 目录同步测试包](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/windows-catalog-sync-20260908) · [目录接口与逐项验收表](deploy/windows-mac-sync/CATALOG_SYNC_V1.md) · [原正文同步说明](deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md)。这次没有重新发布 Android、PWA 或 Mac 安装包；真实 Mac 跨机验收仍待完成。
+Windows 最新测试构建为 **0.3.4「Mac 目录同步测试版」**：在正文、素材和草稿保护之外，增加远程新建笔记本/笔记、改名、移入废纸篓及恢复，并修复特殊文件名图片和删除后重启的问题。设置中显示构建编号，便于区分旧包。[下载 Windows 目录同步测试包](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/windows-catalog-sync-20260908) · [目录接口与逐项验收表](deploy/windows-mac-sync/CATALOG_SYNC_V1.md) · [原正文同步说明](deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md)。该 Windows 发行版没有重新发布 Android/PWA；真实 Mac 跨机验收仍待完成。
+
+**Mac 原生预览版 0.3.4** 已集成 PWA 0.3.4，面向 Apple silicon、macOS 14+，本机实际验收为 macOS 26。修复手机后台启动、连续预览，并新增紧凑 UI、笔记管理、固定块、AI 修改、原图内嵌与阅读工具。**跨 Windows 同步尚待真实跨机验证**，本次以独立本机使用为主。[下载 Mac 预览版](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/macos-v0.3.4) · [Mac 发布说明](deploy/releases/macos-v0.3.4.md) · [接续开发与验收状态](apps/macos/RELEASE_STATUS.md)。
 
 [下载最新发行版](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/latest) · [0.3.4 固定发行页](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/v0.3.4) · [逐项操作验收表](deploy/releases/v0.3.4-acceptance.md)
 
@@ -15,9 +17,9 @@ Windows 最新测试构建为 **0.3.4「Mac 目录同步测试版」**：在正�
 | Windows | 0.3.4 | 已内置新版 PWA 的便携 ZIP，解压后运行 MathNotes.exe |
 | Android | 0.3.4，versionCode 17 | APK，沿用既有测试签名 |
 | PWA | 0.3.4 | 独立网页/源码更新 ZIP，附公开集成说明 |
-| macOS | 本次没有新安装包 | 提供 Mac 源码和本地构建文档 |
+| macOS | 0.3.4 原生预览版 | Apple silicon ZIP，内置 PWA；ad-hoc 签名，未公证 |
 
-本版提供 Windows 便携 ZIP、Android APK 和独立 PWA 更新包。Windows 为未签名测试包，Android 沿用既有测试签名；覆盖安装前请备份笔记。Mac 源码与本地开发文档公开，安装包需在 macOS 上构建。
+本版提供 Windows 便携 ZIP、Android APK 和独立 PWA 更新包。Windows 为未签名测试包，Android 沿用既有测试签名；覆盖安装前请备份笔记。Mac 安装包在独立的 macos-v0.3.4 发行页提供，详见其安装说明。
 
 0.3.4 修复了块拖动原地放下误报导入、重新识别未实际执行，并补齐已上传素材预览与正文定位、左上角可滚动气泡目录、阅读底栏显隐和画笔内矩形遮盖。各包的版本、SHA-256、验证范围与已知限制以该发行页为准。
 
@@ -40,7 +42,7 @@ Windows 最新测试构建为 **0.3.4「Mac 目录同步测试版」**：在正�
 | 三端 | 图形识别处显示完整处理后照片、点开放大 | 用含图形的照片识别，检查正文图片 | 图片标记、绑定与渲染已测；实际模型结果可继续反馈 |
 | Android | 重启/恢复网络续传、暂停保护 | 排队后正常重启；断网后恢复；已暂停项应保持暂停 | 正常重启与两轮无进程联网恢复通过，约 6.1 秒收到测试回执；厂商后台策略待真机复测 |
 
-仍未验证的项目没有算作完成：Vivo 厂商高倍率画质、真实手机大照片处理耗时、真实大库启动表现、Safari/Mac 真机与新的 Mac 安装包。遮盖的 8 张盲测没有发现误判，但不能保证所有模型都不会误判。
+仍未验证的项目没有算作完成：Vivo 厂商高倍率画质、真实手机大照片处理耗时、真实大库启动表现、不同手机的 Safari 行为及真实 Mac/Windows 跨机互联。遮盖的 8 张盲测没有发现误判，但不能保证所有模型都不会误判。
 
 ## 核心闭环
 
@@ -64,7 +66,7 @@ Windows 最新测试构建为 **0.3.4「Mac 目录同步测试版」**：在正�
 需要 Node.js 22+、npm 与 Git。Windows 桌面开发还需要 Windows 11；Android 构建需要 JDK 17 与 Android SDK 34。
 
 ```powershell
-git clone --branch codex/release-v0.3.4-integration https://github.com/theincrediblewwz/MathNotes-OpenSource.git
+git clone --branch main https://github.com/theincrediblewwz/MathNotes-OpenSource.git
 cd MathNotes-OpenSource
 npm ci
 ```
@@ -100,7 +102,7 @@ Android 调试包：
 npm run build:android
 ```
 
-macOS 原生端必须在真实 Apple silicon Mac 与完整 Xcode 上构建：
+macOS 原生端必须在真实 Apple silicon Mac 与 Swift 6 工具链 上构建：
 
 在 Mac 上开发或排查“连接手机”启动失败，请先读 [Mac 本地开发](apps/macos/DEVELOPMENT.md)。应克隆整个仓库；Swift 界面依赖共享 Core、协议与 PWA，不能只复制 `apps/macos`。
 

@@ -1,9 +1,10 @@
-import { readFile, stat } from "node:fs/promises";
-import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat, readFile, stat } from "node:fs/promises";
+import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { markdownContinuationGroups, type SessionRecord } from "@mathnotes/shared";
 import { CompanionAssetError, type CompanionAsset, type CompanionSessionAsset, type CompanionSessionSnapshot } from "../api/networkApiContracts";
-import { renderPortableMarkdown } from "../render/portableMarkdown";
+import { renderPortableMarkdown, originalImagePath } from "../render/portableMarkdown";
+import { sessionAssetPathFromMarkdown } from "../domain/sessionAssetPath";
 import { COMPANION_READER_STYLE } from "./companionReaderStyle";
 
 export interface CompanionSessionStore {
@@ -49,7 +50,7 @@ export async function buildCompanionSessionSnapshot(args: {
       assertInside(sessionDir, path);
       return readFile(path, "utf8");
     }))).join("");
-    const rendered = await renderCompanionMarkdown({ markdown, markdownPath, sessionDir, assets, blockId: block.id, continuationBlockIds: group.slice(1).map(member => member.id) });
+    const rendered = await renderCompanionMarkdown({ markdown, markdownPath, sessionDir, assets, sourceImagePath: originalImagePath(block), blockId: block.id, continuationBlockIds: group.slice(1).map(member => member.id) });
     const aliases = group.slice(1).map(member => `<span id="mathnotes-block-${escapeAttribute(member.id)}" data-block-id="${escapeAttribute(member.id)}"></span>`).join("");
     sections.push(`<section class="note-block" id="mathnotes-block-${escapeAttribute(block.id)}" data-block-id="${escapeAttribute(block.id)}">${aliases}${rendered}</section>`);
     markdownSections.push(group.map(member => `<!-- block:${member.id} source:${member.source} -->`).join("\n") + "\n" + (block.continuationGroup ? markdown : markdown.trimEnd()));
@@ -93,6 +94,7 @@ export async function readCompanionAsset(args: {
     throw new CompanionAssetError("invalid_asset_path", 400);
   }
   try {
+    await assertAssetFile(sessionDir, target);
     return { bytes: await readFile(target), mimeType: assetMimeType(target) };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -109,24 +111,25 @@ async function renderCompanionMarkdown(args: {
   assets: Map<string, CompanionSessionAsset>;
   blockId: string;
   continuationBlockIds?: string[];
+  sourceImagePath?: string;
 }): Promise<string> {
   const rendered = await renderPortableMarkdown({
     markdown: args.markdown,
+    sourceImagePath: args.sourceImagePath,
     rewriteImage: async (source) => {
-      let decoded: string;
-      try { decoded = decodeURIComponent(source); }
-      catch { return { source: "", missing: true }; }
-      if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(decoded) || decoded.includes("\0") || isAbsolute(decoded)) return { source: "", missing: true };
-      const target = resolve(dirname(args.markdownPath), decoded);
-      assertInside(resolve(args.sessionDir, "assets"), target);
+      const assetPath = sessionAssetPathFromMarkdown(source);
+      if (!assetPath) {
+        if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(source)) return { source: "", missing: true };
+        throw new Error("Companion asset path escapes the session root");
+      }
+      const target = resolve(args.sessionDir, assetPath);
       try {
-        await stat(target);
-        const assetPath = relative(args.sessionDir, target).replaceAll("\\", "/");
+        await assertAssetFile(args.sessionDir, target);
         const id = createHash("sha256").update(assetPath).digest("hex").slice(0, 24);
         args.assets.set(id, { id, path: assetPath, mimeType: assetMimeType(target) });
         return { source: `mathnotes-companion-asset://${id}` };
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof CompanionAssetError)) throw error;
         return { source: "", missing: true };
       }
     }
@@ -140,6 +143,18 @@ async function renderCompanionMarkdown(args: {
     anchored.add(assetId);
     return aliases + image.replace(/^<img\b/i, `<img${anchor} data-companion-asset-id="${assetId}"`);
   });
+}
+
+async function assertAssetFile(sessionDir: string, target: string): Promise<void> {
+  assertInside(resolve(sessionDir, "assets"), target);
+  let current = sessionDir;
+  for (const part of relative(sessionDir, target).split(sep)) {
+    current = resolve(current, part);
+    const entry = await lstat(current);
+    if (entry.isSymbolicLink() || (current === target && !entry.isFile())) {
+      throw new CompanionAssetError("invalid_asset_path", 400);
+    }
+  }
 }
 
 function companionHtmlDocument(title: string, body: string): string {

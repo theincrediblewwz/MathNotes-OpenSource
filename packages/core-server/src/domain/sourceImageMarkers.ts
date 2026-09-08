@@ -1,6 +1,8 @@
 import MarkdownIt from "markdown-it";
+import type { BlockRef } from "@mathnotes/shared";
 import { encodeMarkdownAssetPath, sessionAssetPathFromMarkdown } from "./sessionAssetPath";
 
+// Same marker and binding API as the Windows 0.3.4 integration branch.
 export const SOURCE_IMAGE_MARKER = "[[mathnotes:source-image]]";
 export const sourceImageMarkerInstruction =
   `遇到图形，在图形说明后另起一段，只写 ${SOURCE_IMAGE_MARKER}，前后空行；软件会在此展示本次识别的整张已处理照片。保留图形说明，不给图片路径，不裁图、不猜坐标；没有图形时不添加此标记。`;
@@ -64,26 +66,45 @@ parser.inline.ruler.before("link", "mathnotes_source_image", (state, silent) => 
   return true;
 });
 
-/** Bind only to the task's real, already processed asset, never to a model-supplied path. */
-export function bindSourceImageMarkers(markdown: string, sourceAssetPath?: string): string {
-  if (!markdown.includes(SOURCE_IMAGE_MARKER)) return markdown;
-  const asset = sourceAssetPath?.replaceAll("\\", "/");
-  const encodedAsset = asset === undefined ? undefined : encodeMarkdownAssetPath(asset);
-  const safeAsset = asset !== undefined && /\.(?:png|jpe?g|webp)$/i.test(asset) &&
-    sessionAssetPathFromMarkdown(encodedAsset!) === asset;
+
+export function originalImagePath(block: Pick<BlockRef, "sourcePageImagePath" | "fromAssets">): string | undefined {
+  return [block.sourcePageImagePath, ...(block.fromAssets ?? [])].find(isSourceImagePath);
+}
+
+function isSourceImagePath(path: unknown): path is string {
+  return typeof path === "string" && path.startsWith("assets/") && sessionAssetPathFromMarkdown(encodeMarkdownAssetPath(path)) === path &&
+    !/[\\\u0000-\u001f\u007f]/.test(path) &&
+    !path.split("/").some(part => !part || part === "." || part === "..") &&
+    /\.(?:png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i.test(path);
+}
+
+/** The model chooses the position, while stored task metadata chooses the image.
+ * Never interpret literal code, quoted examples or math as active markers. */
+export function bindSourceImageMarkers(markdown: string, sourceAssetPath?: string,
+  options: { includeLegacyDescriptions?: boolean } = {}): string {
+  if (!markdown.includes(SOURCE_IMAGE_MARKER) && !(options.includeLegacyDescriptions && /\[图片[：:]/.test(markdown))) return markdown;
   const lines = markdown.split(/\r?\n/);
   const endings = markdown.match(/\r?\n/g) ?? [];
+  const safeAsset = isSourceImagePath(sourceAssetPath) ? sourceAssetPath : undefined;
+  // encodeURIComponent leaves parentheses unchanged, which would terminate a Markdown destination.
+  const encoded = safeAsset ? encodeMarkdownAssetPath(safeAsset) : undefined;
+  const reference = encoded ? `![识别照片（已处理）](../${encoded})` : "[识别照片暂不可用]";
   for (const token of parser.parse(markdown, {})) {
     if (token.type !== "inline" || !token.map) continue;
     for (const child of token.children ?? []) {
       if (child.type !== "mathnotes_source_image") continue;
       const index = token.map[0] + child.meta.line;
-      // Only the specified standalone marker syntax is active (not quoted examples).
-      if (!/^ {0,3}\[\[mathnotes:source-image\]\][ \t]*$/.test(lines[index] ?? "")) continue;
-      lines[index] = safeAsset
-        ? `![识别照片（已处理）](../${encodedAsset})`
-        : "[识别照片暂不可用]";
+      if (/^ {0,3}\[\[mathnotes:source-image\]\][ \t]*$/.test(lines[index] ?? "")) lines[index] = reference;
     }
+    if (!options.includeLegacyDescriptions || !safeAsset || token.map[1] - token.map[0] !== 1) continue;
+    const index = token.map[0];
+    if (!/^ {0,3}\[图片[：:][^\n]+\][ \t]*$/.test(lines[index])) continue;
+    const next = lines.slice(index + 1).find(line => line.trim())?.trim();
+    if (next === SOURCE_IMAGE_MARKER || next === reference) continue;
+    const nextImage = next ? parser.parseInline(next, {})[0]?.children?.find(child => child.type === "image") : undefined;
+    try { if (nextImage && decodeURIComponent(nextImage.attrGet("src") ?? "") === `../${safeAsset}`) continue; } catch { /* malformed destination is not this image */ }
+    const newline = endings[index] ?? "\n";
+    lines[index] += newline + newline + reference;
   }
   return lines.map((line, index) => line + (endings[index] ?? "")).join("");
 }

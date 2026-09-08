@@ -18,6 +18,14 @@ export type CoreApiCapability =
   | "local.filesystem.manage";
 
 export type NetworkApiRouteId =
+  | "workspace.identity"
+  | "workspace.catalog"
+  | "workspace.snapshot"
+  | "workspace.asset"
+  | "workspace.asset.stage"
+  | "workspace.push"
+  | "workspace.catalog.state"
+  | "workspace.catalog.operation"
   | "health"
   | "pairing.challenge"
   | "pairing.verify"
@@ -43,6 +51,12 @@ export type NetworkApiRouteId =
 export type LocalShellApiRouteId =
   | "local.health"
   | "local.catalog"
+  | "local.workspace.manage"
+  | "local.workspace.trash"
+  | "local.replica.sync"
+  | "local.replica.status"
+  | "local.replica.conflicts"
+  | "local.replica.resolve"
   | "local.notes.backup"
   | "local.companion.pairing.challenge"
   | "local.notebook.create"
@@ -52,6 +66,7 @@ export type LocalShellApiRouteId =
   | "local.session.block.save"
   | "local.session.markdown.append"
   | "local.session.block.lock"
+  | "local.session.block.split-lock"
   | "local.session.block.span.protect"
   | "local.session.block.span.unlock"
   | "local.session.markdown.preview"
@@ -88,6 +103,10 @@ export type LocalShellApiRouteId =
   | "local.session.assistant.cancel"
   | "local.session.assistant.delete"
   | "local.session.assistant.promote"
+  | "local.session.rewrite.list"
+  | "local.session.rewrite.propose"
+  | "local.session.rewrite.apply"
+  | "local.session.rewrite.cancel"
   | "local.session.selection-edit.propose"
   | "local.session.selection-edit.apply"
   | "local.session.selection-edit.cancel"
@@ -120,6 +139,14 @@ export type LocalShellApiRoute = Readonly<{
 }>;
 
 export const NETWORK_API_ROUTES: readonly NetworkApiRoute[] = [
+  route("workspace.identity", "GET", "/api/v3/workspace/identity", "workspace.sync", "trusted-host"),
+  route("workspace.catalog", "GET", "/api/v3/workspace/catalog", "workspace.sync", "trusted-host"),
+  route("workspace.snapshot", "GET", "/api/v3/workspace/snapshot", "workspace.sync", "trusted-host"),
+  route("workspace.asset", "GET", "/api/v3/workspace/asset", "workspace.sync", "trusted-host"),
+  route("workspace.asset.stage", "POST", "/api/v3/workspace/asset", "workspace.sync", "trusted-host"),
+  route("workspace.push", "POST", "/api/v3/workspace/push", "workspace.sync", "trusted-host"),
+  route("workspace.catalog.state", "GET", "/api/v3/workspace/catalog-state", "workspace.sync", "trusted-host"),
+  route("workspace.catalog.operation", "POST", "/api/v3/workspace/catalog-operation", "workspace.sync", "trusted-host"),
   route("health", "GET", "/api/v1/health", "service.health.read", "public"),
   route("pairing.challenge", "POST", "/api/v2/pairing/challenge", "pairing.challenge", "trusted-host"),
   route("pairing.exchange", "POST", "/api/v2/pairing/exchange", "pairing.exchange", "public"),
@@ -133,14 +160,6 @@ export const NETWORK_API_ROUTES: readonly NetworkApiRoute[] = [
   route("companion.asset", "GET", "/api/v1/companion/asset", "companion.asset.read", "paired-device"),
   route("companion.session.events", "GET", "/api/v1/companion/events", "companion.events.read", "paired-device"),
   route("companion.catalog.events", "GET", "/api/v1/companion/catalog-events", "companion.events.read", "paired-device"),
-  route("workspace.identity", "GET", "/api/v3/workspace/identity", "workspace.sync", "trusted-host"),
-  route("workspace.catalog", "GET", "/api/v3/workspace/catalog", "workspace.sync", "trusted-host"),
-  route("workspace.catalog.state", "GET", "/api/v3/workspace/catalog-state", "workspace.sync", "trusted-host"),
-  route("workspace.catalog.operation", "POST", "/api/v3/workspace/catalog-operation", "workspace.sync", "trusted-host"),
-  route("workspace.snapshot", "GET", "/api/v3/workspace/snapshot", "workspace.sync", "trusted-host"),
-  route("workspace.asset", "GET", "/api/v3/workspace/asset", "workspace.sync", "trusted-host"),
-  route("workspace.asset.stage", "POST", "/api/v3/workspace/asset", "workspace.sync", "trusted-host"),
-  route("workspace.push", "POST", "/api/v3/workspace/push", "workspace.sync", "trusted-host")
 ];
 
 export const LOCAL_SHELL_API_ROUTES: readonly LocalShellApiRoute[] = [
@@ -148,6 +167,12 @@ export const LOCAL_SHELL_API_ROUTES: readonly LocalShellApiRoute[] = [
   { id: "local.catalog", method: "GET", path: "/local/v1/catalog", capability: "local.workspace.manage" },
   { id: "local.notes.backup", method: "POST", path: "/local/v1/notes/backup", capability: "local.filesystem.manage" },
   { id: "local.companion.pairing.challenge", method: "POST", path: "/local/v1/companion/pairing-challenge", capability: "local.workspace.manage" },
+  { id: "local.replica.sync", method: "POST", path: "/local/v1/replica/sync", capability: "local.workspace.manage" },
+  { id: "local.replica.status", method: "GET", path: "/local/v1/replica/status", capability: "local.workspace.manage" },
+  { id: "local.replica.conflicts", method: "GET", path: "/local/v1/replica/conflicts", capability: "local.workspace.manage" },
+  { id: "local.replica.resolve", method: "POST", path: "/local/v1/replica/resolve", capability: "local.workspace.manage" },
+  { id: "local.workspace.manage", method: "POST", path: "/local/v1/workspace/manage", capability: "local.workspace.manage" },
+  { id: "local.workspace.trash", method: "GET", path: "/local/v1/workspace/trash", capability: "local.workspace.manage" },
   { id: "local.notebook.create", method: "POST", path: "/local/v1/notebooks", capability: "local.workspace.manage" },
   { id: "local.session.create", method: "POST", path: "/local/v1/sessions", capability: "local.workspace.manage" },
   { id: "local.session.manifest", method: "GET", path: "/local/v1/session/manifest", capability: "local.workspace.manage" },
@@ -155,6 +180,7 @@ export const LOCAL_SHELL_API_ROUTES: readonly LocalShellApiRoute[] = [
   { id: "local.session.block.save", method: "POST", path: "/local/v1/session/block", capability: "local.workspace.manage" },
   { id: "local.session.markdown.append", method: "POST", path: "/local/v1/session/markdown", capability: "local.workspace.manage" },
   { id: "local.session.block.lock", method: "POST", path: "/local/v1/session/block/lock", capability: "local.workspace.manage" },
+  { id: "local.session.block.split-lock", method: "POST", path: "/local/v1/session/block/split-lock", capability: "local.workspace.manage" },
   { id: "local.session.block.span.protect", method: "POST", path: "/local/v1/session/block/span/protect", capability: "local.workspace.manage" },
   { id: "local.session.block.span.unlock", method: "POST", path: "/local/v1/session/block/span/unlock", capability: "local.workspace.manage" },
   { id: "local.session.markdown.preview", method: "POST", path: "/local/v1/session/markdown/preview", capability: "local.workspace.manage" },
@@ -191,6 +217,10 @@ export const LOCAL_SHELL_API_ROUTES: readonly LocalShellApiRoute[] = [
   { id: "local.session.assistant.cancel", method: "POST", path: "/local/v1/session/assistant/cancel", capability: "local.provider.manage" },
   { id: "local.session.assistant.delete", method: "POST", path: "/local/v1/session/assistant/delete", capability: "local.provider.manage" },
   { id: "local.session.assistant.promote", method: "POST", path: "/local/v1/session/assistant/promote", capability: "local.provider.manage" },
+  { id: "local.session.rewrite.list", method: "GET", path: "/local/v1/session/rewrite", capability: "local.workspace.manage" },
+  { id: "local.session.rewrite.propose", method: "POST", path: "/local/v1/session/rewrite/propose", capability: "local.provider.manage" },
+  { id: "local.session.rewrite.apply", method: "POST", path: "/local/v1/session/rewrite/apply", capability: "local.workspace.manage" },
+  { id: "local.session.rewrite.cancel", method: "POST", path: "/local/v1/session/rewrite/cancel", capability: "local.workspace.manage" },
   { id: "local.session.selection-edit.propose", method: "POST", path: "/local/v1/session/selection-edit", capability: "local.provider.manage" },
   { id: "local.session.selection-edit.apply", method: "POST", path: "/local/v1/session/selection-edit/apply", capability: "local.provider.manage" },
   { id: "local.session.selection-edit.cancel", method: "POST", path: "/local/v1/session/selection-edit/cancel", capability: "local.provider.manage" },
@@ -240,6 +270,7 @@ const grants: Readonly<Record<CoreApiPrincipal, ReadonlySet<CoreApiCapability>>>
     "companion.session.read",
     "companion.asset.read",
     "companion.events.read",
+    "workspace.sync",
     "local.workspace.manage",
     "local.provider.manage",
     "local.filesystem.manage"

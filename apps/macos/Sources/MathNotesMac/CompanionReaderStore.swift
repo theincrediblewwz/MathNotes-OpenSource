@@ -38,18 +38,54 @@ final class CompanionReaderStore: ObservableObject {
     @Published private(set) var state: CompanionReaderConnectionState = .idle
     @Published private(set) var catalogState: CatalogState = .idle
 
+    @Published private(set) var hostProfiles: [RemoteHostProfile] = []
+    @Published private(set) var activeHostID: String?
+    @Published private(set) var replicaSupervisor: SidecarSupervisor?
+    @Published private(set) var syncResult: ReplicaSyncResult?
+    @Published private(set) var syncMessage: String?
+    @Published private(set) var isSynchronizing = false
+    @Published private(set) var hostUpgradeRequired = false
+    private var replicaCatalogSubscription: AnyCancellable?
+    private var mutationSubscription: AnyCancellable?
+    private var synchronizeTask: Task<Void, Never>?
+    private var refreshLoop: Task<Void, Never>?
+    private var resynchronizeRequested = false
+    private var replicaCredential: (origin: String, token: String)?
     private let client = CompanionConnectionClient()
     private var targetBySessionID: [String: CompanionPairingTarget] = [:]
     private var loadTask: Task<Void, Never>?
+    private let credentialProvider: (() async throws -> (origin: String, token: String))?
+
+    private let profileDefaults: UserDefaults
+    private let replicaConfiguration: ((String) throws -> SidecarConfiguration)?
+    private var replicasEnabled: Bool { credentialProvider == nil || replicaConfiguration != nil }
+
+    init(credentialProvider: (() async throws -> (origin: String, token: String))? = nil,
+         profileDefaults: UserDefaults = .standard,
+         replicaConfiguration: ((String) throws -> SidecarConfiguration)? = nil) {
+        self.credentialProvider = credentialProvider
+        self.profileDefaults = profileDefaults
+        self.replicaConfiguration = replicaConfiguration
+        if credentialProvider == nil || replicaConfiguration != nil {
+            hostProfiles = RemoteHostProfile.load(defaults: profileDefaults)
+            activeHostID = profileDefaults.string(forKey: RemoteHostProfile.selectionKey)
+        }
+        mutationSubscription = NotificationCenter.default.publisher(for: .mathNotesWorkspaceChanged)
+            .receive(on: RunLoop.main).sink { [weak self] notification in
+                guard let self, notification.userInfo?["instanceId"] as? String == self.replicaSupervisor?.instanceID else { return }
+                self.synchronizeNow()
+            }
+    }
 
     func reloadCatalog() {
         loadTask?.cancel()
         state = .loading
-        catalogState = .loading
+        if replicaSupervisor == nil { catalogState = .loading }
         loadTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let credential = try await self.credential()
+                if self.replicasEnabled, await self.prepareReplica(credential) { return }
                 let response = try await self.client.catalog(
                     origin: credential.origin,
                     token: credential.token
@@ -66,6 +102,11 @@ final class CompanionReaderStore: ObservableObject {
             } catch is CancellationError {
                 return
             } catch {
+                if self.replicasEnabled, let host = self.activeHost {
+                    _ = await self.prepareReplica((origin: host.origin, token: ""))
+                    self.syncMessage = "本地副本可继续编辑；请在连接设置中授权读取这台主机的令牌，再恢复同步。"
+                    return
+                }
                 let message = Self.userMessage(error)
                 self.catalogState = .failed(message)
                 self.state = .failed(message)
@@ -74,6 +115,19 @@ final class CompanionReaderStore: ObservableObject {
     }
 
     func clear() {
+        refreshLoop?.cancel()
+        refreshLoop = nil
+        synchronizeTask?.cancel()
+        synchronizeTask = nil
+        replicaCatalogSubscription = nil
+        replicaSupervisor?.stop()
+        replicaSupervisor = nil
+        replicaCredential = nil
+        isSynchronizing = false
+        resynchronizeRequested = false
+        syncResult = nil
+        syncMessage = nil
+        hostUpgradeRequired = false
         loadTask?.cancel()
         loadTask = nil
         targetBySessionID = [:]
@@ -172,16 +226,151 @@ final class CompanionReaderStore: ObservableObject {
     }
 
     private func credential() async throws -> (origin: String, token: String) {
-        guard let preference = CompanionConnectionPreferences.load() else {
-            throw CompanionConnectionError.invalidAddress
+        if let credentialProvider { return try await credentialProvider() }
+        if let profile = activeHost {
+            guard let token = try await CompanionCredentialStore.shared.read(origin: profile.origin), !token.isEmpty else {
+                throw CompanionConnectionError.missingToken
+            }
+            return (profile.origin, token)
         }
-        let store = KeychainCredentialStore(service: CompanionConnectionCredential.service)
-        guard let token = try await Task.detached(operation: {
-            try store.read(account: CompanionConnectionCredential.account)
-        }).value, !token.isEmpty else {
-            throw CompanionConnectionError.missingToken
-        }
+        guard let preference = CompanionConnectionPreferences.load() else { throw CompanionConnectionError.notConfigured }
+        guard let token = try await CompanionCredentialStore.shared.read(), !token.isEmpty else { throw CompanionConnectionError.missingToken }
         return (preference.origin, token)
+    }
+
+    var activeHost: RemoteHostProfile? { hostProfiles.first { $0.id == activeHostID } }
+
+    func reloadSavedConnection() {
+        clear()
+        activeHostID = nil
+        reloadCatalog()
+    }
+
+    func selectHost(_ host: RemoteHostProfile) {
+        guard host.id != activeHostID || replicaSupervisor == nil else { return }
+        clear()
+        activeHostID = host.id
+        profileDefaults.set(host.id, forKey: RemoteHostProfile.selectionKey)
+        reloadCatalog()
+    }
+
+    private func prepareReplica(_ credential: (origin: String, token: String)) async -> Bool {
+        var profile = hostProfiles.first { $0.origin == credential.origin }
+        do {
+            let identity = try await client.workspaceIdentity(origin: credential.origin, token: credential.token)
+            try Task.checkCancellation()
+            profile = RemoteHostProfile(id: identity.hostId,
+                name: URL(string: credential.origin)?.host ?? identity.name, origin: credential.origin)
+            if let profile {
+                hostProfiles.removeAll { $0.id == profile.id }
+                hostProfiles.append(profile)
+                RemoteHostProfile.save(hostProfiles, defaults: profileDefaults)
+            }
+            hostUpgradeRequired = false
+        } catch {
+            if Task.isCancelled { return true }
+            guard profile != nil else {
+                hostUpgradeRequired = true
+                syncMessage = "主机更新后可启用可编辑副本；目前仍可阅读已有正文。"
+                return false
+            }
+            syncMessage = "暂时连接不上主机，继续使用本地副本。"
+        }
+        guard let profile, !Task.isCancelled else { return true }
+        do {
+            if replicaSupervisor == nil || activeHostID != profile.id {
+                replicaSupervisor?.stop()
+                let configuration = try replicaConfiguration?(profile.id) ?? .replica(hostId: profile.id, directory: profile.directory)
+                let replica = SidecarSupervisor(configuration: configuration)
+                replicaSupervisor = replica
+                activeHostID = profile.id
+                profileDefaults.set(profile.id, forKey: RemoteHostProfile.selectionKey)
+                replicaCatalogSubscription = replica.$catalogState.sink { [weak self] state in
+                    guard let self else { return }
+                    if case .loaded = state { self.catalogState = state }
+                }
+                replica.start()
+                let deadline = ContinuousClock.now.advanced(by: .seconds(16))
+                while replica.instanceID == nil, ContinuousClock.now < deadline {
+                    if case let .failed(message) = replica.state { throw NSError(domain: "MathNotes.Replica", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+                    try await Task.sleep(for: .milliseconds(40))
+                }
+                guard replica.instanceID != nil else { throw SidecarProtocolError.unhealthyResponse }
+            }
+            if let replica = replicaSupervisor {
+                let cached = try await replica.replicaStatus()
+                guard !Task.isCancelled, replicaSupervisor === replica, activeHostID == profile.id else { return true }
+                // Restore known capabilities even when credentials are temporarily
+                // unavailable. Offline directory edits must remain available.
+                if cached.hostId == profile.id { syncResult = cached }
+            }
+            replicaCredential = credential.token.isEmpty ? nil : credential
+            state = .ready
+            synchronizeNow()
+            refreshLoop?.cancel()
+            refreshLoop = Task { [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                    self?.synchronizeNow()
+                }
+            }
+        } catch {
+            if Task.isCancelled { return true }
+            catalogState = .failed(error.localizedDescription)
+            state = .failed(error.localizedDescription)
+        }
+        return true
+    }
+
+    func synchronizeNow() {
+        guard let replica = replicaSupervisor, let host = activeHost, let credential = replicaCredential else { return }
+        if synchronizeTask != nil { resynchronizeRequested = true; return }
+        isSynchronizing = true
+        synchronizeTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.replicaSupervisor === replica {
+                    self.isSynchronizing = false
+                    self.synchronizeTask = nil
+                    if self.resynchronizeRequested {
+                        self.resynchronizeRequested = false
+                        self.synchronizeNow()
+                    }
+                }
+            }
+            do {
+                let result = try await replica.synchronizeReplica(origin: credential.origin, hostToken: credential.token, hostId: host.id)
+                guard !Task.isCancelled, self.replicaSupervisor === replica else { return }
+                self.syncResult = result
+                if result.conflictCount > 0 { self.syncMessage = "\(result.conflictCount) 项修改有冲突，两边内容均已保留" }
+                else if result.pendingCount > 0 { self.syncMessage = "\(result.pendingCount) 项修改等待同步" }
+                else if result.sessions.contains(where: { $0.status == "error" }) { self.syncMessage = "部分笔记同步失败，可重试；本地内容已保留" }
+                else { self.syncMessage = "已与主机同步" }
+            } catch {
+                guard !Task.isCancelled, self.replicaSupervisor === replica else { return }
+                self.syncResult = try? await replica.replicaStatus()
+                self.syncMessage = "暂时无法同步；本地修改已保留，连接恢复后重试"
+            }
+        }
+    }
+
+    func resolveConflict(_ session: ReplicaSessionStatus, choice: String) async throws {
+        guard let replica = replicaSupervisor else { throw SidecarProtocolError.unhealthyResponse }
+        try await replica.resolveReplica(ReplicaResolveRequest(notebookId: session.notebookId, sessionId: session.sessionId, choice: choice))
+        syncResult = try await replica.replicaStatus()
+        synchronizeNow()
+    }
+
+    func resolveCatalogConflict(_ conflict: ReplicaCatalogConflict) async throws -> URL {
+        guard let replica = replicaSupervisor, let host = activeHost else { throw SidecarProtocolError.unhealthyResponse }
+        let result = try await replica.resolveReplicaCatalog(operationId: conflict.id)
+        let parts = result.backupRelativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[0] == ".mathnotes-replica-backups", UUID(uuidString: String(parts[1])) != nil else {
+            throw SidecarProtocolError.unhealthyResponse
+        }
+        syncResult = try await replica.replicaStatus()
+        synchronizeNow()
+        return host.directory.appending(path: "notes").appending(path: result.backupRelativePath)
     }
 
     private static func mapCatalog(_ targets: [CompanionPairingTarget]) -> [NotebookCatalogItem] {

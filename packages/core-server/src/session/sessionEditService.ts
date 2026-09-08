@@ -101,6 +101,12 @@ export type UpdateMarkdownProtectedSpanResult = Readonly<{
   block: ReadonlySessionBlock;
 }>;
 
+export type SplitLockedSelectionResult = Readonly<{
+  version: 1;
+  lockedBlockId: string;
+  blocks: readonly ReadonlySessionBlock[];
+}>;
+
 export type SetMarkdownBlockLockInput = Readonly<{
   notebookId: string;
   sessionId: string;
@@ -208,6 +214,72 @@ export class SessionEditService {
 
   protectMarkdownSelection(input: UpdateMarkdownProtectedSpanInput): Promise<UpdateMarkdownProtectedSpanResult> {
     return this.coordinator.run(input.notebookId, input.sessionId, () => this.protectMarkdownSelectionSerial(input));
+  }
+
+  splitLockedSelection(input: UpdateMarkdownProtectedSpanInput): Promise<SplitLockedSelectionResult> {
+    return this.coordinator.run(input.notebookId, input.sessionId, async () => {
+      const { session, sessionDir, sessionPath } = await readSession(this.rootDir, input.notebookId, input.sessionId);
+      const index = session.blocks.findIndex((candidate) => candidate.id === input.blockId);
+      const block = session.blocks[index];
+      if (!block) throw new SessionEditError("block_not_found", 404);
+      if (block.type !== "markdown") throw new SessionEditError("not_markdown_block", 422);
+      if (block.status === "locked") throw new SessionEditError("block_locked", 423);
+      if (!isUserEditable(block)) throw new SessionEditError("block_not_editable", 423);
+      const target = resolve(sessionDir, block.path);
+      assertInside(sessionDir, target);
+      const markdown = await readFile(target, "utf8");
+      const locks = session.locks.filter((lock) => lock.blockId === block.id);
+      if (markdownBlockRevision({ block, markdown, locks }) !== input.baseRevision) throw new SessionEditError("revision_conflict", 409);
+      const { from, to, selectedText } = input.selection;
+      const validation = replaceSelection({ markdown, selection: input.selection, replacement: selectedText });
+      if (!validation.ok) {
+        if (validation.reason === "invalid_range") throw new SessionEditError("invalid_selection", 422);
+        if (validation.reason === "selection_stale") throw new SessionEditError("selection_stale", 409);
+        throw new SessionEditError("protected_selection", 423);
+      }
+      // Swift selections use UTF-16 offsets. Never split a surrogate pair on disk.
+      const splitsSurrogate = (offset: number) => offset > 0 && offset < markdown.length &&
+        /[\uD800-\uDBFF]/.test(markdown[offset - 1]) && /[\uDC00-\uDFFF]/.test(markdown[offset]);
+      if (splitsSurrogate(from) || splitsSurrogate(to)) throw new SessionEditError("invalid_selection", 422);
+      const timestamp = this.now();
+      const operation = randomUUID();
+      const group = block.continuationGroup ?? `continuation_${operation}`;
+      const pieces = [
+        { markdown: markdown.slice(0, from), locked: false },
+        { markdown: selectedText, locked: true },
+        { markdown: markdown.slice(to), locked: false }
+      ].filter((piece) => piece.markdown.length > 0);
+      const nextBlocks: BlockRef[] = pieces.map((piece, position) => ({
+        ...block,
+        id: position === 0 ? block.id : `split_${randomUUID()}`,
+        path: `blocks/split_${operation}_${position}.md`,
+        status: piece.locked ? "locked" : block.status,
+        continuationGroup: group,
+        updatedAt: timestamp
+      }));
+      const nextLocks = session.locks.filter((lock) => lock.blockId !== block.id);
+      for (let position = 0; position < pieces.length; position++) {
+        const piece = pieces[position]; const child = nextBlocks[position];
+        for (const span of parseProtectedSpans(piece.markdown)) {
+          const original = locks.find((lock) => lock.id === span.id && lock.kind === "span");
+          if (original) nextLocks.push({ ...original, blockId: child.id });
+        }
+        if (piece.locked) nextLocks.push({ id: `lock_block_${child.id}`, blockId: child.id, kind: "block",
+          contentHash: sha256Text(piece.markdown), createdAt: timestamp, createdBy: "user", aiEditable: false });
+      }
+      const nextSession: SessionRecord = { ...session, updatedAt: timestamp, locks: nextLocks,
+        blocks: [...session.blocks.slice(0, index), ...nextBlocks, ...session.blocks.slice(index + 1)] };
+      // New immutable files first; the atomic metadata rename is the only commit point.
+      // Keep the original file as a recoverable version, including on interrupted writes.
+      for (let position = 0; position < pieces.length; position++) {
+        await writeFileAtomically(resolve(sessionDir, nextBlocks[position].path), pieces[position].markdown);
+      }
+      await writeFileAtomically(sessionPath, `${JSON.stringify(nextSession, null, 2)}\n`);
+      return { version: 1, lockedBlockId: nextBlocks[pieces.findIndex((piece) => piece.locked)].id,
+        blocks: await Promise.all(nextBlocks.map((child) => readReadonlySessionBlock({
+          rootDir: this.rootDir, notebookId: input.notebookId, sessionId: input.sessionId, blockId: child.id
+        }))) };
+    });
   }
 
   unlockMarkdownProtectedSelection(input: UpdateMarkdownProtectedSpanInput): Promise<UpdateMarkdownProtectedSpanResult> {
@@ -749,7 +821,7 @@ function nextBlockId(session: SessionRecord): string {
   return String(max + 1).padStart(4, "0");
 }
 
-async function validateLockedContent(args: {
+export async function validateLockedContent(args: {
   beforeMarkdown: string;
   afterMarkdown: string;
   locks: readonly LockMeta[];

@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { macosBuildRevision } from "./macos_build_info.mjs";
+import { probeSidecar } from "./diagnose_macos_connection.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputRoot = path.join(projectRoot, "output", "macos-native");
@@ -44,6 +45,7 @@ const sourceExecutable = path.join(binPath, "MathNotesMac");
 const sourceSidecar = path.join(projectRoot, "output", "macos-sidecar", "core-server.mjs");
 const sourcePwa = path.join(projectRoot, "apps", "pwa", "dist");
 const sourceKatex = path.join(projectRoot, "apps", "macos", "Sources", "MathNotesMac", "Resources", "katex");
+const sourceAuthorAvatar = path.join(projectRoot, "apps", "macos", "Sources", "MathNotesMac", "Resources", "wwz-sysu-avatar.jpg");
 const targetExecutable = path.join(macosPath, "MathNotes");
 const targetNode = path.join(runtimePath, "bin", "node");
 const targetSidecar = path.join(runtimePath, "core-server.mjs");
@@ -61,6 +63,7 @@ await copyFile(process.execPath, targetNode);
 await copyFile(sourceSidecar, targetSidecar);
 await cp(sourcePwa, pwaPath, { recursive: true });
 await cp(sourceKatex, path.join(resourcesPath, "MathNotesKaTeX"), { recursive: true });
+await copyFile(sourceAuthorAvatar, path.join(resourcesPath, "wwz-sysu-avatar.jpg"));
 await chmod(targetExecutable, 0o755);
 await chmod(targetNode, 0o755);
 
@@ -68,6 +71,12 @@ const executableBytesBeforeStrip = (await stat(targetExecutable)).size;
 const nodeBytesBeforeStrip = (await stat(targetNode)).size;
 run("strip", ["-x", targetExecutable]);
 run("strip", ["-x", targetNode]);
+// strip invalidates Node's upstream signature. Resources is not a nested-code
+// location: signing the outer app with --deep can leave that stale signature
+// untouched, even when --verify --deep succeeds. Sign this executable explicitly
+// before running it, then seal the containing app below.
+run("codesign", ["--force", "--sign", "-", "--identifier", "com.mathnotes.runtime.node", targetNode]);
+run("codesign", ["--verify", "--strict", targetNode]);
 const executableBytesAfterStrip = (await stat(targetExecutable)).size;
 const nodeBytesAfterStrip = (await stat(targetNode)).size;
 const packagedNodeVersion = run(targetNode, ["--version"]).trim();
@@ -79,6 +88,15 @@ await access(iconPath);
 
 run("codesign", ["--force", "--deep", "--sign", "-", appPath]);
 run("codesign", ["--verify", "--deep", "--strict", appPath]);
+// Validate the sealed runtime by executing real startup, not just --version or
+// static signature checks. The probe uses fresh data and never opens Keychain.
+const runtimeProbe = await probeSidecar({
+  executable: targetNode, script: targetSidecar, companion: true, pwaRoot: pwaPath
+});
+if (runtimeProbe.state !== "ready") {
+  throw new Error(`MACOS_PACKAGED_RUNTIME_FAILED: ${JSON.stringify(runtimeProbe)}`);
+}
+console.log("MACOS_PACKAGED_RUNTIME_READY");
 await rm(archivePath, { force: true });
 await rm(`${archivePath}.sha256`, { force: true });
 run("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", appPath, archivePath]);
@@ -129,7 +147,7 @@ function run(command, args) {
     env: process.env
   });
   if (result.status !== 0) {
-    throw new Error(`${command} failed: ${result.stderr || result.stdout || result.error?.message}`);
+    throw new Error(`${command} failed (exit=${result.status}, signal=${result.signal ?? "none"}): ${result.stderr || result.stdout || result.error?.message || "no output"}`);
   }
   return result.stdout;
 }
@@ -155,6 +173,20 @@ function infoPlist(appVersion) {
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key><true/>
+    <!-- macOS 14+ requires explicit IP exceptions, including Tailscale CGNAT.
+         Keep public HTTP and arbitrary web content subject to ATS. -->
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>127.0.0.1</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+      <key>::1</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+      <key>10.0.0.0/8</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+      <key>172.16.0.0/12</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+      <key>192.168.0.0/16</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+      <key>169.254.0.0/16</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+      <key>100.64.0.0/10</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+      <key>fc00::/7</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+      <key>fe80::/10</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+    </dict>
   </dict>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSLocalNetworkUsageDescription</key><string>连接同一私有网络中的 MathNotes 服务，用于检查设备连接与同步笔记。</string>

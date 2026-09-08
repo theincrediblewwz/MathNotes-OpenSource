@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,7 +14,8 @@ export function failureKinds(text) {
 }
 
 export async function probeSidecar({ executable, script, companion, pwaRoot, timeoutMs = 15_000 }) {
-  const root = await mkdtemp(path.join(tmpdir(), "mathnotes-connection-check-"));
+  // macOS aliases /var to /private/var; keep cwd and child data paths identical.
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "mathnotes-connection-check-")));
   const token = randomBytes(32).toString("hex");
   const environment = { ...process.env };
   for (const key of Object.keys(environment)) {

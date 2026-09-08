@@ -77,6 +77,7 @@ const providerSettings = await readFile(path.join(root, "apps/macos/Sources/Math
 const providerPreferences = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/ProviderPreferences.swift"), "utf8");
 const aiGuidanceModels = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/AiGuidanceModels.swift"), "utf8");
 const keychain = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/KeychainCredentialStore.swift"), "utf8");
+const companionCredentials = await readFile(path.join(root, "apps/macos/Sources/MathNotesMac/CompanionCredentialStore.swift"), "utf8");
 const companionConnection = await readFile(
   path.join(root, "apps/macos/Sources/MathNotesMac/CompanionConnection.swift"),
   "utf8"
@@ -113,7 +114,7 @@ const unsafeRawRecognitionEvent = contractTests
   .split(/\r?\n/)
   .some((line) => /Data\(#".*"delta":"#+/.test(line));
 const sourceWorkspaceSection = reader.slice(
-  reader.indexOf("private final class SessionSourceWorkspace"),
+  reader.indexOf("final class SessionSourceWorkspace"),
   reader.indexOf("private struct SessionSourcePane")
 );
 const sourceBlockSection = reader.slice(
@@ -211,8 +212,9 @@ const checks = [
   [reader.includes("Picker(\"工作区\"") && reader.includes("case source") && reader.includes("case preview"), "compact workbench must expose source and preview modes"],
   [reader.includes("SessionSourceWorkspace") && reader.includes("drafts: [String: String]"), "source drafts must survive pane layout changes outside row lifetime"],
   [reader.includes("if self.revision != revision") &&
-    reader.includes("let preserveDraft = isDirty(blockID: block.id)") &&
-    reader.includes("store(payload, resetDraft: !preserveDraft)"),
+    reader.includes("guard !isDirty(blockID: block.id) else { return }") &&
+    reader.includes("store(payload, resetDraft: true)") &&
+    reader.includes("hasDeferredExternalChanges = true"),
     "revision refresh must keep the last complete projection mounted while preserving only real drafts"],
   [reader.includes("else if manifest.editable, !markdown.blockLocked") && reader.includes("SelectionAwareTextEditor("), "every unlocked editable Markdown block must behave like a normal inline editor"],
   [reader.includes("ScrollViewReader") && reader.includes(".id(block.id)") &&
@@ -223,7 +225,7 @@ const checks = [
     reader.includes("activeBlockID.wrappedValue = blockID"),
     "the continuous preview must activate the matching source block through one stable bridge"],
   [reader.includes("private var preloadIdentity") && reader.includes("await workspace.load(") &&
-    reader.includes("blocks.map(\\.previewIdentity)"),
+    reader.includes("markdownBlocks.map(\\.previewIdentity)"),
     "continuous preview blocks must preload by stable block revision without per-row WebView churn"],
   [reader.includes("SessionSourceBlockView") && reader.includes("SelectionAwareTextEditor("), "native inline Markdown block editor is required"],
   [selectionEditor.includes("NSTextViewDelegate") && selectionEditor.includes("textViewDidChangeSelection") &&
@@ -324,7 +326,7 @@ const checks = [
   [reader.includes("SessionContinuousPreview") &&
     reader.includes("liveRenders") &&
     reader.includes("previewMarkdown") &&
-    reader.includes("Keep the last valid live projection mounted") &&
+    reader.includes("document = rendered.document") && reader.includes("renderInput(for: group)") &&
     reader.includes("workspace.drafts[blockID]"),
     "dirty and recognition drafts must drive the shared renderer without falling back to stale placeholder HTML"],
   [reader.includes("window.MathNotes.updateBlocks") &&
@@ -338,11 +340,11 @@ const checks = [
     "wide macOS workspaces must expose a reversible preview-only reading mode"],
   [reader.includes("private func previewActionCluster") &&
     reader.includes('accessibilityIdentifier("session-preview-floating-actions")') &&
-    reader.includes(".background(.ultraThinMaterial, in: Capsule())") &&
+    reader.includes("SessionActionButtonStyle(prominent: true)") &&
     reader.includes('Label("导出 Markdown"') &&
     reader.includes('Label("编辑并插入图片"') &&
     reader.includes('Label("导入 PDF"'),
-    "preview actions must use a compact floating cluster with complete labels inside its overflow menu"],
+    "preview actions must expose a prominent conversation action and preserve import/export choices"],
   [reader.includes("MacImageAnnotationEditor(") &&
     reader.includes("prepareImageEdit") &&
     reader.includes("commitImageEdit") &&
@@ -415,11 +417,12 @@ const checks = [
   [reader.includes('TextField("输入问题", text: $question, axis: .vertical)') &&
     reader.includes('question = ""') && reader.includes('assistantRequestTask?.cancel()'),
     "assistant composer must preserve its first line, clear on send, and expose cancellation"],
-  [reader.includes('manifest.blocks.filter { $0.renderInNote && $0.type == "markdown" }') &&
+  [reader.includes('let sourceBlocks = manifest.blocks.filter(\\.renderInNote)') &&
+    reader.includes("plan.markdown") && reader.includes("Button(action: activateHeader)") &&
     reader.includes("SessionAssetPreviewSheet"),
-    "source and continuous reading panes must project Markdown only while related assets stay available from the Markdown title"],
+    "source blocks must retain original assets through their titles while continuous reading loads Markdown only"],
   [reader.includes("StableSessionMarkdownWebView") &&
-    reader.includes("view.loadHTMLString(Self.shellDocument") &&
+    reader.includes("view.loadHTMLString(document, baseURL: Self.katexBaseURL)") &&
     reader.includes("if desiredBlocks != appliedBlocks") &&
     !reader.slice(
       reader.indexOf("func updateNSView(_ view: WKWebView, context: Context)"),
@@ -461,8 +464,8 @@ const checks = [
   [reader.includes("interactiveDismissDisabled"), "unsaved editor drafts must resist accidental dismissal"],
   [!reader.includes("DIRECT MARKDOWN"), "developer block labels must not appear in the reader"]
   ,[app.includes("ProviderSettingsView") && content.includes("sidebarSettingsAction") &&
-    content.includes('Label("设置", systemImage: "gearshape")'),
-    "native settings must be directly reachable above recent reading in the sidebar"]
+    content.includes('Image(systemName: "gearshape")'),
+    "native settings must remain directly reachable beside Open Notebooks"]
   ,[providerSettings.includes("Picker(\"界面外观\"") &&
     providerSettings.includes(".onChange(of: appearanceMode)") &&
     providerSettings.includes("saveReadingPreferences()") &&
@@ -472,10 +475,12 @@ const checks = [
     providerSettings.includes('LabeledContent("背景模糊度")') &&
     providerSettings.includes("MacMaterialPreferences.save"),
     "appearance settings must expose saved material opacity and blur controls"]
-  ,[reader.includes(".frame(width: 30, height: 30)") &&
-    reader.includes(".frame(width: 44, height: 44)") &&
-    reader.includes("MathNotesMaterialBackground(shape: Circle())"),
-    "floating controls must keep a compact visual surface inside a full 44 point hit target"]
+  ,[reader.includes("isActionClusterExpanded = false") &&
+    reader.includes('actionLabel("导出"') && reader.includes('actionLabel("AI 对话"') &&
+    reader.includes('accessibilityIdentifier("session-actions-toggle")') &&
+    reader.includes(".overlay(alignment: .bottomTrailing)") &&
+    !reader.includes(".safeAreaInset(edge: .bottom") && !reader.includes("attachmentBar"),
+    "session actions must collapse beside persistent AI without reserving a footer or preview header"]
   ,[providerSettings.includes("TabView") && providerSettings.includes("Label(\"通用\"") &&
     providerSettings.includes("Label(\"编辑与阅读\"") &&
     !providerSettings.includes('.tabItem { Label("诊断"'),
@@ -488,7 +493,8 @@ const checks = [
     "temporary catalog loading or failure must not clear the currently open Session"]
   ,[providerSettings.includes("SecureField") && !providerSettings.includes("TextField(\"API 密钥"), "provider API key must use a secure field"]
   ,[keychain.includes("kSecClassGenericPassword") && keychain.includes("SecItemCopyMatching") && keychain.includes("SecItemUpdate"), "provider API key must use the system keychain"]
-  ,[keychain.includes("kSecUseAuthenticationUI") && keychain.includes("kSecUseAuthenticationUISkip"), "automatic Keychain reads must never present a macOS authentication dialog"]
+  ,[keychain.includes("allowInteraction: Bool = false") && keychain.includes("kSecUseAuthenticationUIFail") &&
+    keychain.includes("SecKeychainSetUserInteractionAllowed(allowed)") && keychain.includes("SecKeychainSetUserInteractionAllowed(previous.boolValue)"), "automatic Keychain reads must never present a macOS authentication dialog"]
   ,[!supervisorStartSection.includes("KeychainCredentialStore") &&
     !supervisorStartSection.includes("CompanionHostCredential") &&
     supervisor.includes("CompanionHostTokenStore()"),
@@ -504,18 +510,14 @@ const checks = [
   ,[content.includes("新建 Notebook") && content.includes("新建 Session") && content.includes("creationSheet") &&
     notebookBrowser.includes("onCreateNotebook") && notebookBrowser.includes("onCreateSession"),
     "workspace creation must be available from the native Notebook browser"]
-  ,[sidebarBodySection.includes("sidebarPhoneConnectionAction") &&
-    sidebarBodySection.includes("sidebarSettingsAction") &&
-    sidebarBodySection.includes("recentReadingSidebar") &&
-    sidebarBodySection.includes("notebookBrowserAction") &&
-    sidebarBodySection.indexOf("sidebarPhoneConnectionAction") < sidebarBodySection.indexOf("sidebarSettingsAction") &&
-    sidebarBodySection.indexOf("sidebarSettingsAction") < sidebarBodySection.indexOf("recentReadingSidebar") &&
+  ,[sidebarBodySection.includes("sidebarHeader") &&
+    !sidebarBodySection.includes("sidebarPhoneConnectionAction") &&
+    !sidebarBodySection.includes("sidebarSettingsAction") &&
     sidebarBodySection.indexOf("recentReadingSidebar") < sidebarBodySection.indexOf("notebookBrowserAction") &&
     !sidebarBodySection.includes("coreStatus"),
-    "the sidebar must present phone connection, Settings, recent reading, then Open Notebooks without developer core status"]
-  ,[content.includes('Text("连接手机")') && content.includes('Text("显示二维码，让 Android 扫码")') &&
-    content.includes('accessibilityIdentifier("sidebar-phone-connection")') && content.includes("PhoneConnectionSheet("),
-    "phone connection must be a prominent first-level sidebar action that opens a focused sheet"]
+    "the sidebar must reserve its main height for recent reading, with compact controls in the header and footer"]
+  ,[content.includes('accessibilityIdentifier("sidebar-phone-connection")') && content.includes("PhoneConnectionSheet("),
+    "phone connection must remain directly accessible from the compact sidebar header"]
   ,[phoneConnection.includes('accessibilityIdentifier("phone-pairing-qr")') &&
     phoneConnection.includes("CompanionPairingQRCode.image") &&
     phoneConnection.includes("challenge.pairingLink(") &&
@@ -550,7 +552,7 @@ const checks = [
     content.includes("beginCreationAfterBrowserDismiss") &&
     content.includes("await Task.yield()"),
     "Notebook selection must use a dedicated large-folder browser"]
-  ,[notebookBrowser.includes(".onHover") && notebookBrowser.includes(".popover(") &&
+  ,[notebookBrowser.includes(".onHover") && notebookBrowser.includes(".overlayPreferenceValue(SessionPreviewAnchorKey.self)") &&
     notebookBrowser.includes("loadPreview") && notebookBrowser.includes("fetchSessionManifest") &&
     notebookBrowser.includes("companionReader.loadDocument"),
     "hovering a Session must preview rendered source for local and connected-computer notes"]
@@ -595,12 +597,12 @@ const checks = [
   ,[supervisor.includes("@Published private(set) var companionHost") && supervisor.includes("ready.companionHost") && supervisor.includes("createCompanionPairingChallenge"), "sidecar readiness and the trusted local shell must drive local host pairing UI state"]
   ,[companionConnection.includes("/api/v1/pairing/verify") && companionConnection.includes("URLSession.shared.data"), "Companion connection checks must use the private network API"]
   ,[companionConnection.includes("UserDefaults") && !companionConnection.includes("let token:"), "Companion preferences must not persist a plaintext token"]
-  ,[keychain.includes("init(service: String =") && providerSettings.includes("CompanionConnectionCredential.service"), "Companion tokens must use a dedicated Keychain service"]
+  ,[keychain.includes("init(service: String =") && companionCredentials.includes("CompanionConnectionCredential.service"), "Companion tokens must use a dedicated Keychain service"]
   ,[providerSettings.includes("tokenRequiredForNewAddress"), "changing Companion origins must require a fresh token"]
   ,[content.includes("WorkspaceSourceMode") && content.includes("笔记来源") && content.includes("CompanionSessionView"), "macOS must expose explicit local and Companion reader sources"]
-  ,[content.includes("sourceMode != .local") && content.includes("远程笔记在当前版本中保持只读"), "Companion mode must keep workspace creation disabled"]
+  ,[notebookBrowser.includes("if sourceMode == .local"), "Companion mode must keep workspace creation disabled"]
   ,[companionConnection.includes("/api/v2/companion/session/manifest") && companionConnection.includes("/api/v2/companion/session/document") && companionConnection.includes("/api/v1/companion/asset"), "Companion reader must use the versioned manifest, document, and asset routes"]
-  ,[companionReader.includes("KeychainCredentialStore(service: CompanionConnectionCredential.service)") && !companionReader.includes("UserDefaults.standard.string"), "remote reads must reuse the dedicated Keychain token"]
+  ,[companionReader.includes("CompanionCredentialStore.shared.read()") && !companionReader.includes("UserDefaults.standard.string"), "remote reads must reuse the dedicated Keychain token"]
   ,[companionReader.includes("documentLengthMismatch") && companionReader.includes("manifest.revision"), "remote document reads must verify revision and UTF-8 byte lengths"]
   ,[companionReader.includes("mathnotes-companion-asset://") && companionReader.includes("base64EncodedString"), "remote HTML must replace controlled asset references without granting arbitrary network access"]
   ,[companionSession.includes("allowsContentJavaScript = false") && companionSession.includes("websiteDataStore = .nonPersistent()"), "remote reading web views must disable scripts and persistent web storage"]
@@ -701,11 +703,11 @@ const checks = [
   ,[reader.includes('Image(systemName: isLocked ? "lock.fill" : "lock.open")') &&
     reader.includes('accessibilityLabel(isLocked ? "解除固定" : "固定这个内容段")'),
     "whole-block lock and unlock must stay visible and keyboard-accessible in the source header"]
-  ,[selectionEditBlockSection.includes('isUnlocking ? "解除固定" : "固定选区"') &&
+  ,[selectionEditBlockSection.includes('isUnlocking ? "解除固定" : "将选区拆成固定块"') &&
     selectionEditBlockSection.includes("selectionTargetsProtectedSpan") &&
     selectionEditBlockSection.includes("private func updateProtectedSpan") &&
     selectionEditBlockSection.includes("workspace.isDirty(blockID: manifest.id)") &&
-    selectionEditBlockSection.includes("supervisor.protectMarkdownSelection(") &&
+    selectionEditBlockSection.includes("supervisor.splitLockedSelection(") &&
     selectionEditBlockSection.includes("supervisor.unlockMarkdownProtectedSelection(") &&
     selectionEditBlockSection.includes('workspace.setSelection("", range: nil, blockID: manifest.id)'),
     "Mac protected-span controls must choose one minimal action, require a saved exact selection, and clear stale selection after success"]
@@ -730,10 +732,10 @@ const checks = [
     sessionEditService.includes("span.contentHash !== registeredLock.contentHash") &&
     sessionEditService.includes("locks: remainingLocks"),
     "Core must own protected-span identities, hashes, revision checks, registered-lock verification, and preservation of every other lock"]
-  ,[selectionEditor.includes("let shouldRegisterAIUndo = context.coordinator.externalEditEpoch != externalEditEpoch") &&
+  ,[selectionEditor.includes("let shouldRegisterExternalUndo = context.coordinator.externalEditEpoch != externalEditEpoch") &&
     selectionEditor.includes("applyUndoableExternalText") &&
     selectionEditor.includes("textView.undoManager?.registerUndo") &&
-    selectionEditor.includes('setActionName("AI 选区修改")') &&
+    selectionEditor.includes('setActionName("修改文字")') &&
     reader.includes("aiEditEpochs[payload.block.id, default: 0] += 1") &&
     reader.includes("externalEditEpoch: workspace.aiEditEpochs[manifest.id, default: 0]"),
     "applied AI edits must bump a per-block epoch and register a native undoable replacement"]

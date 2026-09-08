@@ -151,7 +151,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   grid-template-columns: minmax(260px, 32%) minmax(0, 1fr);
   height: calc(100dvh - max(70px, calc(58px + env(safe-area-inset-top))));
   overflow: hidden;
-  transform: translateY(0);
+  /* A resting transform would contain and clip the fixed photo editor. */
+  transform: none;
   transition: transform 180ms ease;
 }
 .workspace.pulling { transform: translateY(10px); }

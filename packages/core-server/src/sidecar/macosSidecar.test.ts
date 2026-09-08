@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionRecord } from "@mathnotes/shared";
 import { RuntimeProviderRegistry } from "../provider/runtimeProviderRegistry";
 import { parseSidecarParentPid, startMacosSidecar } from "./macosSidecar";
+import { createWorkspaceNotebook } from "../catalog/workspaceCommandService";
 
 describe("macOS sidecar", () => {
   let rootDir: string | undefined;
@@ -19,6 +20,44 @@ describe("macOS sidecar", () => {
     expect(parseSidecarParentPid("101", 100)).toBe(101);
     expect(() => parseSidecarParentPid("100", 100)).toThrow("different running process");
     expect(() => parseSidecarParentPid("not-a-pid", 100)).toThrow("different running process");
+  });
+
+  it("routes replica create and recoverable management through the durable catalog queue", async () => {
+    rootDir = await mkdtemp(join(tmpdir(), "mathnotes-sidecar-replica-catalog-"));
+    const token = "replica-catalog-fixture-".padEnd(48, "x");
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const host = await startMacosSidecar({ token, userDataDir: join(rootDir, "host-state"), notesRootDir: join(rootDir, "host-notes"),
+      tempDir: join(rootDir, "host-temp"), appVersion: "test", companionHost: { token, port: 0 }, logger });
+    let replica: Awaited<ReturnType<typeof startMacosSidecar>> | undefined;
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    async function json(url: string, body?: unknown, expected = 200) {
+      const response = await fetch(url, { headers, method: body === undefined ? "GET" : "POST", body: body === undefined ? undefined : JSON.stringify(body) });
+      expect(response.status).toBe(expected); return response.json();
+    }
+    try {
+      const origin = host.ready.companionHost!.url;
+      const identity = await json(origin + "/api/v3/workspace/identity");
+      replica = await startMacosSidecar({ token, userDataDir: join(rootDir, "replica-state"), notesRootDir: join(rootDir, "replica-notes"),
+        tempDir: join(rootDir, "replica-temp"), appVersion: "test", replicaHostId: identity.hostId, logger });
+      const endpoint = `http://${replica.ready.host}:${replica.ready.port}/local/v1`;
+      const sync = () => json(endpoint + "/replica/sync", { origin, token, hostId: identity.hostId });
+      await sync();
+      const { notebook } = await json(endpoint + "/notebooks", { title: "Created through Mac API" }, 201);
+      const { session } = await json(endpoint + "/sessions", { notebookId: notebook.notebookId, title: "Queued session" }, 201);
+      const target = { notebookId: notebook.notebookId, sessionId: session.sessionId };
+      await json(endpoint + "/workspace/manage", { ...target, action: "rename", title: "Renamed through Mac API" });
+      expect((await json(endpoint + "/replica/status")).catalogOperations).toHaveLength(3);
+      expect((await sync()).catalogOperations).toEqual([]);
+      const catalog = await json(origin + "/api/v3/workspace/catalog");
+      expect(catalog.notebooks[0].sessions[0].title).toBe("Renamed through Mac API");
+      await json(endpoint + "/workspace/manage", { ...target, action: "trash" });
+      const { entries } = await json(endpoint + "/workspace/trash");
+      expect(entries).toHaveLength(1);
+      await sync();
+      await json(endpoint + "/workspace/manage", { ...target, action: "restore", deletionId: entries[0].id });
+      expect((await sync()).catalogOperations).toEqual([]);
+      expect((await json(origin + "/api/v3/workspace/catalog")).notebooks[0].sessions).toHaveLength(1);
+    } finally { await replica?.stop(); await host.stop(); }
   });
 
   it("publishes a token-free ready contract and protects loopback health", async () => {
@@ -583,6 +622,29 @@ describe("macOS sidecar", () => {
         headers: { authorization: `Bearer ${issued.token}` }
       });
       expect(verify.status).toBe(200);
+      const verified = await verify.json() as {
+        targets: { notebookId: string; sessionId: string; notebookTitle: string; title: string }[];
+      };
+      expect(verified).toMatchObject({
+        targets: [expect.objectContaining({ notebookTitle: "手机收件箱", title: "手机照片" })]
+      });
+
+      // The existing phone protocol can upload immediately after exchanging the
+      // QR, even when the Mac had no notebook or session before pairing.
+      const target = verified.targets[0]!;
+      const form = new FormData();
+      form.set("notebookId", target.notebookId);
+      form.set("sessionId", target.sessionId);
+      form.set("captureId", "first-phone-photo");
+      form.set("deviceId", issued.device.deviceId);
+      form.set("material", new Blob([Uint8Array.from(tinyPng())], { type: "image/png" }), "first.png");
+      const upload = await fetch(`${companion.url}/api/v1/uploads`, {
+        method: "POST", headers: { authorization: `Bearer ${issued.token}` }, body: form
+      });
+      expect(upload.status).toBe(202);
+      const accepted = await upload.json() as { assetPath: string };
+      expect(await readFile(join(rootDir!, "notes", "notebooks", target.notebookId, "sessions", target.sessionId, accepted.assetPath)))
+        .toEqual(Buffer.from(tinyPng()));
 
       const reused = await fetch(`${companion.url}/api/v2/pairing/exchange`, {
         method: "POST",
@@ -601,6 +663,43 @@ describe("macOS sidecar", () => {
     } finally {
       await running.stop();
     }
+  });
+
+  it.each(["empty", "empty-notebook", "existing-session"])(
+    "prepares one receiving session only on a trusted QR request (%s)", async (fixture) => {
+    rootDir = await mkdtemp(join(tmpdir(), "mathnotes-phone-bootstrap-"));
+    const notesRootDir = join(rootDir, "notes");
+    if (fixture === "empty-notebook") await createWorkspaceNotebook({ rootDir: notesRootDir, title: "我的笔记" });
+    if (fixture === "existing-session") await writeEmptySessionFixture(notesRootDir);
+    const localToken = "l".repeat(48);
+    const companionToken = "c".repeat(48);
+    const running = await startMacosSidecar({
+      token: localToken, userDataDir: join(rootDir, "user-data"), notesRootDir,
+      tempDir: join(rootDir, "temp"), appVersion: "test", companionHost: { token: companionToken, port: 0 },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    });
+    const local = `http://${running.ready.host}:${running.ready.port}`;
+    const headers = { authorization: `Bearer ${localToken}` };
+    const catalog = async () => (await fetch(`${local}/local/v1/catalog`, { headers })).json();
+    try {
+      const before = await catalog();
+      const route = `${local}/local/v1/companion/pairing-challenge`;
+      expect((await fetch(route, { method: "POST" })).status).toBe(401);
+      await fetch(`${running.ready.companionHost!.url}/api/v1/pairing/verify`, {
+        headers: { authorization: `Bearer ${companionToken}` }
+      });
+      expect(await catalog()).toEqual(before);
+      const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(route, { method: "POST", headers })));
+      expect(responses.every((response) => response.status === 201)).toBe(true);
+      const after = await catalog();
+      expect(after.notebooks).toHaveLength(1);
+      expect(after.notebooks[0].sessions).toHaveLength(1);
+      expect(after.notebooks[0].sessions[0].title).toBe(fixture === "existing-session" ? "第三讲" : "手机照片");
+      if (fixture === "empty-notebook") expect(after.notebooks[0].notebookId).toBe(before.notebooks[0].notebookId);
+      if (fixture === "existing-session") expect(after).toEqual(before);
+      await fetch(route, { method: "POST", headers });
+      expect(await catalog()).toEqual(after);
+    } finally { await running.stop(); }
   });
 
   it("fails explicitly when the production sidecar has no configured provider", async () => {

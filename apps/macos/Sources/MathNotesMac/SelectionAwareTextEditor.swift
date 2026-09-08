@@ -19,6 +19,7 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
     let fontPreset: String
     let fontSize: Double
     let onActivate: () -> Void
+    var findSelection: SourceFindSelection? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -57,16 +58,22 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
 
     func updateNSView(_ textView: NSTextView, context: Context) {
         context.coordinator.onActivate = onActivate
-        let shouldRegisterAIUndo = context.coordinator.externalEditEpoch != externalEditEpoch
+        let shouldRegisterExternalUndo = context.coordinator.externalEditEpoch != externalEditEpoch
         context.coordinator.externalEditEpoch = externalEditEpoch
         if textView.string != text {
-            if shouldRegisterAIUndo {
+            if shouldRegisterExternalUndo {
                 context.coordinator.applyUndoableExternalText(text, to: textView)
             } else {
                 context.coordinator.replaceTextWithoutUndo(text, in: textView)
             }
         }
         textView.font = editorFont
+        if let selection = findSelection, context.coordinator.appliedFindID != selection.id,
+           NSMaxRange(selection.range) <= (textView.string as NSString).length {
+            context.coordinator.appliedFindID = selection.id
+            textView.setSelectedRange(selection.range)
+            textView.scrollRangeToVisible(selection.range)
+        }
         context.coordinator.scheduleHeightMeasurement()
     }
 
@@ -89,6 +96,7 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
         private var selectedRange: Binding<UTF16TextSelection?>
         private var contentHeight: Binding<CGFloat>
         var externalEditEpoch: Int
+        var appliedFindID: UUID?
         var onActivate: () -> Void
         weak var textView: NSTextView?
         private var pendingHeightMeasurement: DispatchWorkItem?
@@ -182,7 +190,7 @@ struct SelectionAwareTextEditor: NSViewRepresentable {
             textView.undoManager?.registerUndo(withTarget: self) { coordinator in
                 coordinator.applyUndoableExternalText(previous, to: textView)
             }
-            textView.undoManager?.setActionName("AI 选区修改")
+            textView.undoManager?.setActionName("修改文字")
             textView.string = value
             restoreSelection(oldSelection, in: textView)
             text.wrappedValue = value

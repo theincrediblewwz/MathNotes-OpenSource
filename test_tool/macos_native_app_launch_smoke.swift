@@ -7,8 +7,7 @@ guard (3...4).contains(CommandLine.arguments.count) else {
     exit(2)
 }
 
-let appURL = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
-let executableURL = appURL.appending(path: "Contents/MacOS/MathNotes")
+let sourceAppURL = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 let screenshotURL = URL(fileURLWithPath: CommandLine.arguments[2])
 let sourceMode = CommandLine.arguments.count == 4 ? CommandLine.arguments[3] : "local"
 guard sourceMode == "local" || sourceMode == "companion" || sourceMode == "phone" else {
@@ -21,6 +20,23 @@ let notesRoot = temporaryRoot.appending(path: "notes")
 
 try fileManager.createDirectory(at: screenshotURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 try fileManager.createDirectory(at: notesRoot, withIntermediateDirectories: true)
+
+// A unique bundle identity also isolates UserDefaults (including diagnostics
+// written at launch). Never run this smoke with the production preference domain.
+let appURL = temporaryRoot.appending(path: "MathNotes.app")
+try fileManager.copyItem(at: sourceAppURL, to: appURL)
+let plistURL = appURL.appending(path: "Contents/Info.plist")
+var plist = try PropertyListSerialization.propertyList(from: Data(contentsOf: plistURL), format: nil) as! [String: Any]
+let testBundleID = "com.mathnotes.smoke.\(UUID().uuidString.lowercased())"
+plist["CFBundleIdentifier"] = testBundleID
+try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: plistURL)
+let signer = Process()
+signer.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+signer.arguments = ["--force", "--sign", "-", appURL.path]
+try signer.run()
+signer.waitUntilExit()
+guard signer.terminationStatus == 0 else { fatalError("could not sign isolated smoke app") }
+let executableURL = appURL.appending(path: "Contents/MacOS/MathNotes")
 
 var occupiedCompanionPort: Process?
 var companionPortWasAlreadyOccupied = false
@@ -77,17 +93,32 @@ if sourceMode == "phone" {
     }
 }
 
+// On a developer's daily-use Mac, an unrelated app may already have a system
+// authorization window. Only a newly presented window can be attributed here.
+let previousAuthenticationWindows = Set((CGWindowListCopyWindowInfo(
+    [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+) as? [[String: Any]] ?? []).filter {
+    ($0[kCGWindowOwnerName as String] as? String ?? "").lowercased().contains("securityagent")
+}.compactMap { $0[kCGWindowNumber as String] as? Int })
 let application = Process()
 application.executableURL = executableURL
 application.currentDirectoryURL = temporaryRoot
 let workspaceSource = sourceMode == "companion" ? "companion" : "local"
-var launchArguments = ["-mathnotes.workspace.source.v1", workspaceSource]
+let launchPreferences = UserDefaults(suiteName: testBundleID)!
+launchPreferences.set(workspaceSource, forKey: "mathnotes.workspace.source.v1")
+launchPreferences.synchronize()
+var launchArguments = [
+    "-mathnotes.directory.notesRoot.bookmark", "",
+    "-mathnotes.directory.notesRoot.path", notesRoot.path
+]
 if sourceMode == "phone" {
     launchArguments.append("-mathnotes.open-phone-connection")
 }
 application.arguments = launchArguments
 var environment = ProcessInfo.processInfo.environment
 environment["MATHNOTES_NOTES_ROOT_DIR"] = notesRoot.path
+environment["MATHNOTES_PHASE1A_ROOT"] = temporaryRoot.path
+environment["MATHNOTES_COMPANION_TOKEN_FILE"] = temporaryRoot.appending(path: "companion-token").path
 environment["MATHNOTES_REPO_ROOT"] = appURL.deletingLastPathComponent().path
 if let tailscaleFixtureURL {
     environment["MATHNOTES_TAILSCALE_CLI"] = tailscaleFixtureURL.path
@@ -103,6 +134,7 @@ defer {
         application.terminate()
         application.waitUntilExit()
     }
+    UserDefaults.standard.removePersistentDomain(forName: testBundleID)
     try? fileManager.removeItem(at: temporaryRoot)
 }
 
@@ -167,7 +199,8 @@ let authenticationWindows = CGWindowListCopyWindowInfo(
 ) as? [[String: Any]] ?? []
 if let authenticationWindow = authenticationWindows.first(where: { candidate in
     let owner = (candidate[kCGWindowOwnerName as String] as? String ?? "").lowercased()
-    return owner.contains("securityagent")
+    let number = candidate[kCGWindowNumber as String] as? Int ?? -1
+    return owner.contains("securityagent") && !previousAuthenticationWindows.contains(number)
 }) {
     let owner = authenticationWindow[kCGWindowOwnerName as String] as? String ?? "SecurityAgent"
     let title = authenticationWindow[kCGWindowName as String] as? String ?? ""
@@ -194,10 +227,13 @@ if sourceMode == "phone" {
         }
         return width >= 580 && width <= 800 && height >= 520
     }) else {
+        let ownedBounds = windows.filter {
+            ($0[kCGWindowOwnerPID as String] as? Int) == Int(application.processIdentifier)
+        }.compactMap { $0[kCGWindowBounds as String] }
         throw NSError(
             domain: "MathNotesNativeAppLaunchSmoke",
             code: 5,
-            userInfo: [NSLocalizedDescriptionKey: "MathNotes did not present the focused phone connection sheet"]
+            userInfo: [NSLocalizedDescriptionKey: "MathNotes did not present the focused phone connection sheet; visible app window bounds: \(ownedBounds)"]
         )
     }
     captureWindow = phoneWindow

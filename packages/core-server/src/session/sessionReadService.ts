@@ -1,9 +1,9 @@
-import { lstat, readFile, stat } from "node:fs/promises";
+import { readFile, stat, lstat } from "node:fs/promises";
 import { basename, extname, isAbsolute, resolve, sep } from "node:path";
 import { markdownContinuationGroups, type BlockRef, type SessionRecord } from "@mathnotes/shared";
-import { renderPortableMarkdown } from "../render/portableMarkdown";
-import { markdownBlockRevision, markdownLockSummary, sessionManifestRevision } from "./sessionRevision";
+import { renderPortableMarkdown, originalImagePath } from "../render/portableMarkdown";
 import { sessionAssetPathFromMarkdown } from "../domain/sessionAssetPath";
+import { markdownBlockRevision, markdownLockSummary, sessionManifestRevision } from "./sessionRevision";
 
 export type SessionBlockManifest = Readonly<{
   id: string;
@@ -12,12 +12,12 @@ export type SessionBlockManifest = Readonly<{
   source: BlockRef["source"];
   status: BlockRef["status"];
   sourceName: string;
+  continuationGroup?: string;
   assetPath?: string;
   sourceAssetPaths?: readonly string[];
   pageCount?: number;
   sourcePageNumber?: number;
   sourcePageImagePath?: string;
-  continuationGroup?: string;
   renderInNote: boolean;
   editable: boolean;
   updatedAt: string;
@@ -106,6 +106,7 @@ export async function readReadonlySessionBlock(args: {
     const lockSummary = markdownLockSummary(locks);
     const html = await renderPortableMarkdown({
       markdown,
+      sourceImagePath: originalImagePath(block),
       rewriteImage: async (source) => inlineLocalImage({ source, markdownPath, sessionDir })
     });
     return {
@@ -164,6 +165,7 @@ export async function readReadonlySessionPreview(args: {
     remaining -= Array.from(bounded).length;
     fragments.push(`<section class="session-preview-block">${await renderPortableMarkdown({
       markdown: bounded,
+      sourceImagePath: originalImagePath(group[0]),
       rewriteImage: async (source) => inlineLocalImage({ source, markdownPath, sessionDir })
     })}</section>`);
   }
@@ -193,6 +195,7 @@ export async function renderReadonlyMarkdownPreview(args: {
   assertInside(sessionDir, markdownPath);
   const html = await renderPortableMarkdown({
     markdown: args.markdown,
+    sourceImagePath: originalImagePath(block),
     rewriteImage: async (source) => inlineLocalImage({ source, markdownPath, sessionDir })
   });
   return { version: 1, html: markdownBlockDocument(html) };
@@ -256,11 +259,11 @@ function toManifestBlock(block: BlockRef, order = 0): SessionBlockManifest {
     source: block.source,
     status: block.status,
     sourceName: block.sourceName || basename(block.path),
+    continuationGroup: block.continuationGroup,
     ...(block.type !== "markdown" ? { assetPath: portableAssetPath(block.path) } : {}),
     ...(block.fromAssets?.length
       ? { sourceAssetPaths: block.fromAssets.map((assetPath) => portableAssetPath(assetPath)) }
       : {}),
-    continuationGroup: block.continuationGroup,
     pageCount: block.pageCount,
     sourcePageNumber: block.sourcePageNumber,
     sourcePageImagePath: block.sourcePageImagePath,

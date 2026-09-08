@@ -111,7 +111,8 @@ struct ProviderSettingsView: View {
             await loadAiGuidance()
             await loadCompanionConnection()
         }
-        .task(id: supervisor.companionHost?.port) {
+        .task(id: "\(selectedSectionRawValue):\(supervisor.companionHost?.port ?? 0)") {
+            guard selectedSectionRawValue == ProviderSettingsSection.companion.rawValue else { return }
             await ensureCompanionPairingChallenge()
         }
         .confirmationDialog(
@@ -137,6 +138,8 @@ struct ProviderSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: MathNotesTheme.Spacing.section) {
                 settingsHeading("通用", detail: "选择笔记正本与导出时默认打开的位置。")
+
+                MacAuthorCard()
 
                 GroupBox("关于 MathNotes") {
                     HStack(spacing: MathNotesTheme.Spacing.standard) {
@@ -611,6 +614,16 @@ struct ProviderSettingsView: View {
                         Text("令牌只保存在系统钥匙串中；诊断与日志只显示连接状态。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        if hasSavedCompanionToken {
+                            Button("授权读取已保存令牌") {
+                                Task { await authorizeCompanionToken() }
+                            }
+                            .disabled(isCheckingCompanion)
+                            Text("打开设置不会请求钥匙串访问；主动授权读取或保存令牌时，macOS 可能要求确认。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
 
                         HStack(spacing: MathNotesTheme.Spacing.standard) {
                             if isCheckingCompanion {
@@ -1497,10 +1510,19 @@ struct ProviderSettingsView: View {
 
     private func loadCompanionConnection() async {
         companionOrigin = CompanionConnectionPreferences.load()?.origin ?? ""
-        let store = KeychainCredentialStore(service: CompanionConnectionCredential.service)
-        hasSavedCompanionToken = await Task.detached {
-            (try? store.read(account: CompanionConnectionCredential.account))?.isEmpty == false
-        }.value
+        // Opening Settings needs only connection metadata, never the secret.
+        hasSavedCompanionToken = CompanionConnectionPreferences.load() != nil
+    }
+
+    private func authorizeCompanionToken() async {
+        isCheckingCompanion = true
+        defer { isCheckingCompanion = false }
+        do {
+            guard let token = try await CompanionCredentialStore.shared.read(authorize: true), !token.isEmpty else {
+                throw CompanionConnectionError.missingToken
+            }
+            companionMessage = "已读取保存的令牌，本次运行可继续使用"
+        } catch { companionMessage = error.localizedDescription }
     }
 
     private func savedOrEnteredCompanionToken(for normalizedOrigin: String) async throws -> String {
@@ -1509,10 +1531,7 @@ struct ProviderSettingsView: View {
         guard CompanionConnectionPreferences.load()?.origin == normalizedOrigin else {
             throw CompanionConnectionError.tokenRequiredForNewAddress
         }
-        let store = KeychainCredentialStore(service: CompanionConnectionCredential.service)
-        guard let saved = try await Task.detached(operation: {
-            try store.read(account: CompanionConnectionCredential.account)
-        }).value, !saved.isEmpty else {
+        guard let saved = try await CompanionCredentialStore.shared.read(), !saved.isEmpty else {
             throw CompanionConnectionError.missingToken
         }
         return saved
@@ -1526,17 +1545,15 @@ struct ProviderSettingsView: View {
             let client = CompanionConnectionClient()
             let normalizedOrigin = try client.normalizeOrigin(companionOrigin)
             let token = try await savedOrEnteredCompanionToken(for: normalizedOrigin)
-            try CompanionConnectionPreferences.save(.init(origin: normalizedOrigin))
             if !companionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let store = KeychainCredentialStore(service: CompanionConnectionCredential.service)
-                try await Task.detached(operation: {
-                    try store.write(token, account: CompanionConnectionCredential.account)
-                }).value
+                try await CompanionCredentialStore.shared.write(token, origin: normalizedOrigin)
             }
+            try CompanionConnectionPreferences.save(.init(origin: normalizedOrigin))
             companionOrigin = normalizedOrigin
             companionToken = ""
             hasSavedCompanionToken = true
-            companionMessage = "设备连接已保存"
+            companionMessage = "设备连接已保存，可在主界面切换到远程并打开 Notebooks"
+            NotificationCenter.default.post(name: .mathNotesReloadCatalog, object: nil)
         } catch {
             companionMessage = error.localizedDescription
         }
@@ -1551,7 +1568,7 @@ struct ProviderSettingsView: View {
             let normalizedOrigin = try client.normalizeOrigin(companionOrigin)
             let token = try await savedOrEnteredCompanionToken(for: normalizedOrigin)
             let result = try await client.verify(origin: normalizedOrigin, token: token)
-            companionMessage = "连接可用 · \(result.targetCount) 个 Session"
+            companionMessage = "连接可用 · \(result.targetCount) 个 Session。保存连接后可在主界面切换到远程。"
         } catch {
             companionMessage = error.localizedDescription
         }
@@ -1562,15 +1579,13 @@ struct ProviderSettingsView: View {
         companionMessage = nil
         defer { isCheckingCompanion = false }
         do {
-            let store = KeychainCredentialStore(service: CompanionConnectionCredential.service)
-            try await Task.detached(operation: {
-                try store.delete(account: CompanionConnectionCredential.account)
-            }).value
+            try await CompanionCredentialStore.shared.delete()
             CompanionConnectionPreferences.clear()
             companionOrigin = ""
             companionToken = ""
             hasSavedCompanionToken = false
             companionMessage = "设备连接已清除"
+            NotificationCenter.default.post(name: .mathNotesReloadCatalog, object: nil)
         } catch {
             companionMessage = error.localizedDescription
         }

@@ -61,6 +61,20 @@ struct SidecarConfiguration: Sendable {
         )
     }
 
+    static func replica(hostId: String, directory: URL) throws -> Self {
+        guard UUID(uuidString: hostId) != nil else { throw CompanionConnectionError.invalidResponse }
+        var source = ProcessInfo.processInfo.environment
+        source["MATHNOTES_PHASE1A_ROOT"] = directory.path
+        source["MATHNOTES_LOCAL_TOKEN"] = UUID().uuidString + UUID().uuidString
+        source["MATHNOTES_COMPANION_TOKEN"] = UUID().uuidString + UUID().uuidString
+        let base = try development(notesRootURL: directory.appending(path: "notes"), environment: source)
+        var environment = base.environment
+        environment["MATHNOTES_COMPANION_ENABLED"] = "0"
+        environment["MATHNOTES_REPLICA_HOST_ID"] = hostId
+        return Self(executableURL: base.executableURL, arguments: base.arguments, environment: environment,
+                    token: base.token, companionHostToken: "")
+    }
+
     private static func resolveCompanionHostToken(environment: [String: String]) -> String {
         if let configured = environment["MATHNOTES_COMPANION_TOKEN"]?
             .trimmingCharacters(in: .whitespacesAndNewlines), !configured.isEmpty {

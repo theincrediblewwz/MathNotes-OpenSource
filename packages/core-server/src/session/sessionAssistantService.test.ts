@@ -50,6 +50,18 @@ describe("SessionAssistantService", () => {
 
   afterEach(async () => rm(root, { recursive: true, force: true }));
 
+  it("rechecks an old running observation before declaring a completed assistant task interrupted", async () => {
+    const service = new SessionAssistantService(root, async () => provider());
+    const started = await service.start({ notebookId: "analysis", sessionId: "lecture", scope: "session", mode: "explain" });
+    const completed = await waitForAssistantTerminal(service, started.id);
+    expect(completed.status).toBe("succeeded");
+    // Deterministically model a polling read completed after controller cleanup.
+    const observer = service as unknown as { recoverOrphan(task: SessionAssistantTask): Promise<SessionAssistantTask> };
+    const checked = await observer.recoverOrphan({ ...started, status: "running" });
+    expect(checked.status).toBe("succeeded");
+    expect((await service.get({ notebookId: "analysis", sessionId: "lecture", taskId: started.id })).status).toBe("succeeded");
+  });
+
   it("uses the same exact packet for preview and provider input, then stores a compatible remark", async () => {
     const service = new SessionAssistantService(root, async () => provider());
     const input = {
