@@ -1,6 +1,6 @@
 # 在 Mac 本地开发 MathNotes
 
-当前发布：macOS 0.3.4，集成 PWA 0.3.4。[功能与延期验收状态](RELEASE_STATUS.md)；跨 Windows 真实互联暂缓，日常本机使用无需 Windows 在线。
+当前发布：macOS 0.3.5，集成 PWA 0.3.4。[功能与延期验收状态](RELEASE_STATUS.md)；跨 Windows 真实互联暂缓，日常本机使用无需 Windows 在线。
 
 从仓库根目录执行下面的命令。本仓库已经包含 Mac 原生界面、共享 Core/协议、PWA、打包脚本和测试，不需要私有仓库，也不需要 Windows 电脑在线。
 
@@ -49,7 +49,7 @@ npm run test:macos:transport
 - `output/releases/MathNotes-macOS-native-arm64-<版本>-<构建>-unsigned.zip`
 - 同名 `.sha256`
 
-当前打包使用本机 ad-hoc 签名，不需要 Apple Developer ID 或公证凭据。版本从根 `package.json` 写入 App；构建来自本次 Git 提交，存在未提交文件时带 `-modified`。无 Git 元数据的源码目录会使用 `local-时间`。公开仓库的提交号与此前测试包的构建号可以不同，以实际包内信息为准。
+当前打包使用本机 ad-hoc 签名，不需要 Apple Developer ID 或公证凭据。Mac 版本从 `deploy/releases/macos-release.json` 的 `version` 写入 App，独立于 Windows/PWA 版本；构建来自本次 Git 提交，存在未提交文件时带 `-modified`。无 Git 元数据的源码目录会使用 `local-时间`。公开仓库的提交号与此前测试包的构建号可以不同，以实际包内信息为准。
 
 打包时必须在 `strip` 后显式签署内置 Node，再签署外层 App。不要仅依赖外层 `--deep`：放在 Resources 下的 Node 曾在外层验证通过时仍被 macOS 以 `CODESIGNING / Invalid Page` 终止。打包现在还会用空目录运行签名后的真实后台，健康检查失败则不会生成 ZIP。
 

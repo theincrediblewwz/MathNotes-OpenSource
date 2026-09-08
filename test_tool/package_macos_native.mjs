@@ -16,8 +16,11 @@ const resourcesPath = path.join(contentsPath, "Resources");
 const runtimePath = path.join(resourcesPath, "MathNotesRuntime");
 const pwaPath = path.join(resourcesPath, "MathNotesPWA");
 const releaseRoot = path.join(projectRoot, "output", "releases");
-const rootPackage = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
-const version = rootPackage.version;
+const macosRelease = JSON.parse(await readFile(path.join(projectRoot, "deploy/releases/macos-release.json"), "utf8"));
+const version = macosRelease.version;
+if (!/^\d+\.\d+\.\d+$/.test(version ?? "") || macosRelease.tag !== `macos-v${version}`) {
+  throw new Error("MACOS_RELEASE_VERSION_MISMATCH");
+}
 const buildRevision = macosBuildRevision(projectRoot);
 const archiveName = `MathNotes-macOS-native-arm64-${version}-${buildRevision}-unsigned.zip`;
 const archivePath = path.join(releaseRoot, archiveName);
