@@ -1,6 +1,6 @@
 # 在 Mac 本地开发 MathNotes
 
-当前发布：macOS 0.3.5，集成 PWA 0.3.4。[功能与延期验收状态](RELEASE_STATUS.md)；跨 Windows 真实互联暂缓，日常本机使用无需 Windows 在线。
+当前发布：macOS 0.3.6；0.3.7 为待鼠标验收的候选版本。集成 PWA 0.3.4。[功能与延期验收状态](RELEASE_STATUS.md)；跨 Windows 真实互联暂缓，日常本机使用无需 Windows 在线。
 
 从仓库根目录执行下面的命令。本仓库已经包含 Mac 原生界面、共享 Core/协议、PWA、打包脚本和测试，不需要私有仓库，也不需要 Windows 电脑在线。
 
@@ -125,3 +125,13 @@ bash test_tool/diagnose_macos_connection.command
 Core 测试 `sessionSharePackageService.test.ts` 使用 Windows 同一个 `exportSessionMarkdown(... packageMode: "share")` 准备包，验证目录/ZIP 往返、图片字节、编码文件名、无覆盖导入与损坏包拒绝。`npm run test:macos:preview` 同时检查真实 Swift 客户端导入导出、导入图像渲染，以及源码编辑器无变化更新不触发 NSTextStorage 重排或焦点激活。
 
 导入上限：总 256 MB、4096 个文件/目录、单文件 64 MB、Markdown 8 MB、路径深度 32。资源使用相对 assets 路径；拒绝符号链接、路径穿越、大小写/Unicode 冲突、加密 ZIP 和 CRC 不一致。分享的是合并正文与资源，不迁移原始块 ID、编辑锁、AI 历史或密钥。Windows 源码无需本轮修改；其现有分享导出为目录，Mac ZIP 解压后采用同一目录格式。
+
+## 文件选择与块结构（0.3.7）
+
+分享导入由 Notebooks 的 `onDismiss` 回调启动异步 `NSOpenPanel`，禁止在关闭 SwiftUI sheet 的同一轮用 `runModal()` 嵌套事件循环。文件框挂到根视图持有的实际工作区窗口，不在关闭回调中依赖可能为空或指向其他窗口的 `NSApp.mainWindow/keyWindow`。文件筛选通过扩展名/目录判断，不将 ZIP、folder 和动态 Markdown UTI 混作一个类型过滤。主界面支持拖入 ZIP/分享目录；未保存草稿仍受保护。
+
+`restoreShareBlocks` 使用 Markdown/数学解析器识别顶层导出注释，按原始字符位置切片，保留换行与内容。有效的块 ID 和来源恢复到新 Session；非法/重复 ID 重新编号，文件名始终由程序生成。连续元数据注释是 Windows 合并续接块的格式，缺少内部偏移，因此保留完整组并告知用户。没有元数据时不凭标题猜测原块边界。Mac 分享导出开启块元数据，保证普通块能够往返恢复；导出中不存在的锁定信息无法恢复。
+
+核心回归：`sharePackageBlocks.test.ts` 与 `sessionSharePackageService.test.ts`；原生回归在 `test:macos:preview` 中验证两个 Windows 标记块、原图和 ZIP 再导入结构。人工验收需要实际点击文件框中的文件夹和 ZIP，取消并再次打开；仅通过路径输入框打开不能证明鼠标选择已修复。
+
+ZIP 文件名：兼容未设置 UTF-8 标志的 macOS `ditto` 压缩包，优先有效 Unicode 路径扩展字段，其次严格 UTF-8，失败才回退旧 CP437；解码之后仍执行路径、重复项、大小与 CRC 校验。

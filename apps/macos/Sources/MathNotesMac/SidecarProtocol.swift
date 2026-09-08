@@ -1045,4 +1045,6 @@ struct SharePackageImportResult: Decodable {
     let session: SessionCatalogItem
     let assetCount: Int
     let byteLength: Int
+    let blockCount: Int?
+    let mergedContinuationGroups: Int?
 }

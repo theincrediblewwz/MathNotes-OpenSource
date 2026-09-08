@@ -1,3 +1,4 @@
+import { restoreShareBlocks } from "./sharePackageBlocks";
 import { randomUUID } from "node:crypto";
 import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,7 +12,7 @@ import { SessionWriteCoordinator } from "./sessionWriteCoordinator";
 import { extractShareZip, safeSharePath, shareFiles, SHARE_LIMITS, SharePackageError, zipShareDirectory } from "./sharePackageArchive";
 
 export type SharePackageImport = { packagePath: string; notebookId?: string; title?: string };
-export type SharePackageImportResult = { session: NotebookSessionSummary; assetCount: number; byteLength: number };
+export type SharePackageImportResult = { session: NotebookSessionSummary; assetCount: number; byteLength: number; blockCount: number; mergedContinuationGroups: number };
 export class SessionSharePackageService {
   constructor(private readonly rootDir: string, private readonly writes: SessionWriteCoordinator) {}
 
@@ -20,7 +21,7 @@ export class SessionSharePackageService {
       const temporary = await mkdtemp(join(tmpdir(), "mathnotes-share-export-"));
       try {
         const result = await exportSessionMarkdown({ ...input, rootDir: this.rootDir, defaultExportDir: temporary,
-          includeMetadataComments: false, mathCompatibility: "portable", packageMode: "share" });
+          includeMetadataComments: true, mathCompatibility: "portable", packageMode: "share" });
         if (result.missingAssets?.length) throw new SharePackageError("missing_assets", `原笔记缺少 ${result.missingAssets.length} 个引用资源，未生成不完整分享包。`);
         const target = join(temporary, "share.zip");
         await zipShareDirectory(result.packageDir!, target);
@@ -84,7 +85,9 @@ export class SessionSharePackageService {
       // Read everything into a private staging tree before any visible catalog mutation.
       const prepared = join(temporary, "prepared"); await mkdir(join(prepared, "blocks"), { recursive: true });
       let byteLength = Buffer.byteLength(markdown);
-      await writeFile(join(prepared, "blocks/0001_imported.md"), markdown);
+      const structure = restoreShareBlocks(markdown);
+      const blockPath = (index: number) => `blocks/${String(index + 1).padStart(4, "0")}_imported.md`;
+      for (const [index, block] of structure.blocks.entries()) await writeFile(join(prepared, blockPath(index)), block.markdown);
       for (const asset of assets) {
         if (sessionAssetPathFromMarkdown(encodeMarkdownAssetPath(asset)) !== asset) throw new SharePackageError("unsafe_package_path", "资源文件名不兼容 Windows/Mac。");
         const sourceAsset = join(source, asset), target = join(prepared, asset);
@@ -108,7 +111,9 @@ export class SessionSharePackageService {
         }
         const sessionId = `import_${randomUUID()}`;
         const session = createSessionRecord({ id: sessionId, title, createdAt: now });
-        session.blocks.push(createBlockRef({ id: "0001", type: "markdown", path: "blocks/0001_imported.md", source: "user", createdAt: now }));
+        session.blocks.push(...structure.blocks.map((block, index) => createBlockRef({
+          id: block.id, type: "markdown", path: blockPath(index), source: block.source, createdAt: now
+        })));
         await writeFile(join(prepared, "session.json"), JSON.stringify(session, null, 2));
         // Same-volume staging makes the final rename atomic even when /tmp is on another volume.
         const staging = await mkdtemp(join(this.rootDir, ".share-import-"));
@@ -125,7 +130,7 @@ export class SessionSharePackageService {
             await rename(staging, notebookDir);
           }
         } finally { await rm(staging, { recursive: true, force: true }); }
-        return { session: { notebookId, sessionId, title, status: session.status, createdAt: now, updatedAt: now }, assetCount: assets.length, byteLength };
+        return { session: { notebookId, sessionId, title, status: session.status, createdAt: now, updatedAt: now }, assetCount: assets.length, byteLength, blockCount: structure.blocks.length, mergedContinuationGroups: structure.mergedContinuationGroups };
       });
     } finally { await rm(temporary, { recursive: true, force: true }); }
   }

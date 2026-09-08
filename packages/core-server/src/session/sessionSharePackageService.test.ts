@@ -70,6 +70,45 @@ describe("Windows/Mac share packages", () => {
     await expect(service.exportZip({ ...imported.session, baseRevision: "0".repeat(64) })).rejects.toMatchObject({ code: "revision_conflict" });
   });
 
+  it("restores blocks from a Windows share folder compressed by an ordinary ZIP tool", async () => {
+    const dir = await folder("<!-- block:id=0012 source=ai_transcription -->\n\n# 第一块\n\n![原图](" + encodeMarkdownAssetPath(asset) + ")\n\n<!-- block:id=0018 source=user_revision -->\n\n第二块 $x^2$");
+    const packed = await zip([["Windows 分享目录/课程.md", await readFile(join(dir, "课程.md"))], [`Windows 分享目录/${asset}`, photo], ["__MACOSX/._Windows 分享目录", Buffer.from("metadata")]]);
+    const imported = await service.importPackage({ packagePath: packed });
+    expect(imported.blockCount).toBe(2);
+    const manifest = await readReadonlySessionManifest({ rootDir: root, ...imported.session });
+    expect(manifest.blocks.map(b => b.id)).toEqual(["0012", "0018"]);
+    const exported = await service.exportZip({ ...imported.session, baseRevision: manifest.revision });
+    const nextZip = join(temp, "Mac-reexport.zip"); await writeFile(nextZip, exported.bytes);
+    const again = await service.importPackage({ packagePath: nextZip });
+    const nextManifest = await readReadonlySessionManifest({ rootDir: root, ...again.session });
+    expect(nextManifest.blocks.map(b => b.id)).toEqual(["0012", "0018"]);
+    expect(again.assetCount).toBe(1);
+    const nextRoot = join(root, "notebooks", again.session.notebookId, "sessions", again.session.sessionId);
+    expect(await readFile(join(nextRoot, asset))).toEqual(photo);
+    expect(await readFile(join(nextRoot, "blocks/0002_imported.md"), "utf8")).toContain("第二块 $x^2$");
+  });
+
+  it("imports Mac ZIP UTF-8 names even when the archive omitted the UTF-8 flag", async () => {
+    const packed = await zip([["分享目录/课程.md", Buffer.from(`<!-- block:id=12 source=user -->\n\n![图](${encodeMarkdownAssetPath(asset)})`)], [`分享目录/${asset}`, photo]]);
+    const bytes = await readFile(packed);
+    const end = bytes.length - 22;
+    let cursor = bytes.readUInt32LE(end + 16);
+    const count = bytes.readUInt16LE(end + 10);
+    for (let index = 0; index < count; index++) {
+      expect(bytes.readUInt32LE(cursor)).toBe(0x02014b50);
+      bytes.writeUInt16LE(bytes.readUInt16LE(cursor + 8) & ~0x800, cursor + 8);
+      const local = bytes.readUInt32LE(cursor + 42);
+      bytes.writeUInt16LE(bytes.readUInt16LE(local + 6) & ~0x800, local + 6);
+      cursor += 46 + bytes.readUInt16LE(cursor + 28) + bytes.readUInt16LE(cursor + 30) + bytes.readUInt16LE(cursor + 32);
+    }
+    await writeFile(packed, bytes);
+    const imported = await service.importPackage({ packagePath: packed });
+    const sessionRoot = join(root, "notebooks", imported.session.notebookId, "sessions", imported.session.sessionId);
+    expect(await readFile(join(sessionRoot, asset))).toEqual(photo);
+    expect(imported.session.title).toBe("课程");
+    expect(imported.assetCount).toBe(1);
+  });
+
   it("accepts a wrapped ZIP and explicit Markdown with adjacent assets", async () => {
     const dir = await folder();
     const first = await service.importPackage({ packagePath: join(dir, "课程.md") });
