@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-08T07:56:11.242Z",
-  "fileCount": 855,
-  "snapshotSha256": "28c1189d0c39af171c978bcd33176db50d0e840dbf941ae36c7d66f1bafbb976",
+  "generatedAt": "2026-09-08T09:41:38.424Z",
+  "fileCount": 860,
+  "snapshotSha256": "bb885e7c47f174052af805a58622132f2a456bd7384e65bca2b181c4587b8835",
   "files": [
     {
       "path": ".gitattributes",
@@ -68,8 +68,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 10268,
-      "sha256": "0dc4b46e22c834dbb0e892e1d01935465f152f5da32c80dfa02047f405d7b369"
+      "bytes": 10303,
+      "sha256": "81517c9ff67ac33f259a22d0b6ab916c5dad457566295645fc6cdf905ff43588"
     },
     {
       "path": "SECURITY.md",
@@ -1058,8 +1058,8 @@
     },
     {
       "path": "apps/macos/DEVELOPMENT.md",
-      "bytes": 9712,
-      "sha256": "2ba3d430d93d03e837014b2eb7c2d7a2bceaff4aa4ad9bd7aaeae1ad6ff9a36c"
+      "bytes": 10614,
+      "sha256": "4790fa418e904d979e7cb3b5b5159219ef352af220aab29f7cade5ac1e31285a"
     },
     {
       "path": "apps/macos/Package.swift",
@@ -1068,8 +1068,8 @@
     },
     {
       "path": "apps/macos/RELEASE_STATUS.md",
-      "bytes": 3735,
-      "sha256": "8a04ff7a4ba6ec910d108f249f223601fe487c99465a480cf6aef1a00e049fd5"
+      "bytes": 4834,
+      "sha256": "562ab984f3408c91c87365d87c591303e2b664d37086ca1f12cb2132333322df"
     },
     {
       "path": "apps/macos/REMOTE_CATALOG_SYNC_V1.md",
@@ -1118,8 +1118,8 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/ContentView.swift",
-      "bytes": 37640,
-      "sha256": "f064cb27ad9fee249170456003cef7a555e2e2c119c9835b1e055e393cfb98cd"
+      "bytes": 39851,
+      "sha256": "172b43384c80fdd2a9c11ffaf70391406a38954e9b564767b0cb7ffe3c002f6d"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/KeychainCredentialStore.swift",
@@ -1128,8 +1128,8 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/LocalShellClient.swift",
-      "bytes": 70981,
-      "sha256": "276f424356744b653a50432d10e1ccd528bdba8873898d6244aa4f3121770d8c"
+      "bytes": 72714,
+      "sha256": "32d13f918bad465278add0255b5c7aae4b23df5fe281527a8608bc0d5424c44f"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/MacAppVersion.swift",
@@ -1153,8 +1153,8 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/MacNotebookBrowser.swift",
-      "bytes": 22787,
-      "sha256": "aab21d7a243bceb8b4b574992da7f1dd4ae70d52fa21a69a3fb02b81b13492ff"
+      "bytes": 23327,
+      "sha256": "647b379dd3c3ab86cebd7a25b4ea179db938d2ce7e95dd09c4dacdc0fd8b05d0"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/MacReadingPosition.swift",
@@ -1218,8 +1218,8 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/ReadonlySessionView.swift",
-      "bytes": 219276,
-      "sha256": "a3e5cb783822882f01485cfb12078586feb1a9264df8cad806d71317386978fa"
+      "bytes": 222184,
+      "sha256": "3864225f0f96b83baf3484efd96f4dd6b8f1adf9e9c4379012b6e6725141941a"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/RemoteHostProfile.swift",
@@ -1343,8 +1343,8 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/SelectionAwareTextEditor.swift",
-      "bytes": 8771,
-      "sha256": "4027941eab2af4829d34146fb58a4c0d4abac6ca9dd95b985f452039eb84b9e1"
+      "bytes": 9577,
+      "sha256": "6e047165b23b2cc161238699b8f38fa6f8eaca2df52edd76850c5b781dfd4166"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/SessionActionButtonStyle.swift",
@@ -1388,13 +1388,18 @@
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/SidecarProtocol.swift",
-      "bytes": 36415,
-      "sha256": "fe63594a3102f23585a0e9fa2dada53ed7bef9c0e64bbd87b0a6234db39ed3f5"
+      "bytes": 36651,
+      "sha256": "437334648d6ee8b90af5a30d1a451caa4174476e0e3845a04405450ca69662d7"
     },
     {
       "path": "apps/macos/Sources/MathNotesMac/SidecarSupervisor.swift",
-      "bytes": 49603,
-      "sha256": "6bdb67e91951746a66650952c6103877d567951cfbe8131471fd0cca4e620b01"
+      "bytes": 50332,
+      "sha256": "87e4acf7f1b17d944ed9c806ca43e958324be53ebc8d5200af6db31b6e953137"
+    },
+    {
+      "path": "apps/macos/WINDOWS_SHARE_IMPORT_FOLLOWUP.md",
+      "bytes": 1629,
+      "sha256": "74ff624e1892557bec523a25721c8e3e1b931050d775393d52698b7190ef0204"
     },
     {
       "path": "apps/pwa/index.html",
@@ -2904,7 +2909,7 @@
     {
       "path": "deploy/releases/macos-release.json",
       "bytes": 140,
-      "sha256": "eaf56de90ccecf04d268922f8d2db98c9b163634196ea7cbcbc4335ea937c851"
+      "sha256": "3e67a551609bb3bcf4756ff1458da49c37bd4a752fde79f2982fd29409faaf86"
     },
     {
       "path": "deploy/releases/macos-v0.3.4.md",
@@ -2915,6 +2920,11 @@
       "path": "deploy/releases/macos-v0.3.5.md",
       "bytes": 3694,
       "sha256": "8d0f5c9c8d06168e2abb71ffcc1a52c67526b1aa9c05a612b9c7007b06b1b5e1"
+    },
+    {
+      "path": "deploy/releases/macos-v0.3.6.md",
+      "bytes": 4383,
+      "sha256": "1ad6db93c6b1be1ffaebda34ad6c8e60758f78676110586148f05f9fce611300"
     },
     {
       "path": "deploy/releases/v0.3.4-acceptance.md",
@@ -2943,8 +2953,8 @@
     },
     {
       "path": "package-lock.json",
-      "bytes": 345312,
-      "sha256": "51d0011681d444f754eeac8959b37f14030a41b244d41083a984060f9a10b230"
+      "bytes": 347503,
+      "sha256": "df6985ab94d5186c0177fe68c376c7ac1048a34076cb1fb2a1e724105f5928b6"
     },
     {
       "path": "package.json",
@@ -2953,8 +2963,8 @@
     },
     {
       "path": "packages/core-server/package.json",
-      "bytes": 1505,
-      "sha256": "0140c11ddb405be6bd8560a8158d23be28083fc4d7176681b7051a682181a16c"
+      "bytes": 1609,
+      "sha256": "34e7a7deeabfb33bdc30ea4f03bc77a1a1a5fcb94d56505a123bc80abe549af4"
     },
     {
       "path": "packages/core-server/src/adapters/node/workspaceContextStore.test.ts",
@@ -2968,13 +2978,13 @@
     },
     {
       "path": "packages/core-server/src/api/capabilityPolicy.test.ts",
-      "bytes": 12085,
-      "sha256": "eff5e5a2a4c4aaa436aa311a15512ab418a4ca6d8a59c8f21b13ad512b12cdcd"
+      "bytes": 12159,
+      "sha256": "665aabc5e0210ba9bfc2cd57da830b5f78331fcf91864b82b028661d88bf8082"
     },
     {
       "path": "packages/core-server/src/api/capabilityPolicy.ts",
-      "bytes": 20145,
-      "sha256": "cd218dc24bdcc317b9f67eacfb6956ec3b64aac4b3bdc337c9b3043211bc8607"
+      "bytes": 20485,
+      "sha256": "97ce7e0c32f892b2fcf2c6399c1a0237b73fb1c52eb4b6522f0cc521b01c9366"
     },
     {
       "path": "packages/core-server/src/api/localShellServer.test.ts",
@@ -2983,8 +2993,8 @@
     },
     {
       "path": "packages/core-server/src/api/localShellServer.ts",
-      "bytes": 70169,
-      "sha256": "229ce81675b420b45e1f1af9c42024be4531aeac153616c47e56ef2630f7b36c"
+      "bytes": 72068,
+      "sha256": "de4ccefd7f06cdb086591e8923c103974fee34cb6ae16a2cfdbc243479f74735"
     },
     {
       "path": "packages/core-server/src/api/networkApiContracts.ts",
@@ -3442,6 +3452,16 @@
       "sha256": "c043e48aff3638e87e03d3d8cbd229f6f7636aa6d089f61e7303a27df0b8f836"
     },
     {
+      "path": "packages/core-server/src/session/sessionSharePackageService.test.ts",
+      "bytes": 9889,
+      "sha256": "3dc5be4ea481258b2d59b38cc743c4a55a67a7f1384f952bd17845fb4985ffbb"
+    },
+    {
+      "path": "packages/core-server/src/session/sessionSharePackageService.ts",
+      "bytes": 10441,
+      "sha256": "c65d422434bec9f7b2f67436a89ae7d38e07eedbee81cd8a75a35b2692b5e0c9"
+    },
+    {
       "path": "packages/core-server/src/session/sessionWriteCoordinator.test.ts",
       "bytes": 2166,
       "sha256": "e58e18ec0c2acecf9508a97a3a9629d11942495746961430b301e6d5bbe152bf"
@@ -3450,6 +3470,11 @@
       "path": "packages/core-server/src/session/sessionWriteCoordinator.ts",
       "bytes": 1995,
       "sha256": "7c43492abf7367e91424f30490822fcfe531a51d1b7e896e8d41b7c32c4a93ff"
+    },
+    {
+      "path": "packages/core-server/src/session/sharePackageArchive.ts",
+      "bytes": 5981,
+      "sha256": "4349dec21591477a7ade4f753bdea466f9eef367a1ce1e3d777d2dc3d095f59e"
     },
     {
       "path": "packages/core-server/src/session/sourceImageIntegration.mac.test.ts",
@@ -3478,8 +3503,8 @@
     },
     {
       "path": "packages/core-server/src/sidecar/macosSidecar.ts",
-      "bytes": 21563,
-      "sha256": "156edc8f7013da234e63155b2c40d9f822d8fba2a363de158bc0c6217dfaa24a"
+      "bytes": 21735,
+      "sha256": "7aa7c12b595e3643e5dfd7614a4a3599d07bdd8edcf3515fcf12b320d7255763"
     },
     {
       "path": "packages/core-server/src/sidecar/main.ts",
@@ -3973,8 +3998,8 @@
     },
     {
       "path": "test_tool/macos_preview_smoke.swift",
-      "bytes": 41166,
-      "sha256": "75a73b25b8a8cd2bf9372f341f2577def8b1c0bba458d9e1576c4c6a30e43d2a"
+      "bytes": 46712,
+      "sha256": "3d14c12524a27a7b062a5fd1863f2c1bd85641842fc3818c5825b871bc6ed0dd"
     },
     {
       "path": "test_tool/macos_remote_acceptance.swift",
