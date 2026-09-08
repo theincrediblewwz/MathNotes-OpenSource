@@ -140,6 +140,8 @@ describe("Core API capability policy", () => {
       "local.session.selection-edit.propose",
       "local.session.selection-edit.apply",
       "local.session.selection-edit.cancel",
+      "local.workspace.share.import",
+      "local.session.share.export",
       "local.session.export.create",
       "local.session.export.download",
       "local.session.asset",

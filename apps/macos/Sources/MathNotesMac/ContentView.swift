@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var supervisor: SidecarSupervisor
@@ -30,6 +31,8 @@ struct ContentView: View {
     @State private var markdownDropError: String?
     @State private var isImportingMarkdown = false
     @State private var sessionRefreshNonce = 0
+    @State private var isImportingSharePackage = false
+    @State private var sharePackageError: String?
 
     var body: some View {
         NavigationSplitView {
@@ -116,9 +119,21 @@ struct ContentView: View {
                     )
                 },
                 onOpenSession: requestSessionSelection,
+                onImportSharePackage: beginSharePackageImport,
                 onClose: { showNotebookBrowser = false }
             )
         }
+        .sheet(isPresented: $isImportingSharePackage) {
+            VStack(spacing: 14) {
+                ProgressView()
+                Text("正在导入正文和资源…")
+            }
+            .frame(width: 320, height: 140)
+            .interactiveDismissDisabled()
+        }
+        .alert("无法导入分享包", isPresented: Binding(get: { sharePackageError != nil }, set: { if !$0 { sharePackageError = nil } })) {
+            Button("好", role: .cancel) { sharePackageError = nil }
+        } message: { Text(sharePackageError ?? "") }
         .sheet(isPresented: $showMarkdownArchive) {
             MarkdownArchiveSheet(
                 documents: temporaryMarkdownDocuments,
@@ -651,6 +666,32 @@ struct ContentView: View {
               let notebook = loadedNotebooks.first(where: { $0.notebookId == source.notebookId }),
               let session = notebook.sessions.first(where: { $0.sessionId == source.sessionId }) else { return }
         requestSessionSelection(session)
+    }
+
+    private func beginSharePackageImport(notebookID: String?) {
+        guard sourceMode == .local, !editingState.hasUnsavedSourceDrafts, !isImportingSharePackage else { return }
+        showNotebookBrowser = false
+        Task { @MainActor in
+            await Task.yield()
+            let panel = NSOpenPanel()
+            panel.title = "导入分享包"
+            panel.message = "选择 Windows/Mac 分享包文件夹、ZIP，或与 assets 文件夹相邻的 Markdown。"
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.allowedContentTypes = [.zip, .folder, UTType(filenameExtension: "md") ?? .plainText, UTType(filenameExtension: "markdown") ?? .plainText]
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            isImportingSharePackage = true
+            defer { isImportingSharePackage = false }
+            do {
+                let result = try await supervisor.importSharePackage(packagePath: url.path, notebookId: notebookID)
+                selectedNotebookId = result.session.notebookId
+                openSession(result.session)
+                sessionRefreshNonce += 1
+            } catch { sharePackageError = error.localizedDescription }
+        }
     }
 
     private func openSession(_ session: SessionCatalogItem) {

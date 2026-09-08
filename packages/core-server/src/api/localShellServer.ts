@@ -1,3 +1,5 @@
+import { SessionSharePackageService } from "../session/sessionSharePackageService";
+import { SharePackageError } from "../session/sharePackageArchive";
 import { SessionRewriteService, SessionRewriteError } from "../session/sessionRewriteService";
 import { WorkspaceSyncError } from "../sync/workspaceSyncService";
 import type { ReplicaWorkspaceService, ReplicaConnection } from "../sync/replicaWorkspaceService";
@@ -183,6 +185,7 @@ export type LocalShellServerOptions = {
   sessionAssistant?: SessionAssistantService;
   sessionRewrite?: SessionRewriteService;
   sessionSelectionEdit?: SessionSelectionEditService;
+  sharePackages?: SessionSharePackageService;
   exportSessionMarkdown?: (input: {
     notebookId: string;
     sessionId: string;
@@ -291,6 +294,16 @@ export class LocalShellServer {
           await replica.resolve(body as Parameters<ReplicaWorkspaceService["resolve"]>[0]);
           return writeJson(response, 200, { ok: true });
         }
+      }
+      if (route.id === "local.workspace.share.import") {
+        if (!this.options.sharePackages || this.options.replicaWorkspace) return writeJson(response, 503, { error: "local_import_required", message: "请切换到本机后导入分享包。" });
+        const body = await readJsonBody(request, MAX_WORKSPACE_CREATE_BODY_BYTES);
+        if (!body || typeof body !== "object" || !("packagePath" in body) || typeof body.packagePath !== "string" ||
+            ("notebookId" in body && typeof body.notebookId !== "string") || ("title" in body && typeof body.title !== "string")) throw new BodyError("invalid_share_package", 400);
+        const result = await this.options.sharePackages.importPackage({ packagePath: body.packagePath,
+          notebookId: "notebookId" in body ? body.notebookId as string : undefined,
+          title: "title" in body ? body.title as string : undefined });
+        return writeJson(response, 200, result);
       }
       if (route.id === "local.workspace.trash") {
         if (!this.options.listWorkspaceTrash) return writeJson(response, 503, { error: "workspace_write_unavailable" });
@@ -966,6 +979,14 @@ export class LocalShellServer {
         }
         return;
       }
+      if (route.id === "local.session.share.export") {
+        if (!this.options.sharePackages) return writeJson(response, 503, { error: "export_unavailable" });
+        const baseRevision = requiredQuery(url, "baseRevision");
+        if (!/^[a-f0-9]{64}$/.test(baseRevision)) throw new QueryError("invalid_baseRevision");
+        const result = await this.options.sharePackages.exportZip({ notebookId, sessionId, baseRevision });
+        writeBytes(response, 200, result.bytes, "application/zip", { "content-disposition": `attachment; filename="${safeDownloadName(result.fileName)}"` });
+        return;
+      }
       if (route.id === "local.session.export.create") {
         if (!this.options.exportSessionMarkdown) return writeJson(response, 503, { error: "export_unavailable" });
         const baseRevision = url.searchParams.get("baseRevision")?.trim() || undefined;
@@ -999,6 +1020,7 @@ export class LocalShellServer {
       });
       writeBytes(response, 200, asset.bytes, asset.mimeType);
     } catch (error) {
+      if (error instanceof SharePackageError) return writeJson(response, error.statusCode, { error: error.code, message: error.message });
       const statusCode = error instanceof WorkspaceCommandError
         ? workspaceCommandStatus(error)
         : error instanceof RuntimeProviderConfigurationError || error instanceof QueryError

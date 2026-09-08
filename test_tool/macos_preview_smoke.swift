@@ -13,6 +13,7 @@ struct PreviewSmoke {
               let script = environment["MATHNOTES_TEST_SIDECAR"] else { throw Failure.missingEnvironment }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
+        try await verifyInertSourceUpdates()
         let companionToken = UUID().uuidString + UUID().uuidString
         let supervisor = SidecarSupervisor(configuration: SidecarConfiguration(
             executableURL: URL(fileURLWithPath: node), arguments: [script], environment: [
@@ -478,6 +479,38 @@ struct PreviewSmoke {
         _ = try await waitForText("推导片段 9", in: brokenHost)
         try expect(brokenWorkspace.errors["0002"] != nil, "missing paragraph must reach an error state")
         print("MACOS_PREVIEW_PARTIAL_FAILURE_REMAINS_READABLE_OK")
+        let shareFolder = URL(fileURLWithPath: root + "/share-fixture")
+        try FileManager.default.createDirectory(at: shareFolder.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        let shareMarkdown = "# Share import\n\nFormula $x^2$\n\n![image](assets/photo.png)"
+        let sharePhoto = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH3sAAAAASUVORK5CYII=")!
+        try shareMarkdown.write(to: shareFolder.appendingPathComponent("Windows.md"), atomically: true, encoding: .utf8)
+        try sharePhoto.write(to: shareFolder.appendingPathComponent("assets/photo.png"))
+        let shared = try await supervisor.importSharePackage(packagePath: shareFolder.path, notebookId: nil)
+        try expect(shared.assetCount == 1, "native import decodes resource count")
+        let sharedManifest = try await supervisor.fetchSessionManifest(shared.session)
+        let shareBytes = try await supervisor.exportSharePackage(shared.session, baseRevision: sharedManifest.revision)
+        try expect(shareBytes.prefix(2) == Data([0x50, 0x4b]), "native export returns a ZIP")
+        let shareZip = URL(fileURLWithPath: root + "/round-trip.zip")
+        try shareBytes.write(to: shareZip)
+        let sharedAgain = try await supervisor.importSharePackage(packagePath: shareZip.path, notebookId: shared.session.notebookId)
+        try expect(sharedAgain.assetCount == 1 && sharedAgain.session.sessionId != shared.session.sessionId, "native round trip creates independent Session")
+        print("MACOS_SHARE_PACKAGE_NATIVE_CLIENT_ROUND_TRIP_OK")
+        let importedWorkspace = SessionSourceWorkspace()
+        importedWorkspace.prepare(sessionID: shared.session.id, revision: sharedManifest.revision, blocks: sharedManifest.blocks)
+        let importedHost = NSHostingView(rootView: SessionContinuousPreview(session: shared.session,
+            sessionRevision: sharedManifest.revision, blocks: sharedManifest.blocks, activeBlockID: .constant(nil),
+            workspace: importedWorkspace, supervisor: supervisor))
+        window.contentView = importedHost
+        let importedWeb = try await waitForText("Share import", in: importedHost)
+        let shareImageDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        var shareImageLoaded = false
+        while ContinuousClock.now < shareImageDeadline {
+            shareImageLoaded = try await importedWeb.evaluateJavaScript("Array.from(document.querySelectorAll('img')).some(i => i.complete && i.naturalWidth > 0)") as? Bool ?? false
+            if shareImageLoaded { break }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        try expect(shareImageLoaded, "imported share resources must render through the real Core asset route")
+        print("MACOS_IMPORTED_SHARE_IMAGE_RENDERED_OK")
     }
 
     @MainActor private static func waitForText(_ text: String, in host: NSView) async throws -> WKWebView {
@@ -499,4 +532,50 @@ struct PreviewSmoke {
         if !condition { throw Failure.assertion(label) }
     }
     enum Failure: Error { case missingEnvironment, coreNotReady, previewTimedOut(String), assertion(String) }
+}
+
+// Re-rendering the SwiftUI wrapper must not edit NSTextStorage, move the caret,
+// or activate the source pane while the user reads the other pane.
+@MainActor
+private func verifyInertSourceUpdates() async throws {
+    var text = "# Source\n\nFormula $x^2$ and text."
+    var selected = "", range: UTF16TextSelection?, height: CGFloat = 100
+    var activations = 0
+    func editor(_ epoch: Int, size: Double = 14) -> SelectionAwareTextEditor {
+        SelectionAwareTextEditor(text: Binding(get: { text }, set: { text = $0 }),
+            selectedText: Binding(get: { selected }, set: { selected = $0 }),
+            selectedRange: Binding(get: { range }, set: { range = $0 }),
+            contentHeight: Binding(get: { height }, set: { height = $0 }),
+            externalEditEpoch: epoch, fontPreset: "system", fontSize: size, onActivate: { activations += 1 })
+    }
+    let host = NSHostingView(rootView: editor(0))
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    defer { window.close() }
+    window.orderFront(nil)
+    try await Task.sleep(for: .milliseconds(120))
+    func findText(_ view: NSView) -> NSTextView? {
+        if let text = view as? NSTextView { return text }
+        return view.subviews.compactMap(findText).first
+    }
+    guard let textView = findText(host), let storage = textView.textStorage else { fatalError("source editor not mounted") }
+    textView.setSelectedRange(NSRange(location: 2, length: 6))
+    try await Task.sleep(for: .milliseconds(40))
+    activations = 0
+    final class Counter: @unchecked Sendable { var edits = 0 }
+    let counter = Counter()
+    let observer = NotificationCenter.default.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: storage, queue: .main) { _ in counter.edits += 1 }
+    defer { NotificationCenter.default.removeObserver(observer) }
+    for epoch in 1...30 {
+        host.rootView = editor(epoch)
+        try await Task.sleep(for: .milliseconds(16))
+    }
+    guard counter.edits == 0, activations == 0, textView.selectedRange() == NSRange(location: 2, length: 6), findText(host) === textView else {
+        fatalError("unchanged source updates caused edits=\(counter.edits), activations=\(activations)")
+    }
+    host.rootView = editor(31, size: 18)
+    try await Task.sleep(for: .milliseconds(80))
+    guard textView.font?.pointSize == 18, counter.edits > 0 else { fatalError("real typography changes must still apply") }
+    print("MACOS_SOURCE_NOOP_UPDATES_PRESERVE_LAYOUT_SELECTION_AND_FOCUS_OK")
 }

@@ -336,16 +336,17 @@ struct ReadonlySessionView: View {
 
             Divider().frame(height: 16)
 
-            Button {
-                isActionClusterExpanded = false
-                Task { await exportMarkdown(manifest) }
+            Menu {
+                Button("导出 Markdown") { Task { await exportMarkdown(manifest) } }
+                Button("导出分享包（ZIP，含图片）") { Task { await exportSharePackage(manifest) } }
             } label: {
                 actionLabel("导出", icon: "square.and.arrow.up", compact: false)
             }
-            .buttonStyle(SessionActionButtonStyle())
-            .disabled(isExporting || isImportingImage || isImportingPdf)
-            .help("将当前笔记导出为 Markdown")
-            .accessibilityLabel("导出 Markdown")
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(isExporting || isImportingImage || isImportingPdf || sourceWorkspace.hasDirtyDrafts)
+            .help(sourceWorkspace.hasDirtyDrafts ? "请先保存修改再导出" : "导出 Markdown 或包含图片资源的分享包")
+            .accessibilityLabel("导出")
 
             Menu {
                 Button {
@@ -354,7 +355,9 @@ struct ReadonlySessionView: View {
                 } label: {
                     Label("导出 Markdown", systemImage: "square.and.arrow.up")
                 }
-                .disabled(isExporting || isImportingImage || isImportingPdf)
+                .disabled(isExporting || isImportingImage || isImportingPdf || sourceWorkspace.hasDirtyDrafts)
+                Button("导出分享包（ZIP，含图片）") { Task { await exportSharePackage(manifest) } }
+                    .disabled(isExporting || isImportingImage || isImportingPdf || sourceWorkspace.hasDirtyDrafts)
                 Divider()
                 Button {
                     isActionClusterExpanded = false
@@ -1063,6 +1066,31 @@ struct ReadonlySessionView: View {
         } catch {
             importError = error.localizedDescription
         }
+    }
+
+    private func exportSharePackage(_ manifest: ReadonlySessionManifest) async {
+        guard !sourceWorkspace.hasDirtyDrafts else { return }
+        isExporting = true
+        exportError = nil
+        exportNotice = nil
+        defer { isExporting = false }
+        let panel = NSSavePanel()
+        panel.title = "导出分享包"
+        panel.nameFieldStringValue = "\(session.sessionId)_share.zip"
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+        let preferred = DirectoryBookmarkStore.resolvedURL(for: .defaultExport)
+        let preferredAccess = preferred?.startAccessingSecurityScopedResource() ?? false
+        defer { if preferredAccess { preferred?.stopAccessingSecurityScopedResource() } }
+        panel.directoryURL = preferred
+        guard panel.runModal() == .OK, let target = panel.url else { return }
+        let access = target.startAccessingSecurityScopedResource()
+        defer { if access { target.stopAccessingSecurityScopedResource() } }
+        do {
+            let bytes = try await supervisor.exportSharePackage(session, baseRevision: manifest.revision)
+            try bytes.write(to: target, options: .atomic)
+            exportNotice = "已保存分享包，包含正文及其引用的图片和资源。"
+        } catch { exportError = error.localizedDescription }
     }
 
     private func exportMarkdown(_ manifest: ReadonlySessionManifest) async {
@@ -3311,6 +3339,7 @@ struct StableSessionMarkdownWebView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        coordinator.flushReadingPosition()
         view.configuration.userContentController.removeScriptMessageHandler(forName: "blockActivated")
         view.configuration.userContentController.removeScriptMessageHandler(forName: "readingPosition")
         view.configuration.userContentController.removeScriptMessageHandler(forName: "revealSource")
@@ -3329,6 +3358,8 @@ struct StableSessionMarkdownWebView: NSViewRepresentable {
         private let positionDefaults: UserDefaults
         private var restoredPosition = false
         private var savedPosition: MacReadingPosition?
+        private var pendingReadingPosition: MacReadingPosition?
+        private var positionSaveWork: DispatchWorkItem?
         var revealRequest: BlockNavigationRequest?
         var onRevealSource: (String) -> Void = { _ in }
         var readingPositionReady = true
@@ -3351,6 +3382,17 @@ struct StableSessionMarkdownWebView: NSViewRepresentable {
             self.readingLocationKey = readingLocationKey
             self.positionDefaults = positionDefaults
             self.savedPosition = readingLocationKey.flatMap { MacReadingPositionStore.load($0, defaults: positionDefaults) }
+            super.init()
+            NotificationCenter.default.addObserver(self, selector: #selector(flushReadingPosition), name: NSApplication.willTerminateNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(flushReadingPosition), name: NSApplication.willResignActiveNotification, object: nil)
+        }
+
+        @objc func flushReadingPosition() {
+            positionSaveWork?.cancel()
+            positionSaveWork = nil
+            guard let key = readingLocationKey, let position = pendingReadingPosition else { return }
+            pendingReadingPosition = nil
+            MacReadingPositionStore.save(position, key: key, defaults: positionDefaults)
         }
 
         func setDesiredState(
@@ -3382,12 +3424,16 @@ struct StableSessionMarkdownWebView: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            if message.name == "readingPosition", let key = readingLocationKey,
+            if message.name == "readingPosition", readingLocationKey != nil,
                let value = message.body as? [String: Any], let blockID = value["id"] as? String,
                let fraction = value["fraction"] as? Double, fraction.isFinite, (0...1).contains(fraction),
                desiredBlocks.contains(where: { $0.id == blockID }) {
                 restoredPosition = true // A user's scroll takes precedence over a pending restore.
-                MacReadingPositionStore.save(MacReadingPosition(blockID: blockID, fraction: fraction), key: key, defaults: positionDefaults)
+                pendingReadingPosition = MacReadingPosition(blockID: blockID, fraction: fraction)
+                positionSaveWork?.cancel()
+                let work = DispatchWorkItem { [weak self] in self?.flushReadingPosition() }
+                positionSaveWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
                 return
             }
             if message.name == "revealSource", let blockID = message.body as? String,
