@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "license": "GPL-3.0-only",
   "historyPolicy": "sanitized-single-snapshot",
-  "generatedAt": "2026-09-08T11:02:14.894Z",
+  "generatedAt": "2026-09-08T11:10:57.253Z",
   "fileCount": 864,
-  "snapshotSha256": "ca7aa6944119de1c2afe7347a5abb4579a3b6529012f93582393017408b40c80",
+  "snapshotSha256": "f0c6f3b4d064c0abc6927915eca02abc2b55be86ce0cb067303f63d5874585b3",
   "files": [
     {
       "path": ".gitattributes",
@@ -68,8 +68,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 10303,
-      "sha256": "81517c9ff67ac33f259a22d0b6ab916c5dad457566295645fc6cdf905ff43588"
+      "bytes": 10334,
+      "sha256": "dcca49a0eccd87a12e625b109d39c1a5a3f40268e75d14a491905e939e015bf4"
     },
     {
       "path": "SECURITY.md",
@@ -1058,8 +1058,8 @@
     },
     {
       "path": "apps/macos/DEVELOPMENT.md",
-      "bytes": 12310,
-      "sha256": "d30f3f4d95d7fe7a13b962dde3477c34935c31f312a81f36a2f6660ee5ef85b7"
+      "bytes": 12268,
+      "sha256": "3497d74585b719362926e41117d911907cee4de1b2e26ab1c3928c63bd911b4a"
     },
     {
       "path": "apps/macos/Package.swift",
@@ -1068,8 +1068,8 @@
     },
     {
       "path": "apps/macos/RELEASE_STATUS.md",
-      "bytes": 5989,
-      "sha256": "220fe3cbc3b73c8b2de352bdeb30ce2062cc71484bd1b05d20b069a27366dee8"
+      "bytes": 5988,
+      "sha256": "21e58353cc52efc1aa6991ea579935015d7a2e136600838d5018663a247ef168"
     },
     {
       "path": "apps/macos/REMOTE_CATALOG_SYNC_V1.md",
@@ -2933,8 +2933,8 @@
     },
     {
       "path": "deploy/releases/macos-v0.3.7.md",
-      "bytes": 4469,
-      "sha256": "4b4c49aa22d5170a5c8e5778334de4595f2688bd9713ba4c4b1414eef46270e1"
+      "bytes": 4730,
+      "sha256": "33d03aa36bf235f7fadd6771d74ac4dee4b87f89f2d09c7492f8c483155ef117"
     },
     {
       "path": "deploy/releases/v0.3.4-acceptance.md",
