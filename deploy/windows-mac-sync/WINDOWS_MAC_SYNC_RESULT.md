@@ -1,14 +1,10 @@
-# Windows 接入 Mac 副本同步：结果与接手说明
+# Windows 接入 Mac 副本同步：接口与验收说明
 
 Windows 在原 0.3.4 上增加「Mac 同步测试版」。设置会显示构建编号，便携 ZIP 文件名也含相同源码提交缩写。它是单独的 Windows 测试构建，Android/PWA 仍使用原 0.3.4。本次不包含新 Mac 安装包。
 
-## 来源与范围
+## 支持范围
 
-- 用户交接的公开上游：`e3601f52288bb3b2a4974860f08aa0605cd31079`。
-- ZIP 参考实现标注 Mac 本地提交：`c515fffe3bfe0286f4dd813aeeef39993d50d740`；未把参考仓库当成可直接覆盖新版的源码。
-- 实际 Windows 开发从 `9d54486` 开始，保留此前 0.3.4 功能、README/24项验收表及后续事件测试同步修订。
-- 双仓分支：`codex/windows-mac-sync-20260908`。最终构建提交、ZIP 与校验和以同名 GitHub 测试发行附件为准。
-- Windows 应用及必要共享 Core/shared 修改；未修改 Android/PWA 界面或 Mac Swift UI。Mac 的离线副本与 outbox 仍由 Mac 客户端负责。
+Windows 宿主支持已有 Session 的正文与素材同步。Mac 客户端负责离线副本、待传操作和冲突展示；本发行版不包含新的 Mac 客户端安装包。构建提交、ZIP 和校验和见对应发行版。
 
 ## 可逐项验收的改动
 
@@ -40,7 +36,7 @@ Windows 在原 0.3.4 上增加「Mac 同步测试版」。设置会显示构建�
 - 沿用 `trusted-host` 令牌及 `workspace.sync` 能力。不要给普通 Android/PWA 配对令牌升级写权限，不在日志中打印凭据。未装配同步服务的宿主返回 503 `workspace_sync_unavailable`；本次装配对象是 Windows 桌面应用。
 - `ReplicaSnapshot={version:1,notebookId,session,markdown,assets,revision}`。修订仍为 `sha256(JSON.stringify([session, Object.entries(markdown).sort(([a],[b])=>a.localeCompare(b)), assets]))`；素材按路径排序。Mac 重试必须原样保存整个 `ReplicaPush`，不能拿响应快照替换原待传请求。
 - 接收 Markdown 原始字节，不 trim 或修数学定界符。图片支持标准 `../assets/...` 和已有 `assets/...` 引用，安全解码百分号/中文/空格；连续片段先按相邻可见组拼接再收集图片。禁止目录穿越、Windows ADS/设备名/大小写别名、链接逃逸。
-- 大小边界保持交接：push JSON 32 MiB；stage JSON 73 MiB；Base64 72 MiB，对应素材最大54 MiB。超限有界拒绝，不无界缓冲。既有超大素材超过此同步上限时需两端另行协商分块方案。
+- 请求大小上限：push JSON 32 MiB；stage JSON 73 MiB；Base64 72 MiB，对应素材最大54 MiB。超限有界拒绝，不无界缓冲。既有超大素材超过此同步上限时需两端另行协商分块方案。
 - 服务端保留 `remoteSyncOperations` 至少最近1024项，客户端不能覆盖账本。旧 baseRevision 返回409 `revision_conflict`；同ID换请求返回409 `operation_reused`；固定块/span返回423；不可变素材冲突409，未暂存素材409。
 - 共享 Windows Session 写队列覆盖普通保存、AI、OCR和块操作；普通保存另带 `revisionBaseline`，缺失基线拒绝。版本基线只是 Windows IPC 合同，不要求 Mac 改用该字段。
 - 固定选区的解锁必须单独提交：仅删除对应 span 包装和锁记录，正文及其他锁逐字保留；成功获取新修订后再编辑。不能把解锁与改正文合并以绕过保护。整块锁定/只读块仍拒绝该操作。
@@ -56,19 +52,8 @@ Windows 在原 0.3.4 上增加「Mac 同步测试版」。设置会显示构建�
 
 实际 Electron 综合回归通过；同步证据：`output/playwright/windows-mac-sync/result.json`、`windows-draft-conflict.png`、`windows-continuous-formula-table.png`。测试仅操作独立合成笔记库和应用状态目录。最终ZIP解压后便携EXE启动和完整同步smoke通过，详见[构建验证记录](BUILD_VALIDATION.md)。
 
-## Mac 后续与未实现范围
+## 兼容验证与限制
 
-Mac 需从上述六个接口完成真实跨机验收：复制一次含图/PDF笔记，离线编辑后恢复，丢响应后复用原 operationId，处理409/423并保留本地草稿；一次成功响应后更新副本基线。Windows 不会主动读取或操作 Mac 的本地磁盘。
+真实 Mac 跨机兼容性尚待验证：复制含图/PDF笔记、离线编辑后恢复、丢失响应后复用原 operationId、处理409/423并保留本地草稿。客户端应在成功响应后更新副本基线。Windows 不会主动读取 Mac 的本地磁盘。
 
-**远程目录操作尚未实现。** 本次不把 push 扩展成隐式新建/重命名/删除 Notebook或Session。建议下一版两端共同实现：
-
-| 合同部分 | 建议 |
-| --- | --- |
-| 对象身份 | Notebook/Session使用稳定ID，显示中文名独立；移动不换对象ID |
-| 幂等与基线 | 每个目录操作有operationId、对象版本和目录版本；先查持久账本，再校验基线 |
-| 可恢复删除 | 先写废纸篓记录和墓碑，不立即擦除；恢复是独立幂等操作 |
-| 离线顺序 | Mac持久outbox记录依赖：建笔记本→建Session→素材→正文；失败不越过父操作 |
-| 写入屏障 | 目录操作和Session写入共享同一根目录队列；如增加runWorkspace，必须实际装配全库屏障 |
-| 冲突展示 | 改名、移动、删除冲突由两端保留本地计划和当前主机结果，交给用户选择 |
-
-这些目录协议需要 Mac 新增 outbox 和界面处理，并在两端对齐后实施。真实 Mac/Safari联调、厂商手机后台策略和之前24项中标注的真机项目仍不能以本地测试代替。
+远程 Notebook/Session 新建、重命名、移动和删除尚未实现。当前 push 仅修改已有 Session，客户端不能依赖隐式目录创建。真实 Mac/Safari联调及厂商手机后台策略不能由本地自动测试代替。

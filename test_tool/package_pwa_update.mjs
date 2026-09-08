@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateRawSync } from "node:zlib";
 import { listFiles, safeRelativePath, sha256, verifyPwaUpdate } from "./verify_pwa_update.mjs";
+import { assertPublicMaterial } from "./public_material_policy.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -54,11 +55,12 @@ export async function packagePwaUpdate({ sourceRef = "HEAD", baseRef } = {}) {
   await writePayload("patches/pwa-update.patch", gitBytes(["diff", "--no-ext-diff", "--no-color", "--binary", "--full-index", baseCommit, sourceCommit, "--", "apps/pwa"]));
   for (const name of ["LICENSE", "THIRD_PARTY_NOTICES.md"]) await writePayload(name, gitBytes(["show", `${sourceCommit}:${name}`]));
   await writePayload("verify-pwa-update.mjs", await readFile(path.join(projectRoot, "test_tool/verify_pwa_update.mjs")));
+  await writePayload("public_material_policy.mjs", await readFile(path.join(projectRoot, "test_tool/public_material_policy.mjs")));
   const pwaTree = git(["rev-parse", `${sourceCommit}:apps/pwa`]).trim();
-  let instructions = await readFile(path.join(projectRoot, "deploy/pwa/MAC_CODEX_UPDATE.md"), "utf8");
+  let instructions = await readFile(path.join(projectRoot, "deploy/pwa/INTEGRATION.md"), "utf8");
   for (const [key, value] of Object.entries({ PWA_VERSION: version, SOURCE_COMMIT: sourceCommit, BASE_COMMIT: baseCommit, PWA_TREE: pwaTree })) instructions = instructions.replaceAll(`{{${key}}}`, value);
-  if (/\{\{[A-Z_]+\}\}/.test(instructions)) throw new Error("Unexpanded handoff placeholder");
-  await writePayload("MAC_CODEX_HANDOFF.md", instructions);
+  if (/\{\{[A-Z_]+\}\}/.test(instructions)) throw new Error("Unexpanded integration placeholder");
+  await writePayload("INTEGRATION.md", instructions);
   await writePayload("DEPLOYMENT.md", await readFile(path.join(projectRoot, "deploy/pwa/README.md")));
   const files = await Promise.all((await listFiles(stageRoot)).map(async name => {
     const bytes = await readFile(path.join(stageRoot, name));
@@ -88,12 +90,13 @@ export async function packagePwaUpdate({ sourceRef = "HEAD", baseRef } = {}) {
 
   async function writePayload(name, bytes) {
     if (!safeRelativePath(name)) throw new Error(`Unsafe payload path: ${name}`);
+    assertPublicMaterial(name, bytes);
     const target = path.join(stageRoot, ...name.split("/")); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, bytes);
   }
 }
 
 function assertPwaMatchesSource(sourceCommit) {
-  git(["diff", "--quiet", sourceCommit, "--", "apps/pwa", "package.json", "package-lock.json", "deploy/pwa", "test_tool/verify_pwa_update.mjs"]);
+  git(["diff", "--quiet", sourceCommit, "--", "apps/pwa", "package.json", "package-lock.json", "deploy/pwa", "test_tool/package_pwa_update.mjs", "test_tool/verify_pwa_update.mjs", "test_tool/public_material_policy.mjs"]);
   if (git(["ls-files", "--others", "--exclude-standard", "--", "apps/pwa"]).trim()) throw new Error("PWA has untracked source; commit it before packaging");
 }
 function gitBytes(args) {
@@ -121,6 +124,7 @@ export function createZip(entries) {
   if (entries.length > 65535) throw new Error("ZIP64 is not supported");
   for (const entry of [...entries].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)) {
     if (!safeRelativePath(entry.path) || paths.has(entry.path)) throw new Error(`Unsafe or duplicate ZIP path: ${entry.path}`);
+    assertPublicMaterial(entry.path, entry.bytes);
     paths.add(entry.path);
     const name = Buffer.from(entry.path, "utf8"), bytes = Buffer.from(entry.bytes), compressed = deflateRawSync(bytes, { level: 9 });
     if (bytes.length > 0xffffffff || compressed.length > 0xffffffff || name.length > 65535) throw new Error("ZIP entry is too large");

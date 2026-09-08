@@ -4,7 +4,7 @@ MathNotes 是一个 GPLv3、本地优先的数学笔记项目，包含 Windows�
 
 **最新发行版：0.3.4 试用版。当前 Windows / Android / PWA 开发版本：0.3.4。**
 
-Windows 另提供 **0.3.4「Mac 同步测试版」**：支持 Mac 本地副本向 Windows 同步正文与素材、旧草稿冲突保护，以及固定片段的公式/表格连续渲染。设置中显示构建编号，便于区分原 0.3.4 包。[下载 Windows 同步测试包](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/windows-mac-sync-20260908) · [同步验收与 Mac 接手结果](deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md)。这次没有重新发布 Android、PWA 或 Mac 安装包。
+Windows 另提供 **0.3.4「Mac 同步测试版」**：支持 Mac 本地副本向 Windows 同步正文与素材、旧草稿冲突保护，以及固定片段的公式/表格连续渲染。设置中显示构建编号，便于区分原 0.3.4 包。[下载 Windows 同步测试包](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/windows-mac-sync-20260908) · [同步接口与验收说明](deploy/windows-mac-sync/WINDOWS_MAC_SYNC_RESULT.md)。这次没有重新发布 Android、PWA 或 Mac 安装包。
 
 [下载最新发行版](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/latest) · [0.3.4 固定发行页](https://github.com/theincrediblewwz/MathNotes-OpenSource/releases/tag/v0.3.4) · [逐项操作验收表](deploy/releases/v0.3.4-acceptance.md)
 
@@ -14,10 +14,10 @@ Windows 另提供 **0.3.4「Mac 同步测试版」**：支持 Mac 本地副本�
 | --- | --- | --- |
 | Windows | 0.3.4 | 已内置新版 PWA 的便携 ZIP，解压后运行 MathNotes.exe |
 | Android | 0.3.4，versionCode 17 | APK，沿用既有测试签名 |
-| PWA | 0.3.4 | 独立网页/源码更新 ZIP，附 Mac 接手说明 |
-| macOS | 本次没有新安装包 | 保留 Mac 源码与接手材料，Mac 本体由 Mac 端任务继续处理 |
+| PWA | 0.3.4 | 独立网页/源码更新 ZIP，附公开集成说明 |
+| macOS | 本次没有新安装包 | 提供 Mac 源码和本地构建文档 |
 
-本版提供 Windows 便携 ZIP、Android APK 和独立 PWA 更新包。Windows 为未签名测试包，Android 沿用既有测试签名；覆盖安装前请备份笔记。Mac 源码与交接材料保留，Mac 安装包由真实 Mac 上的工作另行构建。
+本版提供 Windows 便携 ZIP、Android APK 和独立 PWA 更新包。Windows 为未签名测试包，Android 沿用既有测试签名；覆盖安装前请备份笔记。Mac 源码与本地开发文档公开，安装包需在 macOS 上构建。
 
 0.3.4 修复了块拖动原地放下误报导入、重新识别未实际执行，并补齐已上传素材预览与正文定位、左上角可滚动气泡目录、阅读底栏显隐和画笔内矩形遮盖。各包的版本、SHA-256、验证范围与已知限制以该发行页为准。
 
@@ -102,7 +102,7 @@ npm run build:android
 
 macOS 原生端必须在真实 Apple silicon Mac 与完整 Xcode 上构建：
 
-在 Mac 上接手开发或排查“连接手机”启动失败，请先读 [Mac 本地开发](apps/macos/DEVELOPMENT.md) 和 [Mac Codex 接手说明](apps/macos/CODEX_HANDOFF.md)。应克隆整个仓库；Swift 界面依赖共享 Core、协议与 PWA，不能只复制 `apps/macos`。
+在 Mac 上开发或排查“连接手机”启动失败，请先读 [Mac 本地开发](apps/macos/DEVELOPMENT.md)。应克隆整个仓库；Swift 界面依赖共享 Core、协议与 PWA，不能只复制 `apps/macos`。
 
 ```bash
 npm ci
