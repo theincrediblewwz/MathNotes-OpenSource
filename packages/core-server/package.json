@@ -35,8 +35,8 @@
   "dependencies": {
     "@mathnotes/shared": "file:../shared",
     "busboy": "^1.6.0",
-    "katex": "^0.17.0",
-    "markdown-it": "^14.2.0",
+    "katex": "^0.18.6",
+    "markdown-it": "^15.0.1",
     "yauzl": "^3.4.0",
     "yazl": "^3.3.1"
   },
