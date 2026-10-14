@@ -109,10 +109,10 @@
   "type": "commonjs",
   "devDependencies": {
     "@electron/packager": "^20.3.0",
-    "@napi-rs/canvas": "^1.0.2",
-    "playwright": "^1.61.1",
-    "resedit": "^2.0.3",
-    "yaml": "^2.9.0"
+    "@napi-rs/canvas": "^1.0.11",
+    "playwright": "^1.64.0",
+    "resedit": "^3.1.0",
+    "yaml": "^2.9.1"
   },
   "overrides": {
     "linkify-it": "5.0.2",
